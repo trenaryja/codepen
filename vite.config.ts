@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { resolve } from 'path'
@@ -17,6 +18,7 @@ function penWrapperPlugin(): Plugin {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${slug}</title>
+  <link rel="stylesheet" href="/src/index.css" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -107,7 +109,7 @@ function discoverPenEntries(): Record<string, string> {
 }
 
 export default defineConfig({
-	plugins: [react(), esmShPlugin(), penWrapperPlugin()],
+	plugins: [tailwindcss(), react(), esmShPlugin(), penWrapperPlugin()],
 	build: {
 		rollupOptions: {
 			input: discoverPenEntries(),

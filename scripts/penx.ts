@@ -5,9 +5,9 @@
  */
 
 import { checkbox, input, select } from '@inquirer/prompts'
+import { spawnSync } from 'child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { join, resolve } from 'path'
-import { spawnSync } from 'child_process'
 
 const ROOT = resolve(import.meta.dir, '..')
 const SRC = join(ROOT, 'src')
@@ -55,10 +55,12 @@ function openInBrowser(url: string): void {
 
 function esmShToNpm(url: string): string {
 	const spec = url.slice('https://esm.sh/'.length)
+
 	if (spec.startsWith('@')) {
 		const [scope, nameAndVersion, ...rest] = spec.split('/')
 		return [scope, nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
 	}
+
 	const [nameAndVersion, ...rest] = spec.split('/')
 	return [nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
 }
@@ -376,24 +378,26 @@ function syncEsmDeclarations(importUrls: string[]): void {
 
 	// Parse existing specific declarations into a url → block map
 	const blocks = new Map<string, string>()
-	for (const m of current.matchAll(/declare module '(https:\/\/esm\.sh\/(?!\*)[^']+)'(\s*\{[\s\S]*?\})?/g)) {
+
+	for (const m of current.matchAll(/declare module '(https:\/\/esm\.sh\/(?!\*)[^']+)'(?:\s*\{[\s\S]*?\})?/g)) {
 		blocks.set(m[1], m[0])
 	}
 
 	let added = 0
+
 	for (const url of importUrls) {
 		if (blocks.has(url)) continue
 		const npmSpec = esmShToNpm(url)
 		const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
 		if (!existsSync(join(ROOT, 'node_modules', pkgRoot))) continue
 		blocks.set(url, `declare module '${url}' {\n\texport * from '${npmSpec}'\n}`)
-		added++
+		added += 1
 	}
 
 	if (added === 0) return
 
 	const sorted = [...blocks.entries()].sort(([a], [b]) => a.localeCompare(b))
-	const content = sorted.map(([, block]) => block).join('\n\n') + "\n\ndeclare module 'https://esm.sh/*'\n"
+	const content = `${sorted.map(([, block]) => block).join('\n\n')}\n\ndeclare module 'https://esm.sh/*'\n`
 	writeFileSync(dtsPath, content)
 	console.log(`✓ Added ${added} declaration(s) to esm-sh.d.ts`)
 }
@@ -405,16 +409,18 @@ async function cmdDeps(): Promise<void> {
 	for (const dir of ['p', 't']) {
 		const base = join(srcDir, dir)
 		if (!existsSync(base)) continue
+
 		for (const slug of readdirSync(base)) {
 			const penDir = join(base, slug)
 			if (!statSync(penDir).isDirectory()) continue
+
 			for (const file of readdirSync(penDir)) {
 				if (file.endsWith('.tsx') || file.endsWith('.ts')) files.push(join(penDir, file))
 			}
 		}
 	}
 
-	const esmPattern = /from ['"]https:\/\/esm\.sh\/([^'"]+)['"]/g
+	const esmPattern = /from ["']https:\/\/esm\.sh\/([^"']+)["']/g
 	const fullUrls = new Set<string>()
 	const pkgRoots = new Set<string>()
 
