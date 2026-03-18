@@ -31,6 +31,17 @@ ${fragment}
 	return {
 		name: 'pen-wrapper',
 
+		// Wrap pen index.html fragments with full HTML during build
+		transformIndexHtml: {
+			order: 'pre',
+			handler(html, ctx) {
+				const match = ctx.filename.match(/\/src\/(p|t)\/([^/]+)\/index\.html$/)
+				if (!match) return html
+
+				return buildWrapper(match[2], match[1] as 'p' | 't')
+			},
+		},
+
 		configureServer(server) {
 			server.middlewares.use(async (req, res, next) => {
 				const url = req.url ?? ''
@@ -51,6 +62,20 @@ ${fragment}
 				res.end(transformed)
 			})
 		},
+
+		// Rewrite /p/slug/ and /t/slug/ to /src/p/slug/ for vite preview
+		configurePreviewServer(server) {
+			server.middlewares.use((req, _res, next) => {
+				const url = req.url ?? ''
+				const match = url.match(/^\/(p|t)\/([^#/?]+)\/?(\?.*)?$/)
+
+				if (match) {
+					req.url = `/src/${match[1]}/${match[2]}/${match[3] ?? ''}`
+				}
+
+				next()
+			})
+		},
 	}
 }
 
@@ -69,6 +94,7 @@ function esmShToNpm(url: string): string {
 function esmShPlugin(): Plugin {
 	return {
 		name: 'esm-sh-to-local',
+		enforce: 'pre',
 		resolveId(id) {
 			if (!id.startsWith('https://esm.sh/')) {
 				if (id.startsWith('https://')) return { id, external: true }
@@ -83,6 +109,20 @@ function esmShPlugin(): Plugin {
 			}
 
 			return { id, external: true }
+		},
+		transform(code) {
+			if (!code.includes('https://esm.sh/')) return
+
+			return code.replace(/(["'])https:\/\/esm\.sh\/([^"']+)\1/g, (match, quote, spec) => {
+				const npmSpec = esmShToNpm(`https://esm.sh/${spec}`)
+				const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
+
+				if (existsSync(resolve(dirname, 'node_modules', pkgRoot))) {
+					return `${quote}${npmSpec}${quote}`
+				}
+
+				return match
+			})
 		},
 	}
 }

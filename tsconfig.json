@@ -14,5 +14,5 @@
 		"types": ["node", "bun-types", "vite/client"],
 		"noEmit": true
 	},
-	"include": ["src", "scripts", "vite.config.ts", "esm-sh.d.ts"]
+	"include": ["src", "penx.ts", "vite.config.ts", "esm-sh.d.ts"]
 }

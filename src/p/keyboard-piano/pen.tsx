@@ -1,4 +1,4 @@
-import { ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { ThemePicker, ThemeProvider, toast, Toaster } from 'https://esm.sh/@trenaryja/ui'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
@@ -29,17 +29,20 @@ for (let oct = 1; oct <= 8; oct++) {
 const HOME_KEYS = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', "'"]
 // Top-row key between home key i and i+1 (maps to the sharp between those white notes)
 const SLOT_KEYS = ['w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']']
-const WHITE_COUNT = HOME_KEYS.length
+const MAX_WHITE_COUNT = HOME_KEYS.length
+const MIN_KEY_WIDTH_REM = 3
+const REM_PX = typeof document !== 'undefined' ? parseFloat(getComputedStyle(document.documentElement).fontSize) : 16
 
-// Max offset: the highest starting index that still has WHITE_COUNT white keys ahead
-const MAX_OFFSET = (() => {
+function maxOffset(whiteCount: number) {
 	for (let i = ALL_NOTES.length - 1; i >= 0; i--) {
 		const whites = ALL_NOTES.slice(i).filter((n) => !n.black).length
 
-		if (whites >= WHITE_COUNT) return i
+		if (whites >= whiteCount) return i
 	}
+
 	return 0
-})()
+}
+
 const NOTE_INDEX: Record<string, number> = Object.fromEntries(ALL_NOTES.map((n, i) => [n.note, i]))
 const DEFAULT_OFFSET = ALL_NOTES.findIndex((n) => n.note === 'C4')
 
@@ -143,27 +146,19 @@ function PianoKey({
 	onPress: () => void
 	style?: React.CSSProperties
 }) {
-	const inactiveStyle = n.black
-		? {
-				'--surface-color': 'light-dark(var(--color-base-content), var(--color-base-300))',
-				color: 'light-dark(var(--color-base-300), var(--color-base-content))',
-			}
-		: {
-				'--surface-color': 'light-dark(var(--color-base-300), var(--color-base-content))',
-				color: 'light-dark(var(--color-base-content), var(--color-base-300))',
-			}
+	const inactiveClass = n.black ? 'surface-base-content text-base-300' : 'surface-base-300 text-base-content'
 
 	return (
 		<button
 			type='button'
 			onPointerDown={onPress}
-			style={{ ...style, ...(active ? {} : inactiveStyle) } as React.CSSProperties}
+			style={style}
 			className={`surface select-none cursor-pointer transition-all duration-100 flex flex-col items-end justify-end ${
-				n.black ? 'absolute z-10 w-[8%] h-[60%] top-0' : 'relative size-full'
-			} ${active ? 'surface-primary' : ''}`}
+				n.black ? 'absolute z-10 w-(--black-key-w) h-[60%] top-0' : 'relative size-full'
+			} ${active ? 'surface-primary' : inactiveClass}`}
 		>
-			<span className={`font-bold uppercase ${n.black ? 'p-1' : 'text-xs p-2'}`}>{n.key}</span>
-			<span className={`opacity-50 ${n.black ? 'text-3xs px-1 pb-1' : 'px-2 pb-2'}`}>{n.note}</span>
+			<kbd className={`kbd uppercase ${n.black ? 'kbd-xs' : 'kbd-sm'}`}>{n.key}</kbd>
+			<span className={`opacity-50 ${n.black ? 'text-3xs px-1' : 'text-xs px-2 pb-1'}`}>{n.note}</span>
 		</button>
 	)
 }
@@ -199,7 +194,11 @@ function Piano({
 	}, [onWheel])
 
 	return (
-		<div ref={pianoRef} className='relative w-full max-w-2xl' style={{ aspectRatio: '3 / 1' }}>
+		<div
+			ref={pianoRef}
+			className='relative w-full max-w-2xl h-[clamp(8rem,25vw,20rem)]'
+			style={{ '--black-key-w': `${(70 / white.length).toFixed(1)}%` } as React.CSSProperties}
+		>
 			<div className='grid h-full' style={{ gridTemplateColumns: `repeat(${white.length}, 1fr)`, gap: '2px' }}>
 				{white.map((n) => (
 					<PianoKey key={n.note} n={n} active={activeKeys.has(n.key)} onPress={() => onTrigger(n.key, n.freq)} />
@@ -300,13 +299,13 @@ function SongGuide({
 		<div className='surface surface-base-200 p-4 w-full max-w-2xl space-y-3'>
 			<div className='flex items-center justify-between'>
 				<div className='flex items-center gap-2'>
-					<button type='button' onClick={onPrev} className='btn btn-xs btn-ghost'>
+					<button type='button' onClick={onPrev} className='btn btn-xs'>
 						‹
 					</button>
-					<h2 className='font-bold'>{name}</h2>
-					<button type='button' onClick={onNext} className='btn btn-xs btn-ghost'>
+					<button type='button' onClick={onNext} className='btn btn-xs'>
 						›
 					</button>
+					<h2 className='font-bold'>{name}</h2>
 				</div>
 				<button type='button' onClick={onReset} className='btn btn-xs btn-ghost opacity-60'>
 					reset
@@ -349,8 +348,10 @@ function resetChord(ref: React.RefObject<Set<string>>, setter: (s: Set<string>) 
 	setter(new Set())
 }
 
-function useVisibleNotes() {
+function useVisibleNotes(whiteCount: number) {
 	const [offset, setOffset] = useState(DEFAULT_OFFSET)
+
+	const count = Math.max(1, Math.min(whiteCount, MAX_WHITE_COUNT))
 
 	// Snap to nearest white key at or after offset
 	let start = offset
@@ -360,14 +361,14 @@ function useVisibleNotes() {
 	let wc = 0
 	let vi = start
 
-	// Collect exactly WHITE_COUNT white keys and all blacks between them
-	while (wc < WHITE_COUNT && vi < ALL_NOTES.length) {
+	// Collect exactly `count` white keys and all blacks between them
+	while (wc < count && vi < ALL_NOTES.length) {
 		visible.push(ALL_NOTES[vi])
 		if (!ALL_NOTES[vi].black) wc += 1
 		vi += 1
 	}
 
-	// Include trailing black key (for the last slot, e.g. ']' for F#)
+	// Include trailing black key (for the last slot)
 	if (vi < ALL_NOTES.length && ALL_NOTES[vi].black) {
 		visible.push(ALL_NOTES[vi])
 	}
@@ -399,7 +400,7 @@ function useVisibleNotes() {
 
 	const handleWheel = (e: React.WheelEvent | WheelEvent) => {
 		const dir = e.deltaY > 0 ? -1 : 1
-		setOffset((prev) => Math.max(0, Math.min(MAX_OFFSET, prev + dir)))
+		setOffset((prev) => Math.max(0, Math.min(maxOffset(count), prev + dir)))
 	}
 
 	const firstNote = notes[0]?.note ?? ''
@@ -471,26 +472,93 @@ function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<
 	return { toKey, toNote }
 }
 
-function Toast({ message }: { message: string }) {
-	if (!message) return null
+function usePianoWidth(ref: React.RefObject<HTMLDivElement | null>) {
+	const [width, setWidth] = useState(MAX_WHITE_COUNT)
 
+	useEffect(() => {
+		const el = ref.current
+		if (!el) return
+
+		const update = () => {
+			const count = Math.floor(el.clientWidth / (MIN_KEY_WIDTH_REM * REM_PX))
+			setWidth(Math.max(1, Math.min(count, MAX_WHITE_COUNT)))
+		}
+
+		update()
+		const ro = new ResizeObserver(update)
+		ro.observe(el)
+		return () => ro.disconnect()
+	}, [ref])
+
+	return width
+}
+
+function PianoBar({
+	activeKeys,
+	black,
+	blackPos,
+	containerRef,
+	firstNote,
+	handleWheel,
+	lastNote,
+	onTrigger,
+	white,
+}: {
+	activeKeys: Set<string>
+	black: NoteConfig[]
+	blackPos: Record<string, number>
+	containerRef: React.RefObject<HTMLDivElement | null>
+	firstNote: string
+	handleWheel: (e: React.WheelEvent) => void
+	lastNote: string
+	onTrigger: (key: string, freq: number) => void
+	white: NoteConfig[]
+}) {
 	return (
-		<div className='fixed top-4 left-1/2 -translate-x-1/2 z-50 alert alert-success font-bold shadow-lg animate-in fade-in slide-in-from-top duration-300'>
-			{message}
+		<div className='sticky bottom-0 w-full flex flex-col items-center gap-1 p-6 pt-4 bg-base-100/80 backdrop-blur-sm'>
+			<p className='opacity-60 text-sm text-center flex flex-wrap items-center justify-center gap-1'>
+				<span>White:</span>
+				{white.map((n) => (
+					<kbd key={n.note} className='kbd kbd-sm'>
+						{n.key.toUpperCase()}
+					</kbd>
+				))}
+				<span>· Black:</span>
+				{black.map((n) => (
+					<kbd key={n.note} className='kbd kbd-sm'>
+						{n.key.toUpperCase()}
+					</kbd>
+				))}
+			</p>
+			<p className='text-xs opacity-40 text-center'>
+				{firstNote} — {lastNote} · scroll to transpose
+			</p>
+			<div ref={containerRef} className='w-full max-w-2xl'>
+				<Piano
+					white={white}
+					black={black}
+					blackPos={blackPos}
+					activeKeys={activeKeys}
+					onTrigger={onTrigger}
+					onWheel={handleWheel}
+				/>
+			</div>
 		</div>
 	)
 }
 
 function Root() {
 	const audioCtxRef = useRef<AudioContext | null>(null)
+	const pianoContainerRef = useRef<HTMLDivElement | null>(null)
 	const [activeKeys, setActiveKeys] = useState<Set<string>>(() => new Set())
 	const [songIdx, setSongIdx] = useState(0)
 	const [songPos, setSongPos] = useState(0)
 	const [chordProgress, setChordProgress] = useState<Set<string>>(() => new Set())
-	const [completedSong, setCompletedSong] = useState('')
 	const chordRef = useRef<Set<string>>(new Set())
 
-	const { black, blackPos, firstNote, handleWheel, keyToNote, lastNote, noteToKey, notes, white } = useVisibleNotes()
+	const whiteCount = usePianoWidth(pianoContainerRef)
+	const { black, blackPos, firstNote, handleWheel, keyToNote, lastNote, noteToKey, notes, white } =
+		useVisibleNotes(whiteCount)
 
 	const songName = SONG_NAMES[songIdx]
 	const song = parseSong(SONGS[songName], keyToNote)
@@ -541,12 +609,12 @@ function Root() {
 			const next = prev + 1
 
 			if (next >= song.steps.length) {
-				setCompletedSong(songName)
-				setTimeout(() => {
+				toast.success(`Nice! You played ${songName}`)
+				const resetTimer = setTimeout(() => {
 					setSongPos(0)
 					resetChord(chordRef, setChordProgress)
-					setCompletedSong('')
 				}, 2000)
+				void resetTimer
 			}
 
 			return next
@@ -576,55 +644,41 @@ function Root() {
 
 	return (
 		<ThemeProvider>
-			<Toast message={completedSong ? `Nice! You played ${completedSong}` : ''} />
-			<main className='min-h-screen flex flex-col items-center justify-center gap-8 p-6'>
-				<div className='flex items-center gap-2'>
-					<h1 className='text-3xl font-bold tracking-tight'>Keyboard Piano</h1>
-					<ThemePicker variant='modal' />
-				</div>
+			<Toaster />
+			<main className='min-h-screen flex flex-col items-center'>
+				{/* Centered content area */}
+				<div className='flex-1 flex flex-col items-center justify-center gap-8 p-6 pb-0'>
+					<div className='flex items-center gap-2'>
+						<h1 className='text-3xl font-bold tracking-tight'>Keyboard Piano</h1>
+						<ThemePicker variant='modal' />
+					</div>
 
-				<p className='opacity-60 text-sm text-center flex flex-wrap items-center justify-center gap-1'>
-					<span>White:</span>
-					{white.map((n) => (
-						<kbd key={n.note} className='kbd kbd-sm'>
-							{n.key.toUpperCase()}
-						</kbd>
-					))}
-					<span>· Black:</span>
-					{black.map((n) => (
-						<kbd key={n.note} className='kbd kbd-sm'>
-							{n.key.toUpperCase()}
-						</kbd>
-					))}
-				</p>
-
-				<div className='w-full max-w-2xl space-y-1'>
-					<p className='text-xs opacity-40 text-center'>
-						{firstNote} — {lastNote} · scroll to transpose
-					</p>
-					<Piano
-						white={white}
-						black={black}
-						blackPos={blackPos}
-						activeKeys={activeKeys}
-						onTrigger={triggerNote}
-						onWheel={handleWheel}
+					<SongGuide
+						name={songName}
+						song={song}
+						songPos={songPos}
+						chordProgress={chordProgress}
+						songNoteToKey={songKeyMap.toKey}
+						songNoteToNote={songKeyMap.toNote}
+						onReset={() => {
+							setSongPos(0)
+							resetChord(chordRef, setChordProgress)
+						}}
+						onPrev={() => cycleSong(-1)}
+						onNext={() => cycleSong(1)}
 					/>
 				</div>
 
-				<SongGuide
-					name={songName}
-					song={song}
-					songPos={songPos}
-					chordProgress={chordProgress}
-					songNoteToKey={songKeyMap.toKey}
-					songNoteToNote={songKeyMap.toNote}
-					onReset={() => {
-						setSongPos(0)
-						resetChord(chordRef, setChordProgress)
-					}}
-					onPrev={() => cycleSong(-1)}
-					onNext={() => cycleSong(1)}
+				<PianoBar
+					containerRef={pianoContainerRef}
+					white={white}
+					black={black}
+					blackPos={blackPos}
+					activeKeys={activeKeys}
+					onTrigger={triggerNote}
+					firstNote={firstNote}
+					lastNote={lastNote}
+					handleWheel={handleWheel}
 				/>
 			</main>
 		</ThemeProvider>

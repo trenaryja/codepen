@@ -1,3 +1,7 @@
+declare module 'https://esm.sh/@mantine/hooks' {
+	export * from '@mantine/hooks'
+}
+
 declare module 'https://esm.sh/@trenaryja/ui' {
 	export * from '@trenaryja/ui'
 }

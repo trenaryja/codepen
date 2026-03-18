@@ -4,17 +4,16 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "vite",
-		"build": "vite build",
-		"preview": "vite preview",
+		"dev": "vite preview",
 		"lint": "eslint .",
-		"check": "tsc && bun run format -c && bun run lint && bun run build",
+		"check": "tsc && bun run format -c && bun run lint && ./penx.ts check",
 		"format": "prettier -w . !\"bun.lockb\"",
 		"get-latest": "bun update --latest -i",
 		"reinstall": "rm -rf node_modules && rm bun.lock && bun install",
-		"penx": "bun scripts/penx.ts"
+		"penx": "./penx.ts"
 	},
 	"dependencies": {
+		"@mantine/hooks": "^8.3.18",
 		"@trenaryja/ui": "^0.0.1-35",
 		"d3-selection": "^3.0.0",
 		"qrcode": "^1.5.4",
@@ -22,19 +21,20 @@
 		"react-dom": "^19.2.4"
 	},
 	"devDependencies": {
-		"@fullstacksjs/eslint-config": "^14.0.1",
-		"@inquirer/prompts": "^8.3.0",
-		"@tailwindcss/vite": "^4.2.1",
+		"@clack/prompts": "^1.1.0",
+		"@fullstacksjs/eslint-config": "^14.0.2",
+		"@tailwindcss/vite": "^4.2.2",
 		"@types/d3-selection": "^3.0.11",
-		"@types/node": "^25.3.5",
+		"@types/node": "^25.5.0",
 		"@types/qrcode": "^1.5.6",
-		"@types/react": "^19.0.0",
-		"@types/react-dom": "^19.0.0",
-		"@vitejs/plugin-react": "^5.1.4",
-		"bun-types": "^1.3.10",
-		"eslint": "^10.0.2",
-		"typescript": "^5.7.3",
-		"vite": "^7.3.1"
+		"@types/react": "^19.2.14",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^6.0.1",
+		"bun-types": "^1.3.11",
+		"commander": "^14.0.3",
+		"eslint": "^10.0.3",
+		"typescript": "^5.9.3",
+		"vite": "^8.0.0"
 	},
 	"prettier": {
 		"semi": false,
