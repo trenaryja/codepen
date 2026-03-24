@@ -4,7 +4,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "vite preview",
+		"dev": "vite",
+		"preview": "vite preview",
 		"lint": "eslint .",
 		"check": "tsc && bun run format -c && bun run lint && ./penx.ts check",
 		"format": "prettier -w . !\"bun.lockb\"",
@@ -32,9 +33,9 @@
 		"@vitejs/plugin-react": "^6.0.1",
 		"bun-types": "^1.3.11",
 		"commander": "^14.0.3",
-		"eslint": "^10.0.3",
-		"typescript": "^5.9.3",
-		"vite": "^8.0.0"
+		"eslint": "^10.1.0",
+		"typescript": "^6.0.2",
+		"vite": "^8.0.2"
 	},
 	"prettier": {
 		"semi": false,
