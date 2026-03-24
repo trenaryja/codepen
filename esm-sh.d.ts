@@ -10,6 +10,10 @@ declare module 'https://esm.sh/d3-selection' {
 	export * from 'd3-selection'
 }
 
+declare module 'https://esm.sh/honeycomb-grid@4.1.4' {
+	export * from 'honeycomb-grid'
+}
+
 declare module 'https://esm.sh/qrcode' {
 	export * from 'qrcode'
 }
@@ -23,6 +27,10 @@ declare module 'https://esm.sh/react' {
 
 declare module 'https://esm.sh/react-dom/client' {
 	export * from 'react-dom/client'
+}
+
+declare module 'https://esm.sh/react-icons/lu' {
+	export * from 'react-icons/lu'
 }
 
 declare module 'https://esm.sh/*'
