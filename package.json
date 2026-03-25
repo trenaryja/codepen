@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
+		"build": "vite build",
 		"preview": "vite preview",
 		"lint": "eslint .",
 		"check": "tsc && bun run format -c && bun run lint && ./penx.ts check",

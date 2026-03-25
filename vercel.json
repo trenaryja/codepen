@@ -1,0 +1,10 @@
+{
+	"buildCommand": "bun run build",
+	"outputDirectory": "dist",
+	"rewrites": [
+		{ "source": "/p/:slug", "destination": "/src/p/:slug/index.html" },
+		{ "source": "/p/:slug/", "destination": "/src/p/:slug/index.html" },
+		{ "source": "/t/:slug", "destination": "/src/t/:slug/index.html" },
+		{ "source": "/t/:slug/", "destination": "/src/t/:slug/index.html" }
+	]
+}
