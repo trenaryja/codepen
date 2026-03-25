@@ -114,7 +114,7 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 
 	canvas.width = pWidth
 	canvas.height = pHeight
-	const ctx = canvas.getContext('2d')!
+	const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
 	const colorFn = STRATEGIES[strategy].fn
 
 	const Hex = defineHex({
@@ -292,4 +292,4 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+createRoot(document.getElementById('root') as HTMLElement).render(<Root />)

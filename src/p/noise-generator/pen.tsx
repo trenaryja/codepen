@@ -1,5 +1,5 @@
 import { useHotkeys } from 'https://esm.sh/@mantine/hooks'
-import { Button, Field, Range, tailwindColors, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { Button, Field, Range, ThemeProvider, tailwindColors } from 'https://esm.sh/@trenaryja/ui'
 import chroma from 'https://esm.sh/chroma-js'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -280,7 +280,12 @@ function Root() {
 					</Field>
 				</div>
 
-				<svg className='h-full min-h-0 w-full max-w-full' preserveAspectRatio='none' viewBox={`0 0 100 ${SVG_HEIGHT}`}>
+				<svg
+					aria-label='Noise frequency spectrum'
+					className='h-full min-h-0 w-full max-w-full'
+					preserveAspectRatio='none'
+					viewBox={`0 0 100 ${SVG_HEIGHT}`}
+				>
 					{[...Array(BIN_COUNT).keys()].map((i) => (
 						<rect
 							key={i}
@@ -306,4 +311,4 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+createRoot(document.getElementById('root') as HTMLElement).render(<Root />)

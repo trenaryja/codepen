@@ -1,16 +1,15 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
-import { existsSync, readdirSync, readFileSync } from 'fs'
-import { resolve } from 'path'
-import { fileURLToPath } from 'url'
 import type { Plugin } from 'vite'
 import { defineConfig } from 'vite'
 
-const dirname = fileURLToPath(new URL('.', import.meta.url))
+const penUrlRe = /^\/(p|t)\/([^#/?]+)\/?(\?.*)?$/
 
 function penWrapperPlugin(): Plugin {
 	function buildWrapper(slug: string, dir: 'p' | 't'): string {
-		const base = resolve(dirname, 'src', dir, slug)
+		const base = resolve(import.meta.dirname, 'src', dir, slug)
 		const fragment = existsSync(`${base}/index.html`) ? readFileSync(`${base}/index.html`, 'utf-8') : ''
 		return `<!DOCTYPE html>
 <html lang="en">
@@ -31,13 +30,11 @@ ${fragment}
 	return {
 		name: 'pen-wrapper',
 
-		// Wrap pen index.html fragments with full HTML during build
 		transformIndexHtml: {
 			order: 'pre',
 			handler(html, ctx) {
 				const match = ctx.filename.match(/\/src\/(p|t)\/([^/]+)\/index\.html$/)
 				if (!match) return html
-
 				return buildWrapper(match[2], match[1] as 'p' | 't')
 			},
 		},
@@ -45,16 +42,11 @@ ${fragment}
 		configureServer(server) {
 			server.middlewares.use(async (req, res, next) => {
 				const url = req.url ?? ''
-
-				// Match /p/{slug}/ or /t/{name}/
-				const match = url.match(/^\/(p|t)\/([^#/?]+)\/?(?:\?.*)?$/)
+				const match = url.match(penUrlRe)
 				if (!match) return next()
 
-				const dir = match[1] as 'p' | 't'
-				const slug = match[2]
-				const base = resolve(dirname, 'src', dir, slug)
-
-				if (!existsSync(base)) return next()
+				const [, dir, slug] = match as unknown as [string, 'p' | 't', string]
+				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return next()
 
 				const html = buildWrapper(slug, dir)
 				const transformed = await server.transformIndexHtml(url, html)
@@ -63,16 +55,10 @@ ${fragment}
 			})
 		},
 
-		// Rewrite /p/slug/ and /t/slug/ to /src/p/slug/ for vite preview
 		configurePreviewServer(server) {
 			server.middlewares.use((req, _res, next) => {
-				const url = req.url ?? ''
-				const match = url.match(/^\/(p|t)\/([^#/?]+)\/?(\?.*)?$/)
-
-				if (match) {
-					req.url = `/src/${match[1]}/${match[2]}/${match[3] ?? ''}`
-				}
-
+				const match = (req.url ?? '').match(penUrlRe)
+				if (match) req.url = `/src/${match[1]}/${match[2]}/${match[3] ?? ''}`
 				next()
 			})
 		},
@@ -91,6 +77,12 @@ function esmShToNpm(url: string): string {
 	return [nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
 }
 
+function esmShToLocal(id: string): string | undefined {
+	const npmSpec = esmShToNpm(id)
+	const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
+	return existsSync(resolve(import.meta.dirname, 'node_modules', pkgRoot)) ? npmSpec : undefined
+}
+
 function esmShPlugin(): Plugin {
 	return {
 		name: 'esm-sh-to-local',
@@ -101,27 +93,15 @@ function esmShPlugin(): Plugin {
 				return
 			}
 
-			const npmSpec = esmShToNpm(id)
-			const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
-
-			if (existsSync(resolve(dirname, 'node_modules', pkgRoot))) {
-				return { id: npmSpec, external: false }
-			}
-
-			return { id, external: true }
+			const local = esmShToLocal(id)
+			return local ? { id: local, external: false } : { id, external: true }
 		},
 		transform(code) {
 			if (!code.includes('https://esm.sh/')) return
 
 			return code.replace(/(["'])https:\/\/esm\.sh\/([^"']+)\1/g, (match, quote, spec) => {
-				const npmSpec = esmShToNpm(`https://esm.sh/${spec}`)
-				const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
-
-				if (existsSync(resolve(dirname, 'node_modules', pkgRoot))) {
-					return `${quote}${npmSpec}${quote}`
-				}
-
-				return match
+				const local = esmShToLocal(`https://esm.sh/${spec}`)
+				return local ? `${quote}${local}${quote}` : match
 			})
 		},
 	}
@@ -129,11 +109,11 @@ function esmShPlugin(): Plugin {
 
 function discoverPenEntries(): Record<string, string> {
 	const entries: Record<string, string> = {
-		main: resolve(dirname, 'index.html'),
+		main: resolve(import.meta.dirname, 'index.html'),
 	}
 
 	for (const dir of ['p', 't'] as const) {
-		const base = resolve(dirname, 'src', dir)
+		const base = resolve(import.meta.dirname, 'src', dir)
 		if (!existsSync(base)) continue
 
 		for (const slug of readdirSync(base)) {

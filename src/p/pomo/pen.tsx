@@ -9,9 +9,9 @@ import {
 	Select,
 	ThemePicker,
 	ThemeProvider,
-	toast,
 	Toaster,
 	Toggle,
+	toast,
 } from 'https://esm.sh/@trenaryja/ui'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -91,7 +91,6 @@ const playAlarm = ({ alarmSound, alarmVolume, alarmRepeat }: Settings) => {
 }
 
 const notify = (title: string, body: string) => {
-	// eslint-disable-next-line no-new -- Notification API requires new for side effect
 	if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body })
 }
 
@@ -152,8 +151,7 @@ const useTimer = (settings: Settings) => {
 		if (state.isRunning) interval.start()
 		else interval.stop()
 		return interval.stop
-	}, [state.isRunning]) // eslint-disable-line react-hooks/exhaustive-deps -- React Compiler handles memoization
-
+	}, [state.isRunning])
 	useEffect(() => {
 		if (!state.isRunning || displayMs > 0 || completedRef.current) return
 		completedRef.current = true
@@ -163,14 +161,13 @@ const useTimer = (settings: Settings) => {
 			completedRef.current = false
 		}, 500)
 		return () => clearTimeout(t)
-	}, [displayMs, state.isRunning]) // eslint-disable-line react-hooks/exhaustive-deps -- React Compiler handles memoization
-
+	}, [displayMs, state.isRunning])
 	useEffect(() => {
 		if (state.isRunning && state.targetEndTime) {
 			const r = state.targetEndTime - Date.now()
 			setDisplayMs(r > 0 ? r : 0)
 		}
-	}, []) // eslint-disable-line react-hooks/exhaustive-deps -- mount only
+	}, [])
 
 	const start = () => {
 		const ms = displayMs > 0 ? displayMs : msFor(state.mode, settings)
@@ -390,4 +387,4 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+createRoot(document.getElementById('root') as HTMLElement).render(<Root />)

@@ -24,7 +24,6 @@ declare module 'https://esm.sh/qrcode' {
 }
 
 declare module 'https://esm.sh/react' {
-	// eslint-disable-next-line @typescript-eslint/no-require-imports
 	import React = require('react')
 
 	export = React

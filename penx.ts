@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 /**
  * penx — local CodePen manager
  *
@@ -6,11 +7,11 @@
  * interactive prompt when flags are omitted.
  */
 
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { cancel, intro, isCancel, multiselect, note, outro, select, spinner, text } from '@clack/prompts'
-import { spawnSync } from 'child_process'
 import { Command } from 'commander'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
-import { join } from 'path'
 
 const ROOT = import.meta.dir
 const SRC = join(ROOT, 'src')
@@ -153,7 +154,7 @@ function syncEsmDeclarations(importUrls: string[]): void {
 }
 
 async function readMultiline(): Promise<string> {
-	const { createInterface } = await import('readline')
+	const { createInterface } = await import('node:readline')
 	return new Promise((resolve) => {
 		const rl = createInterface({ input: process.stdin, terminal: false })
 		const lines: string[] = []
@@ -209,7 +210,10 @@ async function cmdNew(slug?: string, template?: string): Promise<void> {
 
 function cmdList(): void {
 	const pens = getPens()
-	if (pens.length === 0) return note('No pens yet. Run: penx new', 'Pens')
+	if (pens.length === 0) {
+		note('No pens yet. Run: penx new', 'Pens')
+		return
+	}
 
 	const rows = pens.map((slug) => ({ slug, created: statSync(join(PENS_DIR, slug)).birthtime.toLocaleDateString() }))
 	const maxSlug = Math.max(...rows.map((r) => r.slug.length), 4)
@@ -321,7 +325,7 @@ async function importUrl(slugFlag?: string, urlFlag?: string): Promise<void> {
 	const match = url.match(/codepen\.io\/([^/]+)\/pen\/([^#/?]+)/)
 	if (!match) fail('Could not parse CodePen URL.')
 
-	const [, user, penSlug] = match!
+	const [, user, penSlug] = match as RegExpMatchArray
 	const apiUrl = `https://codepen.io/${user}/pen/${penSlug}.js`
 	const s = spinner()
 	s.start(`Fetching ${apiUrl}…`)

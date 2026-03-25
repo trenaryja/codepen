@@ -22,7 +22,7 @@ const capacityCache = new Map<string, number>()
 const probeCapacity = (version: number, ecc: EccLevel, modeId: string): number => {
 	const key = `${version}:${ecc}:${modeId}`
 
-	if (capacityCache.has(key)) return capacityCache.get(key)!
+	if (capacityCache.has(key)) return capacityCache.get(key) as number
 
 	const ch = modeId === 'Numeric' ? '1' : modeId === 'Alphanumeric' ? 'A' : 'x'
 	let hi = 7090
@@ -96,6 +96,7 @@ const DIRS: [number, number][] = [
 	[1, 1],
 ]
 
+// biome-ignore lint/suspicious/noExplicitAny: qrcode library lacks exported types
 const classifyCells = (qr: any): Cell[][] => {
 	const n = qr.modules.size
 	const { data } = qr.modules
@@ -126,6 +127,7 @@ const classifyCells = (qr: any): Cell[][] => {
 	return grid
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: d3 selection type is complex and not worth narrowing here
 const finderEyes = (svg: any, n: number) => {
 	const g = svg.append('g')
 
@@ -182,6 +184,7 @@ const PARAM_SPECS: Partial<Record<StyleName, Record<string, ParamSpec>>> = {
 	},
 }
 
+// biome-ignore lint/suspicious/noExplicitAny: d3 selection type is complex and not worth narrowing here
 type RenderArgs = { cells: Cell[][]; n: number; p: P; svg: any }
 
 const renderClassic = ({ svg, cells }: RenderArgs) => {
@@ -551,4 +554,4 @@ const Root = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+createRoot(document.getElementById('root') as HTMLElement).render(<Root />)

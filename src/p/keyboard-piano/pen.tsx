@@ -1,4 +1,4 @@
-import { ThemePicker, ThemeProvider, toast, Toaster } from 'https://esm.sh/@trenaryja/ui'
+import { ThemePicker, ThemeProvider, Toaster, toast } from 'https://esm.sh/@trenaryja/ui'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
@@ -570,7 +570,6 @@ function Root() {
 		return audioCtxRef.current
 	}
 
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- React Compiler handles memoization
 	const triggerNote = (key: string, freq: number) => {
 		playNote(getAudioCtx(), freq)
 		setActiveKeys((prev) => new Set(prev).add(key))
@@ -685,4 +684,4 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+createRoot(document.getElementById('root') as HTMLElement).render(<Root />)

@@ -1,79 +1,78 @@
-import { Input, RadioGroup, ThemePicker, ThemeProvider } from '@trenaryja/ui'
-import { useState } from 'react'
+import { Input, ThemePicker, ThemeProvider } from '@trenaryja/ui'
+import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { FiChevronRight } from 'react-icons/fi'
 
 const penModules = import.meta.glob('./p/*/index.html', { query: '?raw', import: 'default', eager: false })
-const templateModules = import.meta.glob('./t/*/index.html', { query: '?raw', import: 'default', eager: false })
 
 const slugFromPath = (path: string) => path.split('/').at(-2) ?? path
 
-const pens = Object.keys(penModules).map(slugFromPath)
-const templates = Object.keys(templateModules).map(slugFromPath)
+type Item = { slug: string; href: string }
 
-type Item = { slug: string; href: string; tag?: string }
+const items: Item[] = Object.keys(penModules)
+	.map(slugFromPath)
+	.sort((a, b) => a.localeCompare(b))
+	.map((slug) => ({ slug, href: `/p/${slug}/` }))
 
-const all: Item[] = [
-	...pens.map((slug) => ({ slug, href: `/p/${slug}/` })),
-	...templates.map((slug) => ({ slug, href: `/t/${slug}/`, tag: 'template' })),
-].sort((a, b) => a.slug.localeCompare(b.slug))
+const IFRAME_W = 1024
+const IFRAME_H = 768
 
-const PenCard = ({ slug, href, tag }: Item) => (
-	<div className='relative'>
-		{tag && (
-			<span className='badge badge-soft badge-sm absolute -top-2 right-2 z-10'>
-				<span>{tag}</span>
-				<span className='status status-primary' />
-			</span>
-		)}
-		<a href={href} className='btn btn-lg btn-block justify-start'>
-			{slug}
+const PenCard = ({ slug, href }: Item) => {
+	const containerRef = useRef<HTMLDivElement>(null)
+	const [scale, setScale] = useState(0)
+
+	useEffect(() => {
+		const el = containerRef.current
+		if (!el) return
+		const obs = new ResizeObserver(([entry]) => setScale(entry.contentRect.width / IFRAME_W))
+		obs.observe(el)
+		return () => obs.disconnect()
+	}, [])
+
+	return (
+		<a
+			href={href}
+			className='group rounded-box border border-current/25 overflow-hidden shadow-md transition-all hover:-translate-y-1 hover:shadow-xl'
+		>
+			<div ref={containerRef} className='relative overflow-hidden' style={{ aspectRatio: `${IFRAME_W}/${IFRAME_H}` }}>
+				{scale > 0 && (
+					<iframe
+						src={href}
+						sandbox='allow-scripts allow-same-origin'
+						title={slug}
+						loading='lazy'
+						tabIndex={-1}
+						className='pointer-events-none absolute inset-0 origin-top-left'
+						style={{ width: IFRAME_W, height: IFRAME_H, transform: `scale(${scale})` }}
+					/>
+				)}
+			</div>
+			<div className='flex items-center justify-between gap-2 p-4 bg-base-300'>
+				<span className='truncate text-sm font-semibold'>{slug}</span>
+				<FiChevronRight className='opacity-0 transition-opacity group-hover:opacity-100' />
+			</div>
 		</a>
-	</div>
-)
-
-const filterOptions = ['all', 'pens', 'templates'] as const
-type FilterOption = (typeof filterOptions)[number]
+	)
+}
 
 const App = () => {
 	const [query, setQuery] = useState('')
-	const [filter, setFilter] = useState<FilterOption>('all')
 	const q = query.toLowerCase()
-
-	const items = all.filter((item) => {
-		if (filter === 'pens' && item.tag) return false
-		if (filter === 'templates' && !item.tag) return false
-		return item.slug.includes(q)
-	})
+	const filtered = items.filter((item) => item.slug.includes(q))
 
 	return (
 		<ThemeProvider>
-			<div className='min-h-screen full-bleed-container content-start gap-10 p-10'>
-				<header className='flex items-start justify-between gap-4'>
-					<div className='grid gap-1'>
-						<h1 className='text-3xl font-bold'>CodePen Local</h1>
-						<span className='flex items-center gap-1'>
-							<kbd className='kbd'>bun run penx new</kbd>
-							<span>to create new pens</span>
-						</span>
-					</div>
-					<ThemePicker variant='modal' />
-				</header>
-
+			<div className='min-h-screen full-bleed-container content-start gap-y-4 p-4'>
 				<div className='flex gap-4 items-center'>
+					<ThemePicker variant='modal' />
 					<Input placeholder='Search…' value={query} onChange={(e) => setQuery(e.target.value)} />
-					<RadioGroup
-						variant='btn'
-						options={[...filterOptions]}
-						value={filter}
-						onChange={(e) => setFilter(e.target.value as FilterOption)}
-					/>
 				</div>
 
-				{items.length === 0 ? (
+				{filtered.length === 0 ? (
 					<p className='text-base-content/50'>No results.</p>
 				) : (
-					<div className='grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4'>
-						{items.map((item) => (
+					<div className='grid grid-cols-2 md:grid-cols-3 gap-4'>
+						{filtered.map((item) => (
 							<PenCard key={item.href} {...item} />
 						))}
 					</div>
@@ -83,4 +82,4 @@ const App = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root') as HTMLElement).render(<App />)
