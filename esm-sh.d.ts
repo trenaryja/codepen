@@ -6,6 +6,11 @@ declare module 'https://esm.sh/@trenaryja/ui' {
 	export * from '@trenaryja/ui'
 }
 
+declare module 'https://esm.sh/chroma-js' {
+	export { default } from 'chroma-js'
+	export * from 'chroma-js'
+}
+
 declare module 'https://esm.sh/d3-selection' {
 	export * from 'd3-selection'
 }
