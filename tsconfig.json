@@ -1,18 +1,15 @@
 {
 	"compilerOptions": {
-		"target": "ES2022",
-		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"target": "ESNext",
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
 		"module": "ESNext",
 		"moduleResolution": "bundler",
 		"jsx": "react-jsx",
 		"strict": true,
 		"noFallthroughCasesInSwitch": true,
 		"skipLibCheck": true,
-		"resolveJsonModule": true,
-		"isolatedModules": true,
-		"esModuleInterop": true,
-		"types": ["node", "bun-types", "vite/client"],
-		"noEmit": true
+		"noEmit": true,
+		"types": ["node", "bun-types", "vite/client"]
 	},
 	"include": ["src", "penx.ts", "vite.config.ts", "esm-sh.d.ts"]
 }

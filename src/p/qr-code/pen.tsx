@@ -180,7 +180,7 @@ const PARAM_SPECS: Partial<Record<StyleName, Record<string, ParamSpec>>> = {
 		depth: { label: 'Depth', min: 0, max: 1, step: 0.05, default: 0.5 },
 	},
 	hex: {
-		radius: { label: 'Hex radius (× cell)', min: 0.2, max: 0.9, step: 0.01, default: 0.45 },
+		radius: { label: 'Hex radius', min: 0.2, max: 0.9, step: 0.01, default: 0.45 },
 	},
 }
 
@@ -527,14 +527,12 @@ const Root = () => {
 						<div className={`flex gap-8 items-start ${canOptimize ? 'flex-row' : 'flex-col items-center'}`}>
 							<div className='flex flex-col items-center gap-2'>
 								<svg ref={svgRef} className='shadow' />
-								{canOptimize && (
-									<span className='text-xs opacity-40 font-mono truncate max-w-[160px]'>{debouncedText}</span>
-								)}
+								{canOptimize && <span className='text-xs opacity-40 font-mono truncate max-w-40'>{debouncedText}</span>}
 							</div>
 							{canOptimize && optInfo && (
 								<div className='flex flex-col items-center gap-2'>
 									<svg ref={svgOptRef} className='shadow' />
-									<span className='text-xs opacity-40 font-mono truncate max-w-[160px]'>{optText}</span>
+									<span className='text-xs opacity-40 font-mono truncate max-w-40'>{optText}</span>
 									<button type='button' className='btn btn-success btn-xs' onClick={applyOptimize}>
 										Apply · {optInfo.mode} v{optInfo.version}
 									</button>
