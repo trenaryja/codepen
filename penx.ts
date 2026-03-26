@@ -325,7 +325,7 @@ async function importUrl(slugFlag?: string, urlFlag?: string): Promise<void> {
 	const match = url.match(/codepen\.io\/([^/]+)\/pen\/([^#/?]+)/)
 	if (!match) fail('Could not parse CodePen URL.')
 
-	const [, user, penSlug] = match as RegExpMatchArray
+	const [, user, penSlug] = match
 	const apiUrl = `https://codepen.io/${user}/pen/${penSlug}.js`
 	const s = spinner()
 	s.start(`Fetching ${apiUrl}…`)
@@ -336,7 +336,7 @@ async function importUrl(slugFlag?: string, urlFlag?: string): Promise<void> {
 		fail('Could not fetch pen.')
 	}
 
-	const data = (await res.json()) as { html?: string; css?: string; js?: string }
+	const data: { html?: string; css?: string; js?: string } = await res.json()
 	s.stop('Fetched pen data.')
 
 	const slug =
@@ -391,9 +391,9 @@ function scanEsmImports(): { fullUrls: Set<string>; referencedPkgs: Set<string>;
 
 function findStaleDeps(referencedPkgs: Set<string>): string[] {
 	const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'))
-	const deps = Object.keys(pkg.dependencies ?? {})
+	const deps = new Set<string>(Object.keys(pkg.dependencies ?? {}))
 
-	return deps.filter((dep) => !referencedPkgs.has(dep))
+	return deps.difference(referencedPkgs).values().toArray()
 }
 
 type CheckResult = {

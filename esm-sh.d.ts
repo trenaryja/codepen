@@ -7,16 +7,21 @@ declare module 'https://esm.sh/@trenaryja/ui' {
 }
 
 declare module 'https://esm.sh/chroma-js' {
-	export { default } from 'chroma-js'
 	export * from 'chroma-js'
+	export { default } from 'chroma-js'
 }
 
 declare module 'https://esm.sh/d3-selection' {
 	export * from 'd3-selection'
 }
 
-declare module 'https://esm.sh/honeycomb-grid@4.1.4' {
+declare module 'https://esm.sh/honeycomb-grid' {
 	export * from 'honeycomb-grid'
+}
+
+declare module 'https://esm.sh/mapbox-gl' {
+	export * from 'mapbox-gl'
+	export { default } from 'mapbox-gl'
 }
 
 declare module 'https://esm.sh/qrcode' {
@@ -33,8 +38,16 @@ declare module 'https://esm.sh/react-dom/client' {
 	export * from 'react-dom/client'
 }
 
+declare module 'https://esm.sh/react-icons/fa' {
+	export * from 'react-icons/fa'
+}
+
 declare module 'https://esm.sh/react-icons/lu' {
 	export * from 'react-icons/lu'
+}
+
+declare module 'https://esm.sh/remeda' {
+	export * from 'remeda'
 }
 
 declare module 'https://esm.sh/*'

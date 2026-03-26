@@ -1,8 +1,7 @@
 import { ThemePicker, ThemeProvider, Toaster, toast } from 'https://esm.sh/@trenaryja/ui'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
-
-// Audio engine from gabrycina & claude opus — github.com/gabrycina/hear-yourself
+import * as R from 'https://esm.sh/remeda'
 
 type NoteConfig = { black?: boolean; freq: number; key: string; note: string }
 
@@ -175,7 +174,7 @@ function Piano({
 	black: NoteConfig[]
 	blackPos: Record<string, number>
 	onTrigger: (key: string, freq: number) => void
-	onWheel: (e: React.WheelEvent) => void
+	onWheel: (e: WheelEvent) => void
 	white: NoteConfig[]
 }) {
 	const pianoRef = useRef<HTMLDivElement>(null)
@@ -186,7 +185,7 @@ function Piano({
 
 		const handler = (e: WheelEvent) => {
 			e.preventDefault()
-			onWheel(e as unknown as React.WheelEvent)
+			onWheel(e)
 		}
 
 		el.addEventListener('wheel', handler, { passive: false })
@@ -387,8 +386,8 @@ function useVisibleNotes(whiteCount: number) {
 
 	const white = notes.filter((n) => !n.black)
 	const black = notes.filter((n) => n.black)
-	const noteToKey = Object.fromEntries(notes.map((n) => [n.note, n.key])) as Record<string, string>
-	const keyToNote = Object.fromEntries(notes.map((n) => [n.key, n.note])) as Record<string, string>
+	const noteToKey = R.fromEntries(notes.map((n) => [n.note, n.key] as const))
+	const keyToNote = R.fromEntries(notes.map((n) => [n.key, n.note] as const))
 
 	const blackPos: Record<string, number> = {}
 
@@ -398,7 +397,7 @@ function useVisibleNotes(whiteCount: number) {
 		if (prev) blackPos[bn.key] = white.indexOf(prev)
 	}
 
-	const handleWheel = (e: React.WheelEvent | WheelEvent) => {
+	const handleWheel = (e: WheelEvent) => {
 		const dir = e.deltaY > 0 ? -1 : 1
 		setOffset((prev) => Math.max(0, Math.min(maxOffset(count), prev + dir)))
 	}
@@ -411,11 +410,11 @@ function useVisibleNotes(whiteCount: number) {
 
 function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<string, string>) {
 	const allSongNotes = song.steps.flat()
-	const empty = { toKey: {} as Record<string, string>, toNote: {} as Record<string, string> }
+	const empty: { toKey: Record<string, string>; toNote: Record<string, string> } = { toKey: {}, toNote: {} }
 
 	if (allSongNotes.length === 0) return empty
 
-	const uniqueSongNotes = [...new Set(allSongNotes)]
+	const uniqueSongNotes = new Set(allSongNotes).values().toArray()
 	const songIndices = uniqueSongNotes.map((n) => NOTE_INDEX[n]).filter((i): i is number => i !== undefined)
 
 	if (songIndices.length === 0) return empty
@@ -509,7 +508,7 @@ function PianoBar({
 	blackPos: Record<string, number>
 	containerRef: React.RefObject<HTMLDivElement | null>
 	firstNote: string
-	handleWheel: (e: React.WheelEvent) => void
+	handleWheel: (e: WheelEvent) => void
 	lastNote: string
 	onTrigger: (key: string, freq: number) => void
 	white: NoteConfig[]
@@ -684,4 +683,4 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(<Root />)
+createRoot(document.getElementById('root')!).render(<Root />)

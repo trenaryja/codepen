@@ -1,5 +1,5 @@
 import { Button, Field, Input, Modal, Range, Select, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import { defineHex, Grid, hexToPoint, Orientation, rectangle } from 'https://esm.sh/honeycomb-grid@4.1.4'
+import { defineHex, Grid, hexToPoint, Orientation, rectangle } from 'https://esm.sh/honeycomb-grid'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuDownload, LuSettings } from 'https://esm.sh/react-icons/lu'
@@ -9,9 +9,11 @@ const mapValue = (v: number, [inMin, inMax]: [number, number], [outMin, outMax]:
 
 type ColorCtx = { pH: number; s: number; w: number; x: number; y: number }
 
+type StrategyDef = { fn: (ctx: ColorCtx) => { ht: number; t: number }; label: string }
+
 const STRATEGIES = {
 	cosineWave: {
-		fn: ({ pH, w, x, y }: ColorCtx) => {
+		fn: ({ pH, w, x, y }) => {
 			const cosX = -Math.cos(mapValue(x, [0, w], [0, 2 * Math.PI])) + 1
 			const cosY = -Math.cos(mapValue(y, [0, pH], [0, 2 * Math.PI])) + 1
 			return { ht: mapValue(x, [0, w], [0, 1]), t: (cosX + cosY) / 4 + Math.random() * 0.15 }
@@ -19,7 +21,7 @@ const STRATEGIES = {
 		label: 'Cosine Wave',
 	},
 	plasma: {
-		fn: ({ pH, w, x, y }: ColorCtx) => {
+		fn: ({ pH, w, x, y }) => {
 			const nx = x / w
 			const ny = y / pH
 			const v1 = Math.sin(nx * 4 * Math.PI)
@@ -32,7 +34,7 @@ const STRATEGIES = {
 		label: 'Plasma',
 	},
 	metaHex: {
-		fn: ({ s, x, y }: ColorCtx) => {
+		fn: ({ s, x, y }) => {
 			const macroSize = s * 3
 			const sqrt3 = Math.sqrt(3)
 			const q = ((2 / 3) * x) / macroSize
@@ -60,7 +62,7 @@ const STRATEGIES = {
 		label: 'Meta Hex',
 	},
 	waveInterference: {
-		fn: ({ pH, w, x, y }: ColorCtx) => {
+		fn: ({ pH, w, x, y }) => {
 			const nx = (x / w) * Math.PI * 2
 			const ny = (y / pH) * Math.PI * 2
 			const w1 = Math.sin(nx * 3 + ny * 1.5)
@@ -71,11 +73,27 @@ const STRATEGIES = {
 		},
 		label: 'Wave Interference',
 	},
-}
+} satisfies Record<string, StrategyDef>
 
 type Strategy = keyof typeof STRATEGIES
 
-const DEFAULTS = {
+type Params = {
+	border: number
+	chromaMax: number
+	chromaMin: number
+	hueEnd: number
+	hueStart: number
+	lightnessMax: number
+	lightnessMin: number
+	orientation: 'flat' | 'pointy'
+	pHeight: number
+	pWidth: number
+	sideLength: number
+	strategy: Strategy
+	strokeMultiplier: number
+}
+
+const DEFAULTS: Params = {
 	border: 2,
 	chromaMax: 0.2,
 	chromaMin: 0.05,
@@ -83,15 +101,13 @@ const DEFAULTS = {
 	hueStart: 180,
 	lightnessMax: 0.25,
 	lightnessMin: 0.01,
-	orientation: 'pointy' as 'flat' | 'pointy',
+	orientation: 'pointy',
 	pHeight: screen.height * window.devicePixelRatio,
 	pWidth: screen.width * window.devicePixelRatio,
 	sideLength: 15,
-	strategy: 'cosineWave' as Strategy,
+	strategy: 'cosineWave',
 	strokeMultiplier: 0.85,
 }
-
-type Params = typeof DEFAULTS
 
 const oklch = ({ c, h, l }: { c: number; h: number; l: number }) => `oklch(${l} ${c} ${h})`
 
@@ -114,7 +130,7 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 
 	canvas.width = pWidth
 	canvas.height = pHeight
-	const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
+	const ctx = canvas.getContext('2d')!
 	const colorFn = STRATEGIES[strategy].fn
 
 	const Hex = defineHex({
@@ -143,7 +159,7 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 
 		ctx.beginPath()
 		ctx.moveTo(x + corners[0].x, y + corners[0].y)
-		for (let i = 1; i < corners.length; i++) ctx.lineTo(x + corners[i].x, y + corners[i].y)
+		for (const c of corners.values().drop(1)) ctx.lineTo(x + c.x, y + c.y)
 		ctx.closePath()
 		ctx.fillStyle = oklch(fill)
 		ctx.fill()
@@ -292,4 +308,4 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(<Root />)
+createRoot(document.getElementById('root')!).render(<Root />)

@@ -19,30 +19,25 @@ const capacityCache = new Map<string, number>()
  * exported as a static nested object (ecc → mode → version[]) for O(1) lookups with no runtime
  * cost — preferable if this moves to a library.
  */
-const probeCapacity = (version: number, ecc: EccLevel, modeId: string): number => {
-	const key = `${version}:${ecc}:${modeId}`
+const probeCapacity = (version: number, ecc: EccLevel, modeId: string): number =>
+	capacityCache.getOrInsertComputed(`${version}:${ecc}:${modeId}`, () => {
+		const ch = modeId === 'Numeric' ? '1' : modeId === 'Alphanumeric' ? 'A' : 'x'
+		let hi = 7090
+		let lo = 1
 
-	if (capacityCache.has(key)) return capacityCache.get(key) as number
+		while (lo < hi) {
+			const mid = Math.floor((lo + hi + 1) / 2)
 
-	const ch = modeId === 'Numeric' ? '1' : modeId === 'Alphanumeric' ? 'A' : 'x'
-	let hi = 7090
-	let lo = 1
-
-	while (lo < hi) {
-		const mid = Math.floor((lo + hi + 1) / 2)
-
-		try {
-			if (QRCode.create(ch.repeat(mid), { errorCorrectionLevel: ecc }).version <= version) lo = mid
-			else hi = mid - 1
-		} catch {
-			hi = mid - 1
+			try {
+				if (QRCode.create(ch.repeat(mid), { errorCorrectionLevel: ecc }).version <= version) lo = mid
+				else hi = mid - 1
+			} catch {
+				hi = mid - 1
+			}
 		}
-	}
 
-	capacityCache.set(key, lo)
-
-	return lo
-}
+		return lo
+	})
 
 const optimizeForQR = (raw: string): string => {
 	try {
@@ -552,4 +547,4 @@ const Root = () => {
 	)
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(<Root />)
+createRoot(document.getElementById('root')!).render(<Root />)

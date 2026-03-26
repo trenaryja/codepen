@@ -16,6 +16,7 @@ import {
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuRefreshCw, LuSettings, LuSkipForward } from 'https://esm.sh/react-icons/lu'
+import * as R from 'https://esm.sh/remeda'
 
 type TimerMode = 'longBreak' | 'pomodoro' | 'shortBreak'
 
@@ -33,7 +34,7 @@ type Settings = {
 }
 
 const LABELS: Record<TimerMode, string> = { pomodoro: 'Pomodoro', shortBreak: 'Short Break', longBreak: 'Long Break' }
-const MODES = Object.keys(LABELS) as TimerMode[]
+const MODES = R.keys(LABELS)
 
 const DEFAULTS: Settings = {
 	alarmRepeat: 1,
@@ -61,7 +62,7 @@ const SOUNDS: Record<string, { label: string; url: string }> = {
 	warning: { label: 'Warning', url: `${CDN}/notification/warning.207aed9.mp3` },
 }
 
-const msFor = (mode: TimerMode, s: Settings) => (s[`${mode}Duration` as keyof Settings] as number) * 60_000
+const msFor = (mode: TimerMode, s: Settings) => s[`${mode}Duration`] * 60_000
 
 const nextMode = (cur: TimerMode, count: number, interval: number): TimerMode =>
 	cur === 'pomodoro' ? ((count + 1) % interval === 0 ? 'longBreak' : 'shortBreak') : 'pomodoro'
@@ -387,4 +388,4 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(<Root />)
+createRoot(document.getElementById('root')!).render(<Root />)

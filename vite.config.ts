@@ -6,6 +6,7 @@ import type { Plugin } from 'vite'
 import { defineConfig } from 'vite'
 
 const penUrlRe = /^\/(p|t)\/([^#/?]+)\/?(\?.*)?$/
+const isPenDir = (s: string): s is 'p' | 't' => s === 'p' || s === 't'
 
 function penWrapperPlugin(): Plugin {
 	function buildWrapper(slug: string, dir: 'p' | 't'): string {
@@ -17,6 +18,7 @@ function penWrapperPlugin(): Plugin {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${slug}</title>
+  <link rel="icon" type="image/svg+xml" href="https://trenary.dev/icon.svg" />
   <link rel="stylesheet" href="/src/index.css" />
   <link rel="stylesheet" href="./style.css" />
 </head>
@@ -34,8 +36,8 @@ ${fragment}
 			order: 'pre',
 			handler(html, ctx) {
 				const match = ctx.filename.match(/\/src\/(p|t)\/([^/]+)\/index\.html$/)
-				if (!match) return html
-				return buildWrapper(match[2], match[1] as 'p' | 't')
+				if (!match || !isPenDir(match[1])) return html
+				return buildWrapper(match[2], match[1])
 			},
 		},
 
@@ -43,9 +45,10 @@ ${fragment}
 			server.middlewares.use(async (req, res, next) => {
 				const url = req.url ?? ''
 				const match = url.match(penUrlRe)
-				if (!match) return next()
+				if (!match || !isPenDir(match[1])) return next()
 
-				const [, dir, slug] = match as unknown as [string, 'p' | 't', string]
+				const dir = match[1]
+				const slug = match[2]
 				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return next()
 
 				const html = buildWrapper(slug, dir)
