@@ -2,6 +2,7 @@ node_modules/
 .next/
 dist/
 .DS_Store
+.env
 *.local
 .codepen-export.html
 .claude/
