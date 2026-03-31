@@ -10,7 +10,7 @@ import {
 	useTheme,
 } from 'https://esm.sh/@trenaryja/ui'
 import mapboxgl from 'https://esm.sh/mapbox-gl'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	FaBorderAll,

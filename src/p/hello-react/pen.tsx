@@ -1,5 +1,5 @@
 import { ColorButton, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import { useEffect, useState } from 'https://esm.sh/react'
+import React, { useEffect, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
 const Root = () => {

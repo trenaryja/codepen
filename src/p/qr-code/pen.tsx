@@ -2,7 +2,7 @@ import { useDebouncedValue } from 'https://esm.sh/@mantine/hooks'
 import { ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { select } from 'https://esm.sh/d3-selection'
 import QRCode from 'https://esm.sh/qrcode'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
 const CELL = 10

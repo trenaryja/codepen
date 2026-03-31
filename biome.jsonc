@@ -30,5 +30,22 @@
 				"noNonNullAssertion": "off"
 			}
 		}
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["src/p/**/pen.tsx"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						// Pens must import React for CodePen JSX compatibility (no automatic transform)
+						"noUnusedImports": "off"
+					},
+					"style": {
+						// React default import must remain a value import for CodePen compatibility
+						"useImportType": "off"
+					}
+				}
+			}
+		}
+	]
 }

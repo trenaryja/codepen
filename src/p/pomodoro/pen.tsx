@@ -13,7 +13,7 @@ import {
 	Toggle,
 	toast,
 } from 'https://esm.sh/@trenaryja/ui'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuRefreshCw, LuSettings, LuSkipForward } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'

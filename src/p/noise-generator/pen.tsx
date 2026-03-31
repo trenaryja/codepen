@@ -1,7 +1,7 @@
 import { useHotkeys } from 'https://esm.sh/@mantine/hooks'
 import { Button, Field, Range, ThemeProvider, tailwindColors } from 'https://esm.sh/@trenaryja/ui'
 import chroma from 'https://esm.sh/chroma-js'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuPause, LuPlay } from 'https://esm.sh/react-icons/lu'
 
