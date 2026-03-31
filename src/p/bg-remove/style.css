@@ -1,0 +1,4 @@
+.checkerboard {
+	background-image: repeating-conic-gradient(#80808040 0% 25%, transparent 0% 50%);
+	background-size: 16px 16px;
+}
