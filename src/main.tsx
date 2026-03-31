@@ -1,6 +1,6 @@
 import { Input, ThemePicker, ThemeProvider } from '@trenaryja/ui'
 import { useEffect, useRef, useState } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { FiChevronRight } from 'react-icons/fi'
 
 const penModules = import.meta.glob('./p/*/index.html', { query: '?raw', import: 'default', eager: false })
@@ -38,7 +38,6 @@ const PenCard = ({ slug, href }: Item) => {
 				{scale > 0 && (
 					<iframe
 						src={href}
-						sandbox='allow-scripts allow-same-origin'
 						title={slug}
 						loading='lazy'
 						tabIndex={-1}
@@ -82,4 +81,7 @@ const App = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+const container = document.getElementById('root')!
+const extended = container as unknown as Record<string, Root>
+extended.__root = extended.__root ?? createRoot(container)
+extended.__root.render(<App />)

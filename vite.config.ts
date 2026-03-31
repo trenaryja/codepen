@@ -54,6 +54,8 @@ ${fragment}
 				const html = buildWrapper(slug, dir)
 				const transformed = await server.transformIndexHtml(url, html)
 				res.setHeader('Content-Type', 'text/html')
+				res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+				res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless')
 				res.end(transformed)
 			})
 		},
@@ -133,6 +135,7 @@ function discoverPenEntries(): Record<string, string> {
 
 export default defineConfig({
 	plugins: [tailwindcss(), react(), esmShPlugin(), penWrapperPlugin()],
+	server: {},
 	build: {
 		rollupOptions: {
 			input: discoverPenEntries(),

@@ -15,6 +15,11 @@ declare module 'https://esm.sh/d3-selection' {
 	export * from 'd3-selection'
 }
 
+declare module 'https://esm.sh/heic2any' {
+	export * from 'heic2any'
+	export { default } from 'heic2any'
+}
+
 declare module 'https://esm.sh/honeycomb-grid' {
 	export * from 'honeycomb-grid'
 }
@@ -30,8 +35,11 @@ declare module 'https://esm.sh/qrcode' {
 
 declare module 'https://esm.sh/react' {
 	import React = require('react')
-
 	export = React
+}
+
+declare module 'https://esm.sh/react-advanced-cropper' {
+	export * from 'react-advanced-cropper'
 }
 
 declare module 'https://esm.sh/react-dom/client' {
