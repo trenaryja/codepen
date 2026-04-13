@@ -130,7 +130,13 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  * hardness 1 = fully hard circle, hardness 0 = extremely soft gaussian-like falloff.
  * At low hardness, the opaque core shrinks to nearly nothing and the falloff is curved.
  */
-function createBrushPattern(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, hardness: number): CanvasGradient {
+function createBrushPattern(
+	ctx: CanvasRenderingContext2D,
+	x: number,
+	y: number,
+	radius: number,
+	hardness: number,
+): CanvasGradient {
 	const coreRadius = radius * hardness * hardness // quadratic curve for more dramatic softness range
 	const grad = ctx.createRadialGradient(x, y, coreRadius, x, y, radius)
 	// Gaussian-ish falloff with intermediate stops
@@ -216,7 +222,9 @@ function EraserCanvas({
 
 			setReady(true)
 		})
-		return () => { cancelled = true }
+		return () => {
+			cancelled = true
+		}
 	}, [resultUrl, croppedUrl])
 
 	const getCanvasPos = (e: React.MouseEvent | React.TouchEvent): { x: number; y: number } => {
@@ -492,7 +500,9 @@ function EraserCanvas({
 				<button type='button' className='btn btn-sm btn-ghost' onClick={undo}>
 					Undo
 				</button>
-				<span className='text-xs opacity-40 hidden sm:inline'>[ ] brush size · scroll to zoom · middle-click to pan</span>
+				<span className='text-xs opacity-40 hidden sm:inline'>
+					[ ] brush size · scroll to zoom · middle-click to pan
+				</span>
 			</div>
 		</div>
 	)
@@ -855,7 +865,11 @@ const Root = () => {
 									/>
 								</div>
 								<div className='flex items-center justify-center gap-3 px-4 py-3 bg-base-200/80 backdrop-blur-sm border-t border-current/10 flex-wrap'>
-									<button type='button' className='btn btn-sm btn-outline' onClick={() => setShowOriginal(!showOriginal)}>
+									<button
+										type='button'
+										className='btn btn-sm btn-outline'
+										onClick={() => setShowOriginal(!showOriginal)}
+									>
 										{showOriginal ? 'Show Result' : 'Show Original'}
 									</button>
 									<button type='button' className='btn btn-sm btn-outline' onClick={() => setEditing(true)}>

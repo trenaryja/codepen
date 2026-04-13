@@ -2,7 +2,16 @@ import { useClipboard, useLocalStorage } from 'https://esm.sh/@mantine/hooks'
 import { Button, Field, Input, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import React, { useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
-import { LuChevronDown, LuChevronUp, LuCopy, LuPlus, LuRotateCcw, LuSparkles, LuTrash2, LuX } from 'https://esm.sh/react-icons/lu'
+import {
+	LuChevronDown,
+	LuChevronUp,
+	LuCopy,
+	LuPlus,
+	LuRotateCcw,
+	LuSparkles,
+	LuTrash2,
+	LuX,
+} from 'https://esm.sh/react-icons/lu'
 import { z } from 'https://esm.sh/zod'
 
 // ─── Schema (import/export wire format) ─────────────────────────────────────
