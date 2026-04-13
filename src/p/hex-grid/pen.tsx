@@ -95,18 +95,18 @@ type Params = {
 
 const DEFAULTS: Params = {
 	border: 2,
-	chromaMax: 0.2,
-	chromaMin: 0.05,
+	chromaMax: 0,
+	chromaMin: 0,
 	hueEnd: 300,
 	hueStart: 180,
-	lightnessMax: 0.25,
-	lightnessMin: 0.01,
+	lightnessMax: 1,
+	lightnessMin: 0,
 	orientation: 'pointy',
 	pHeight: screen.height * window.devicePixelRatio,
 	pWidth: screen.width * window.devicePixelRatio,
 	sideLength: 15,
-	strategy: 'cosineWave',
-	strokeMultiplier: 0.85,
+	strategy: 'metaHex',
+	strokeMultiplier: 0.5,
 }
 
 const oklch = ({ c, h, l }: { c: number; h: number; l: number }) => `oklch(${l} ${c} ${h})`
