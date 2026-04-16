@@ -7,3 +7,4 @@ dist/
 .codepen-export.html
 .claude/
 .vercel/
+.env*.local

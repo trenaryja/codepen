@@ -28,7 +28,7 @@
 		"remeda": "^2.33.7"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.11",
+		"@biomejs/biome": "^2.4.12",
 		"@clack/prompts": "^1.2.0",
 		"@faker-js/faker": "^10.4.0",
 		"@tailwindcss/vite": "^4.2.2",
