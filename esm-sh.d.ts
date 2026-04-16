@@ -1,9 +1,17 @@
+declare module 'https://esm.sh/@faker-js/faker' {
+	export * from '@faker-js/faker'
+}
+
 declare module 'https://esm.sh/@mantine/hooks' {
 	export * from '@mantine/hooks'
 }
 
 declare module 'https://esm.sh/@trenaryja/ui' {
 	export * from '@trenaryja/ui'
+}
+
+declare module 'https://esm.sh/@trenaryja/ui/utils' {
+	export * from '@trenaryja/ui/utils'
 }
 
 declare module 'https://esm.sh/chroma-js' {
@@ -56,6 +64,10 @@ declare module 'https://esm.sh/react-icons/lu' {
 
 declare module 'https://esm.sh/remeda' {
 	export * from 'remeda'
+}
+
+declare module 'https://esm.sh/zod' {
+	export * from 'zod'
 }
 
 declare module 'https://esm.sh/*'
