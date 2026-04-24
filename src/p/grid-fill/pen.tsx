@@ -293,7 +293,7 @@ const Root = () => {
 		<ThemeProvider>
 			<main className='full-bleed-container p-8 gap-y-4 place-items-center'>
 				<div className='flex gap-2'>
-					<h1 className='text-2xl font-medium mb-6'>Gridfinity plate optimizer</h1>
+					<h1 className='text-2xl font-medium mb-6'>Grid-fill</h1>
 					<ThemePicker variant='popover' />
 				</div>
 
