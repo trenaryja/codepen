@@ -4,6 +4,8 @@ import {
 	flip,
 	offset,
 	shift,
+	useClick,
+	useDismiss,
 	useFloating,
 	useHover,
 	useInteractions,
@@ -85,7 +87,28 @@ const computeTagContext = (recipes: Recipe[]): TagContext => {
 
 export const matchesFilter = (recipe: Recipe, filters: Filters): boolean => {
 	for (const tag of filters.tags) if (!recipe.tags.includes(tag)) return false
+	for (const c of filters.constraints) {
+		const count = recipe.counts[c.size] ?? 0
+		if (c.op === '=' && count !== c.n) return false
+		if (c.op === '>=' && count < c.n) return false
+		if (c.op === 'exclude' && count > 0) return false
+	}
 	return true
+}
+
+const OP_SYMBOL: Record<Constraint['op'], string> = { '=': '=', '>=': '≥', exclude: '✕' }
+const formatConstraint = (c: Constraint) =>
+	c.op === 'exclude' ? `${c.size} excluded` : `${c.size} ${OP_SYMBOL[c.op]} ${c.n}`
+const constraintKey = (c: Constraint) => `${c.size}|${c.op}|${c.n}`
+const sameConstraint = (a: Constraint, b: Constraint) => constraintKey(a) === constraintKey(b)
+const dedupeConstraints = (cs: Constraint[]) => {
+	const seen = new Set<string>()
+	return cs.filter((c) => {
+		const k = constraintKey(c)
+		if (seen.has(k)) return false
+		seen.add(k)
+		return true
+	})
 }
 
 const STOPS = [
@@ -112,6 +135,24 @@ const byFamily = (a: string, b: string) => {
 // that bails at the first valid packing. Sidesteps the combinatorial explosion of layouts
 // per recipe (6×5 had ~200M layout-search nodes → 12K packability nodes).
 const keyOf = (w: number, h: number) => (w <= h ? `${w}×${h}` : `${h}×${w}`)
+
+const availableSizes = (W: number, H: number) => {
+	const seen = new Set<string>()
+	const sizes: string[] = []
+	for (let w = 1; w <= W; w++)
+		for (let h = 1; h <= H; h++) {
+			const size = keyOf(w, h)
+			if (seen.has(size)) continue
+			seen.add(size)
+			sizes.push(size)
+		}
+	return R.sort(sizes, byFamily)
+}
+
+const maxCountFor = (size: string, W: number, H: number) => {
+	const [a, b] = size.split('×').map(Number)
+	return Math.floor((W * H) / (a * b))
+}
 
 export const solve = ({ W, H }: SolveOpts) => {
 	const AREA = W * H
@@ -330,6 +371,163 @@ const TagChip = ({
 	)
 }
 
+const OPS: Constraint['op'][] = ['=', '>=', 'exclude']
+
+const OperatorSelector = ({
+	value,
+	onChange,
+}: {
+	value: Constraint['op']
+	onChange: (op: Constraint['op']) => void
+}) => (
+	<div className='join'>
+		{OPS.map((op) => (
+			<button
+				key={op}
+				type='button'
+				className={`btn btn-xs join-item ${value === op ? 'btn-primary' : 'btn-ghost'}`}
+				onClick={() => onChange(op)}
+			>
+				{OP_SYMBOL[op]}
+			</button>
+		))}
+	</div>
+)
+
+const CountStepper = ({ value, max, onChange }: { value: number; max: number; onChange: (n: number) => void }) => (
+	<div className='join'>
+		<button
+			type='button'
+			className='btn btn-xs btn-ghost join-item'
+			onClick={() => onChange(Math.max(1, value - 1))}
+			disabled={value <= 1}
+		>
+			−
+		</button>
+		<span className='btn btn-xs btn-ghost join-item pointer-events-none tabular-nums min-w-6'>{value}</span>
+		<button
+			type='button'
+			className='btn btn-xs btn-ghost join-item'
+			onClick={() => onChange(Math.min(max, value + 1))}
+			disabled={value >= max}
+		>
+			+
+		</button>
+	</div>
+)
+
+const ConstraintChip = ({
+	constraint,
+	maxCount,
+	onUpdate,
+	onRemove,
+}: {
+	constraint: Constraint
+	maxCount: number
+	onUpdate: (updates: Partial<Constraint>) => void
+	onRemove: () => void
+}) => {
+	const [open, setOpen] = useState(false)
+	const { refs, floatingStyles, context } = useFloating({
+		open,
+		onOpenChange: setOpen,
+		placement: 'bottom-start',
+		middleware: [offset(6), flip(), shift({ padding: 8 })],
+		whileElementsMounted: autoUpdate,
+	})
+	const click = useClick(context)
+	const dismiss = useDismiss(context)
+	const { getReferenceProps, getFloatingProps } = useInteractions([click, dismiss])
+	return (
+		<span className='badge badge-sm badge-primary gap-1 pr-1'>
+			<button ref={refs.setReference} type='button' {...getReferenceProps()} className='cursor-pointer tabular-nums'>
+				{formatConstraint(constraint)}
+			</button>
+			<button
+				type='button'
+				onClick={onRemove}
+				aria-label={`remove ${formatConstraint(constraint)}`}
+				className='cursor-pointer opacity-70 hover:opacity-100 leading-none px-1'
+			>
+				×
+			</button>
+			{open && (
+				<FloatingPortal>
+					<div
+						ref={refs.setFloating}
+						style={floatingStyles}
+						{...getFloatingProps()}
+						className='bg-base-200 border border-current/10 rounded-box p-2 shadow-lg z-50 flex items-center gap-2'
+					>
+						<OperatorSelector
+							value={constraint.op}
+							onChange={(op) => onUpdate({ op, n: op === 'exclude' ? constraint.n : Math.max(1, constraint.n) })}
+						/>
+						{constraint.op !== 'exclude' && (
+							<CountStepper value={constraint.n} max={maxCount} onChange={(n) => onUpdate({ n })} />
+						)}
+					</div>
+				</FloatingPortal>
+			)}
+		</span>
+	)
+}
+
+const ConstraintPicker = ({
+	sizes,
+	W,
+	H,
+	onAdd,
+}: {
+	sizes: string[]
+	W: number
+	H: number
+	onAdd: (c: Constraint) => void
+}) => {
+	const [size, setSize] = useState(sizes[0])
+	const [op, setOp] = useState<Constraint['op']>('=')
+	const [n, setN] = useState(1)
+
+	// Plate changed → current size may no longer fit; snap to the first valid size.
+	useEffect(() => {
+		if (!sizes.includes(size)) {
+			setSize(sizes[0])
+			setN(1)
+		}
+	}, [sizes, size])
+
+	const max = maxCountFor(size, W, H)
+	const clamped = Math.min(n, Math.max(1, max))
+
+	return (
+		<div className='flex items-center gap-1'>
+			<select
+				className='select select-xs w-20'
+				value={size}
+				onChange={(e) => {
+					setSize(e.target.value)
+					setN(1)
+				}}
+			>
+				{sizes.map((s) => (
+					<option key={s} value={s}>
+						{s}
+					</option>
+				))}
+			</select>
+			<OperatorSelector value={op} onChange={setOp} />
+			{op !== 'exclude' && <CountStepper value={clamped} max={max} onChange={setN} />}
+			<button
+				type='button'
+				className='btn btn-xs btn-primary'
+				onClick={() => onAdd({ size, op, n: op === 'exclude' ? 0 : clamped })}
+			>
+				add
+			</button>
+		</div>
+	)
+}
+
 const Plate = ({ W, H, bins }: { W: number; H: number; bins: Bin[] }) => {
 	const pad = 20,
 		viewBoxWidth = 600,
@@ -427,8 +625,11 @@ const Root = () => {
 		const sorted = sortRecipes(solve({ W, H }))
 		setRecipes(sorted)
 		setSelectedKey(sorted[0]?.key ?? null)
-		setFilters(emptyFilters())
+		const valid = new Set(availableSizes(W, H))
+		setFilters((f) => ({ tags: f.tags, constraints: f.constraints.filter((c) => valid.has(c.size)) }))
 	}, [W, H])
+
+	const plateSizes = availableSizes(W, H)
 
 	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters))
 	const filteredIdx = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
@@ -477,6 +678,26 @@ const Root = () => {
 			return { ...f, tags }
 		})
 
+	const toggleSizeConstraint = (size: string, n: number) =>
+		setFilters((f) => {
+			const target: Constraint = { size, op: '=', n }
+			const idx = f.constraints.findIndex((c) => sameConstraint(c, target))
+			if (idx >= 0) return { ...f, constraints: f.constraints.filter((_, i) => i !== idx) }
+			return { ...f, constraints: [...f.constraints, target] }
+		})
+
+	const addConstraint = (c: Constraint) =>
+		setFilters((f) => ({ ...f, constraints: dedupeConstraints([...f.constraints, c]) }))
+
+	const updateConstraint = (idx: number, updates: Partial<Constraint>) =>
+		setFilters((f) => ({
+			...f,
+			constraints: dedupeConstraints(f.constraints.map((c, i) => (i === idx ? { ...c, ...updates } : c))),
+		}))
+
+	const removeConstraint = (idx: number) =>
+		setFilters((f) => ({ ...f, constraints: f.constraints.filter((_, i) => i !== idx) }))
+
 	const clearAll = () => setFilters(emptyFilters())
 
 	return (
@@ -515,16 +736,30 @@ const Root = () => {
 
 				<Plate W={W} H={H} bins={layout} />
 
-				<section className='w-full flex flex-wrap items-center gap-2'>
-					{TAG_IDS.map((id) => (
-						<TagChip
-							key={id}
-							id={id}
-							active={filters.tags.has(id)}
-							onToggle={() => toggleTag(id)}
-							count={tagCounts.get(id) ?? 0}
-						/>
-					))}
+				<section className='w-full flex flex-col gap-2'>
+					<div className='flex flex-wrap items-center gap-2'>
+						{TAG_IDS.map((id) => (
+							<TagChip
+								key={id}
+								id={id}
+								active={filters.tags.has(id)}
+								onToggle={() => toggleTag(id)}
+								count={tagCounts.get(id) ?? 0}
+							/>
+						))}
+					</div>
+					<div className='flex flex-wrap items-center gap-2'>
+						{filters.constraints.map((c, i) => (
+							<ConstraintChip
+								key={constraintKey(c)}
+								constraint={c}
+								maxCount={maxCountFor(c.size, W, H)}
+								onUpdate={(updates) => updateConstraint(i, updates)}
+								onRemove={() => removeConstraint(i)}
+							/>
+						))}
+						<ConstraintPicker sizes={plateSizes} W={W} H={H} onAdd={addConstraint} />
+					</div>
 				</section>
 
 				<div className='w-full flex items-center justify-between text-sm text-base-content/70'>
@@ -571,16 +806,29 @@ const Root = () => {
 													{`${i + 1}`.padStart(`${filteredRecipes.length}`.length, ' ')}.
 												</span>
 												<div className='flex flex-wrap items-center gap-2'>
-													{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => (
-														<div key={size} className='relative badge badge-lg badge-soft gap-1 tabular-nums'>
-															<span>{size}</span>
-															{count > 1 && (
-																<span className='absolute -top-2 -right-2 badge badge-xs border border-current/10 px-1'>
-																	{count}
-																</span>
-															)}
-														</div>
-													))}
+													{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => {
+														const pinned = filters.constraints.some((c) =>
+															sameConstraint(c, { size, op: '=', n: count }),
+														)
+														return (
+															<button
+																key={size}
+																type='button'
+																onClick={(e) => {
+																	e.stopPropagation()
+																	toggleSizeConstraint(size, count)
+																}}
+																className={`relative badge badge-lg ${pinned ? 'badge-primary' : 'badge-soft'} gap-1 tabular-nums cursor-pointer`}
+															>
+																<span>{size}</span>
+																{count > 1 && (
+																	<span className='absolute -top-2 -right-2 badge badge-xs border border-current/10 px-1'>
+																		{count}
+																	</span>
+																)}
+															</button>
+														)
+													})}
 													{recipe.tags.map((tag) => (
 														<TagChip key={tag} id={tag} />
 													))}
