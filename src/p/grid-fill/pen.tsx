@@ -1,5 +1,16 @@
+import {
+	autoUpdate,
+	FloatingPortal,
+	flip,
+	offset,
+	shift,
+	useFloating,
+	useHover,
+	useInteractions,
+} from 'https://esm.sh/@floating-ui/react'
+import { useVirtualizer } from 'https://esm.sh/@tanstack/react-virtual'
 import { Field, Range, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import { useEffect, useState } from 'https://esm.sh/react'
+import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import * as R from 'https://esm.sh/remeda'
 
@@ -18,8 +29,64 @@ const interpolateColors = (t: number, stops: string[]) => {
 }
 
 type Bin = { x: number; y: number; w: number; h: number; key: string }
-type Recipe = { key: string; counts: Record<string, number>; unique: number; layout: Bin[] }
+type Recipe = { key: string; counts: Record<string, number>; unique: number; layout: Bin[]; tags: TagId[] }
 type SolveOpts = { W: number; H: number }
+
+type TagId = 'max-unique' | 'monochrome' | 'no-1x1' | 'no-repeat' | 'squares-only'
+type TagContext = { maxUnique: number }
+type Constraint = { size: string; op: '=' | '>=' | 'exclude'; n: number }
+export type Filters = { tags: Set<TagId>; constraints: Constraint[] }
+
+const TAG_IDS: TagId[] = ['max-unique', 'monochrome', 'no-1x1', 'no-repeat', 'squares-only']
+
+const TAGS: Record<TagId, { label: string; description: string }> = {
+	'max-unique': {
+		label: 'max unique',
+		description: 'Uses the largest number of distinct piece sizes possible for this plate.',
+	},
+	monochrome: {
+		label: 'mono',
+		description: 'Uses only a single piece size.',
+	},
+	'no-1x1': {
+		label: 'no 1×1',
+		description: 'Contains no 1×1 pieces.',
+	},
+	'no-repeat': {
+		label: 'no repeat',
+		description: 'Every piece in the recipe is a different size — no size appears twice.',
+	},
+	'squares-only': {
+		label: 'squares only',
+		description: 'Every piece is a square (width = height).',
+	},
+}
+
+const isSquareKey = (size: string) => {
+	const [w, h] = size.split('×').map(Number)
+	return w === h
+}
+
+export const computeTags = (recipe: Recipe, ctx: TagContext): TagId[] => {
+	const tags: TagId[] = []
+	if (recipe.unique === ctx.maxUnique) tags.push('max-unique')
+	if (recipe.unique === 1) tags.push('monochrome')
+	if (!('1×1' in recipe.counts)) tags.push('no-1x1')
+	if (R.values(recipe.counts).every((c) => c === 1)) tags.push('no-repeat')
+	if (R.keys(recipe.counts).every(isSquareKey)) tags.push('squares-only')
+	return tags
+}
+
+const computeTagContext = (recipes: Recipe[]): TagContext => {
+	let maxUnique = 0
+	for (const recipe of recipes) if (recipe.unique > maxUnique) maxUnique = recipe.unique
+	return { maxUnique }
+}
+
+export const matchesFilter = (recipe: Recipe, filters: Filters): boolean => {
+	for (const tag of filters.tags) if (!recipe.tags.includes(tag)) return false
+	return true
+}
 
 const STOPS = [
 	'var(--color-primary)',
@@ -54,7 +121,6 @@ export const solve = ({ W, H }: SolveOpts) => {
 	const sizeKeys: string[] = []
 	for (let w = 1; w <= W; w++)
 		for (let h = 1; h <= H; h++) {
-			if (w === W && h === H) continue
 			const size = keyOf(w, h)
 			if (seen.has(size)) continue
 			seen.add(size)
@@ -164,14 +230,16 @@ export const solve = ({ W, H }: SolveOpts) => {
 			if (!layout) continue
 			const countsObj: Record<string, number> = {}
 			for (let keyIdx = 0; keyIdx < K; keyIdx++) if (counts[keyIdx] > 0) countsObj[sizeKeys[keyIdx]] = counts[keyIdx]
-			found.push({ key: recipeKeyOf(counts), counts: countsObj, unique: uniqueCount, layout })
+			found.push({ key: recipeKeyOf(counts), counts: countsObj, unique: uniqueCount, layout, tags: [] })
 		}
 	}
+	const ctx = computeTagContext(found)
+	for (const recipe of found) recipe.tags = computeTags(recipe, ctx)
 	return found
 }
 
-// Recipe order: fewest pieces first, then lex on family-ordered count vector (ascending, so
-// recipes with fewer small pieces float up within each count group).
+// Recipe order: fewest unique sizes first; within ties, lex on the family-ordered (size, count)
+// sequence — smallest piece type leads, then count of that piece, then next piece, …
 const sortRecipes = (recipes: Recipe[]) => {
 	const allKeys = R.pipe(
 		recipes,
@@ -179,10 +247,86 @@ const sortRecipes = (recipes: Recipe[]) => {
 		R.unique(),
 		R.sort(byFamily),
 	)
-	return R.sortBy(
-		recipes,
-		(x) => R.sum(R.values(x.counts)),
-		...allKeys.map((size) => (x: Recipe) => x.counts[size] ?? 0),
+	const familyIdx = R.fromEntries(allKeys.map((k, i) => [k, i] as const))
+	const seq = (r: Recipe) => R.sortBy(R.entries(r.counts), ([s]) => familyIdx[s])
+	return R.sort(recipes, (a, b) => {
+		if (a.unique !== b.unique) return a.unique - b.unique
+		const sa = seq(a),
+			sb = seq(b)
+		for (let i = 0; i < sa.length && i < sb.length; i++) {
+			const di = familyIdx[sa[i][0]] - familyIdx[sb[i][0]]
+			if (di) return di
+			if (sa[i][1] !== sb[i][1]) return sa[i][1] - sb[i][1]
+		}
+		return sa.length - sb.length
+	})
+}
+
+const TagChip = ({
+	id,
+	active,
+	onToggle,
+	count,
+}: {
+	id: TagId
+	active?: boolean
+	onToggle?: () => void
+	count?: number
+}) => {
+	const [open, setOpen] = useState(false)
+	const { refs, floatingStyles, context } = useFloating({
+		open,
+		onOpenChange: setOpen,
+		placement: 'top',
+		middleware: [offset(6), flip(), shift({ padding: 8 })],
+		whileElementsMounted: autoUpdate,
+	})
+	const hover = useHover(context, { delay: { open: 120, close: 0 } })
+	const { getReferenceProps, getFloatingProps } = useInteractions([hover])
+	const { label, description } = TAGS[id]
+	const disabled = !!onToggle && !active && count === 0
+	const cursor = disabled ? 'cursor-not-allowed' : onToggle ? 'cursor-pointer' : 'cursor-help'
+	const className = `relative badge badge-sm ${active ? 'badge-primary' : 'badge-ghost'} ${cursor} ${disabled ? 'opacity-40' : ''}`
+	const inner = (
+		<>
+			{label}
+			{count !== undefined && count > 0 && (
+				<span className='absolute -top-2 -right-2 badge badge-xs border border-current/10 px-1 tabular-nums'>
+					{count}
+				</span>
+			)}
+		</>
+	)
+	return (
+		<>
+			{onToggle ? (
+				<button
+					ref={refs.setReference}
+					type='button'
+					aria-disabled={disabled}
+					{...getReferenceProps({ onClick: disabled ? undefined : onToggle })}
+					className={className}
+				>
+					{inner}
+				</button>
+			) : (
+				<span ref={refs.setReference} {...getReferenceProps()} className={className}>
+					{inner}
+				</span>
+			)}
+			{open && (
+				<FloatingPortal>
+					<div
+						ref={refs.setFloating}
+						style={floatingStyles}
+						{...getFloatingProps()}
+						className='bg-base-300 text-base-content text-xs rounded-md p-2 max-w-xs shadow-lg z-50 pointer-events-none'
+					>
+						{description}
+					</div>
+				</FloatingPortal>
+			)}
+		</>
 	)
 }
 
@@ -270,20 +414,70 @@ const Plate = ({ W, H, bins }: { W: number; H: number; bins: Bin[] }) => {
 	)
 }
 
+const emptyFilters = (): Filters => ({ tags: new Set(), constraints: [] })
+
 const Root = () => {
 	const [W, setW] = useState(6)
 	const [H, setH] = useState(5)
 	const [recipes, setRecipes] = useState<Recipe[]>([])
-	const [recipeIdx, setRecipeIdx] = useState(0)
+	const [selectedKey, setSelectedKey] = useState<string | null>(null)
+	const [filters, setFilters] = useState<Filters>(emptyFilters)
 
 	useEffect(() => {
-		setRecipes(sortRecipes(solve({ W, H })))
-		setRecipeIdx(0)
+		const sorted = sortRecipes(solve({ W, H }))
+		setRecipes(sorted)
+		setSelectedKey(sorted[0]?.key ?? null)
+		setFilters(emptyFilters())
 	}, [W, H])
 
-	const selectedRecipe = recipes[recipeIdx]
+	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters))
+	const filteredIdx = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
+	const selectedRecipe = filteredIdx >= 0 ? filteredRecipes[filteredIdx] : null
 	const layout = selectedRecipe?.layout ?? []
 	const totalPieces = selectedRecipe ? R.sum(R.values(selectedRecipe.counts)) : 0
+	const filtersActive = filters.tags.size > 0 || filters.constraints.length > 0
+
+	// How many recipes in the current filtered list carry each tag — drives
+	// per-chip count badges and disables inactive chips that would yield zero.
+	const tagCounts = new Map<TagId, number>(TAG_IDS.map((id) => [id, 0]))
+	for (const recipe of filteredRecipes) for (const tag of recipe.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+
+	// Filter change excluded the selected recipe → drop the selection (empty plate).
+	useEffect(() => {
+		if (selectedKey && filteredIdx === -1) setSelectedKey(null)
+	}, [selectedKey, filteredIdx])
+
+	const scrollerRef = useRef<HTMLDivElement>(null)
+	// Rows are uniform menu-sm height (36px). Fixed estimate + no measureElement keeps
+	// getTotalSize() stable so dragging the scrollbar tracks the cursor — measureElement
+	// shrinks total size as new rows enter the viewport, sliding the thumb under the mouse.
+	const rowVirtualizer = useVirtualizer({
+		count: filteredRecipes.length,
+		getScrollElement: () => scrollerRef.current,
+		estimateSize: () => 36,
+		overscan: 8,
+	})
+
+	// Plate or filter change: jump back to the top of the (possibly new) list.
+	useEffect(() => {
+		scrollerRef.current?.scrollTo(0, 0)
+	}, [W, H, filters])
+
+	// Selected row position changed → keep it visible. Phases 7+ (keyboard nav,
+	// layout carousel) will flip the selection externally and rely on this.
+	useEffect(() => {
+		if (filteredIdx >= 0) rowVirtualizer.scrollToIndex(filteredIdx, { align: 'auto' })
+	}, [filteredIdx, rowVirtualizer])
+
+	const toggleTag = (id: TagId) =>
+		setFilters((f) => {
+			const tags = new Set(f.tags)
+			if (tags.has(id)) tags.delete(id)
+			else tags.add(id)
+			return { ...f, tags }
+		})
+
+	const clearAll = () => setFilters(emptyFilters())
 
 	return (
 		<ThemeProvider>
@@ -295,10 +489,10 @@ const Root = () => {
 
 				<section className='grid grid-cols-2 gap-4 w-full'>
 					<Field label={`Plate width: ${W}`}>
-						<Range min={3} max={6} value={W} onChange={(e) => setW(+e.target.value)} />
+						<Range min={2} max={6} value={W} onChange={(e) => setW(+e.target.value)} />
 					</Field>
 					<Field label={`Plate depth: ${H}`}>
-						<Range min={3} max={6} value={H} onChange={(e) => setH(+e.target.value)} />
+						<Range min={2} max={6} value={H} onChange={(e) => setH(+e.target.value)} />
 					</Field>
 				</section>
 
@@ -309,7 +503,9 @@ const Root = () => {
 					</div>
 					<div className='stat'>
 						<div className='stat-title'>Recipe</div>
-						<div className='stat-value text-2xl'>{recipes.length ? `${recipeIdx + 1}/${recipes.length}` : '—'}</div>
+						<div className='stat-value text-2xl'>
+							{selectedRecipe ? `${filteredIdx + 1}/${filteredRecipes.length}` : '—'}
+						</div>
 					</div>
 					<div className='stat'>
 						<div className='stat-title'>Pieces</div>
@@ -319,27 +515,84 @@ const Root = () => {
 
 				<Plate W={W} H={H} bins={layout} />
 
-				<ul className='menu menu-sm max-h-80 flex-nowrap overflow-y-fade'>
-					{recipes.map((recipe, i) => (
-						<li key={recipe.key}>
-							<button type='button' onClick={() => setRecipeIdx(i)} className={i === recipeIdx ? 'menu-active' : ''}>
-								<span className='opacity-50 tabular-nums'>{`${i + 1}`.padStart(`${recipes.length}`.length, ' ')}.</span>
-								<div className='flex flex-wrap gap-2'>
-									{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => (
-										<div key={size} className='relative badge badge-lg badge-soft gap-1 tabular-nums'>
-											<span>{size}</span>
-											{count > 1 && (
-												<span className='absolute -top-2 -right-2 badge badge-xs border border-current/10 px-1'>
-													{count}
-												</span>
-											)}
-										</div>
-									))}
-								</div>
-							</button>
-						</li>
+				<section className='w-full flex flex-wrap items-center gap-2'>
+					{TAG_IDS.map((id) => (
+						<TagChip
+							key={id}
+							id={id}
+							active={filters.tags.has(id)}
+							onToggle={() => toggleTag(id)}
+							count={tagCounts.get(id) ?? 0}
+						/>
 					))}
-				</ul>
+				</section>
+
+				<div className='w-full flex items-center justify-between text-sm text-base-content/70'>
+					<span>
+						Showing {filteredRecipes.length} of {recipes.length} recipes
+					</span>
+					{filtersActive && (
+						<button type='button' className='btn btn-xs btn-ghost' onClick={clearAll}>
+							Clear all
+						</button>
+					)}
+				</div>
+
+				<div className='w-full h-[60vh] rounded-box border border-current/10 overflow-hidden'>
+					{filteredRecipes.length === 0 ? (
+						<div className='size-full flex flex-col items-center justify-center gap-3 text-sm text-base-content/70'>
+							<span>No matching recipes.</span>
+							<button type='button' className='btn btn-sm' onClick={clearAll}>
+								Clear all filters
+							</button>
+						</div>
+					) : (
+						<div ref={scrollerRef} className='size-full scroll-fade-y'>
+							<ul
+								className='menu menu-sm flex-nowrap p-0 w-full relative'
+								style={{ height: rowVirtualizer.getTotalSize() }}
+							>
+								{rowVirtualizer.getVirtualItems().map((virtualItem) => {
+									const i = virtualItem.index
+									const recipe = filteredRecipes[i]
+									const isSelected = recipe.key === selectedKey
+									return (
+										<li
+											key={recipe.key}
+											className='absolute top-0 left-0 w-full'
+											style={{ transform: `translateY(${virtualItem.start}px)` }}
+										>
+											<button
+												type='button'
+												onClick={() => setSelectedKey(recipe.key)}
+												className={isSelected ? 'menu-active' : ''}
+											>
+												<span className='opacity-50 font-mono tabular-nums whitespace-pre'>
+													{`${i + 1}`.padStart(`${filteredRecipes.length}`.length, ' ')}.
+												</span>
+												<div className='flex flex-wrap items-center gap-2'>
+													{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => (
+														<div key={size} className='relative badge badge-lg badge-soft gap-1 tabular-nums'>
+															<span>{size}</span>
+															{count > 1 && (
+																<span className='absolute -top-2 -right-2 badge badge-xs border border-current/10 px-1'>
+																	{count}
+																</span>
+															)}
+														</div>
+													))}
+													{recipe.tags.map((tag) => (
+														<TagChip key={tag} id={tag} />
+													))}
+												</div>
+											</button>
+										</li>
+									)
+								})}
+							</ul>
+						</div>
+					)}
+				</div>
 			</main>
 		</ThemeProvider>
 	)

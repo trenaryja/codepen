@@ -2,8 +2,16 @@ declare module 'https://esm.sh/@faker-js/faker' {
 	export * from '@faker-js/faker'
 }
 
+declare module 'https://esm.sh/@floating-ui/react' {
+	export * from '@floating-ui/react'
+}
+
 declare module 'https://esm.sh/@mantine/hooks' {
 	export * from '@mantine/hooks'
+}
+
+declare module 'https://esm.sh/@tanstack/react-virtual' {
+	export * from '@tanstack/react-virtual'
 }
 
 declare module 'https://esm.sh/@trenaryja/ui' {

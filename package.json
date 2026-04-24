@@ -14,7 +14,9 @@
 		"penx": "./penx.ts"
 	},
 	"dependencies": {
+		"@floating-ui/react": "^0.27.19",
 		"@mantine/hooks": "^9.1.0",
+		"@tanstack/react-virtual": "^3.13.24",
 		"@trenaryja/ui": "^0.0.1-35",
 		"d3-selection": "^3.0.0",
 		"heic2any": "^0.0.4",

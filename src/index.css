@@ -1,6 +1,67 @@
 @import 'tailwindcss';
 @import '@trenaryja/ui/css';
-@plugin 'daisyui' {
+@plugin '../node_modules/daisyui/index.js' {
 	themes: all;
 }
 @source '../node_modules/@trenaryja/ui';
+
+/*
+ * Scroll-distance-driven overflow fade.
+ *
+ * Differences from @trenaryja/ui's overflow-y-fade (iterating here, will port back):
+ *   1. Fade activates after a fixed scroll *distance* (--fade-threshold), not a
+ *      percentage of total scroll — so very long lists don't need dozens of rows
+ *      before the fade appears.
+ *   2. `mask-clip: padding-box` keeps the border out of the mask.
+ *   3. --fade-start/--fade-end are @property-registered <number>, so they
+ *      interpolate smoothly instead of snapping discretely.
+ */
+@property --fade-start {
+	syntax: '<number>';
+	inherits: false;
+	initial-value: 0;
+}
+@property --fade-end {
+	syntax: '<number>';
+	inherits: false;
+	initial-value: 0;
+}
+
+@utility scroll-fade-y {
+	--fade-size: 2rem;
+	--fade-threshold: 2rem;
+	overflow-y: auto;
+	scroll-timeline: --scroll-fade-y y;
+	animation:
+		scroll-fade-y-start linear both,
+		scroll-fade-y-end linear both;
+	animation-timeline: --scroll-fade-y, --scroll-fade-y;
+	animation-range:
+		0 var(--fade-threshold),
+		calc(100% - var(--fade-threshold)) 100%;
+	mask-image: linear-gradient(
+		to bottom,
+		rgb(0 0 0 / calc(1 - var(--fade-start))) 0%,
+		black var(--fade-size),
+		black calc(100% - var(--fade-size)),
+		rgb(0 0 0 / calc(1 - var(--fade-end))) 100%
+	);
+	mask-clip: padding-box;
+}
+
+@keyframes scroll-fade-y-start {
+	from {
+		--fade-start: 0;
+	}
+	to {
+		--fade-start: 1;
+	}
+}
+@keyframes scroll-fade-y-end {
+	from {
+		--fade-end: 1;
+	}
+	to {
+		--fade-end: 0;
+	}
+}
