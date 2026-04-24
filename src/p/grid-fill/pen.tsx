@@ -345,4 +345,4 @@ const Root = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+if (typeof document !== 'undefined') createRoot(document.getElementById('root')!).render(<Root />)
