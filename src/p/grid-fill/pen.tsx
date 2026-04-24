@@ -1,4 +1,3 @@
-/** biome-ignore-all lint/a11y/noLabelWithoutControl: label wraps its checkbox as a child */
 import { Field, Range, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { useEffect, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -20,7 +19,7 @@ const interpolateColors = (t: number, stops: string[]) => {
 
 type Bin = { x: number; y: number; w: number; h: number; key: string }
 type Recipe = { key: string; counts: Record<string, number>; unique: number; layout: Bin[] }
-type SolveOpts = { W: number; H: number; squaresOnly: boolean }
+type SolveOpts = { W: number; H: number }
 
 const STOPS = [
 	'var(--color-primary)',
@@ -47,7 +46,7 @@ const byFamily = (a: string, b: string) => {
 // per recipe (6×5 had ~200M layout-search nodes → 12K packability nodes).
 const keyOf = (w: number, h: number) => (w <= h ? `${w}×${h}` : `${h}×${w}`)
 
-const solve = ({ W, H, squaresOnly }: SolveOpts) => {
+export const solve = ({ W, H }: SolveOpts) => {
 	const AREA = W * H
 	const FULL = (1 << W) - 1
 
@@ -56,7 +55,6 @@ const solve = ({ W, H, squaresOnly }: SolveOpts) => {
 	for (let w = 1; w <= W; w++)
 		for (let h = 1; h <= H; h++) {
 			if (w === W && h === H) continue
-			if (squaresOnly && w !== h) continue
 			const size = keyOf(w, h)
 			if (seen.has(size)) continue
 			seen.add(size)
@@ -159,8 +157,8 @@ const solve = ({ W, H, squaresOnly }: SolveOpts) => {
 		return parts.join('|')
 	}
 
-	for (let uniqueCount = K; uniqueCount >= 1; uniqueCount--) {
-		const found: Recipe[] = []
+	const found: Recipe[] = []
+	for (let uniqueCount = 1; uniqueCount <= K; uniqueCount++) {
 		for (const counts of enumerateMultisets(uniqueCount)) {
 			const layout = tryPack(counts)
 			if (!layout) continue
@@ -168,9 +166,8 @@ const solve = ({ W, H, squaresOnly }: SolveOpts) => {
 			for (let keyIdx = 0; keyIdx < K; keyIdx++) if (counts[keyIdx] > 0) countsObj[sizeKeys[keyIdx]] = counts[keyIdx]
 			found.push({ key: recipeKeyOf(counts), counts: countsObj, unique: uniqueCount, layout })
 		}
-		if (found.length > 0) return found
 	}
-	return []
+	return found
 }
 
 // Recipe order: fewest pieces first, then lex on family-ordered count vector (ascending, so
@@ -276,14 +273,13 @@ const Plate = ({ W, H, bins }: { W: number; H: number; bins: Bin[] }) => {
 const Root = () => {
 	const [W, setW] = useState(6)
 	const [H, setH] = useState(5)
-	const [squaresOnly, setSquaresOnly] = useState(false)
 	const [recipes, setRecipes] = useState<Recipe[]>([])
 	const [recipeIdx, setRecipeIdx] = useState(0)
 
 	useEffect(() => {
-		setRecipes(sortRecipes(solve({ W, H, squaresOnly })))
+		setRecipes(sortRecipes(solve({ W, H })))
 		setRecipeIdx(0)
-	}, [W, H, squaresOnly])
+	}, [W, H])
 
 	const selectedRecipe = recipes[recipeIdx]
 	const layout = selectedRecipe?.layout ?? []
@@ -299,21 +295,11 @@ const Root = () => {
 
 				<section className='grid grid-cols-2 gap-4 w-full'>
 					<Field label={`Plate width: ${W}`}>
-						<Range min={3} max={8} value={W} onChange={(e) => setW(+e.target.value)} />
+						<Range min={3} max={6} value={W} onChange={(e) => setW(+e.target.value)} />
 					</Field>
 					<Field label={`Plate depth: ${H}`}>
-						<Range min={3} max={8} value={H} onChange={(e) => setH(+e.target.value)} />
+						<Range min={3} max={6} value={H} onChange={(e) => setH(+e.target.value)} />
 					</Field>
-
-					<label className='label cursor-pointer gap-2 text-sm justify-center col-span-full'>
-						<input
-							type='checkbox'
-							className='checkbox checkbox-sm'
-							checked={squaresOnly}
-							onChange={(e) => setSquaresOnly(e.target.checked)}
-						/>
-						<span>Squares only</span>
-					</label>
 				</section>
 
 				<div className='stats stats-horizontal w-full *:place-items-center'>
