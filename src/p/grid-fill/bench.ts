@@ -26,7 +26,8 @@ plugin({
 	},
 })
 
-const { solve, encodeRecipe, decodeRecipe, strToBits, encodeIntegers, decodeIntegers, BASE94, BASE64URL, BASE62 } = await import('./pen')
+const { solve, encodeRecipe, decodeRecipe, strToBits, encodeIntegers, decodeIntegers, BASE94, BASE64URL, BASE62 } =
+	await import('./pen')
 
 // ── Bench harness ────────────────────────────────────────────────────────────
 
@@ -191,8 +192,12 @@ const ALPHABETS = [
 ]
 
 console.log(`\nalphabet comparison — key length distribution across all grids\n`)
-console.log(`  ${'alphabet'.padEnd(20)}  ${'grid'.padEnd(5)}  ${'recipes'.padStart(7)}  ${'min'.padStart(4)}  ${'p50'.padStart(4)}  ${'p90'.padStart(4)}  ${'max'.padStart(4)}`)
-console.log(`  ${'-'.repeat(20)}  ${'-'.repeat(5)}  ${'-'.repeat(7)}  ${'-'.repeat(4)}  ${'-'.repeat(4)}  ${'-'.repeat(4)}  ${'-'.repeat(4)}`)
+console.log(
+	`  ${'alphabet'.padEnd(20)}  ${'grid'.padEnd(5)}  ${'recipes'.padStart(7)}  ${'min'.padStart(4)}  ${'p50'.padStart(4)}  ${'p90'.padStart(4)}  ${'max'.padStart(4)}`,
+)
+console.log(
+	`  ${'-'.repeat(20)}  ${'-'.repeat(5)}  ${'-'.repeat(7)}  ${'-'.repeat(4)}  ${'-'.repeat(4)}  ${'-'.repeat(4)}  ${'-'.repeat(4)}`,
+)
 
 for (const { label, alphabet } of ALPHABETS) {
 	for (const { W, H, recipes } of solved) {

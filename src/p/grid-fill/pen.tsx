@@ -10,6 +10,7 @@ import {
 } from 'https://esm.sh/@floating-ui/react'
 import { useVirtualizer } from 'https://esm.sh/@tanstack/react-virtual'
 import { Field, Range, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { strToU8, zipSync } from 'https://esm.sh/fflate'
 import { parseAsString, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
@@ -76,7 +77,9 @@ export const computeTags = (recipe: Recipe, ctx: TagContext) => {
 	return tags
 }
 
-const computeTagContext = (recipes: Recipe[]): TagContext => ({ maxUnique: Math.max(0, ...recipes.map((r) => r.unique)) })
+const computeTagContext = (recipes: Recipe[]): TagContext => ({
+	maxUnique: Math.max(0, ...recipes.map((r) => r.unique)),
+})
 
 export const matchesFilter = (recipe: Recipe, filters: Filters) => {
 	for (const tag of filters.tags) if (!recipe.tags.includes(tag)) return false
@@ -249,7 +252,8 @@ export const solve = ({ W, H }: SolveOpts) => {
 			const layout = tryPack(counts)
 			if (!layout) continue
 			const countsObj: Record<string, number> = {}
-			for (let keyIndex = 0; keyIndex < K; keyIndex++) if (counts[keyIndex] > 0) countsObj[sizeKeys[keyIndex]] = counts[keyIndex]
+			for (let keyIndex = 0; keyIndex < K; keyIndex++)
+				if (counts[keyIndex] > 0) countsObj[sizeKeys[keyIndex]] = counts[keyIndex]
 			found.push({ key: recipeKeyOf(counts), counts: countsObj, unique: uniqueCount, layout, tags: [] })
 		}
 	}
@@ -279,6 +283,130 @@ const sortRecipes = (recipes: Recipe[]) => {
 		}
 		return sortedA.length - sortedB.length
 	})
+}
+
+// ── 3MF export ───────────────────────────────────────────────────────────────
+
+const GF_PITCH = 42.5 // mm/unit: 42mm nominal + 0.5mm → ~1mm min gap between printed bins
+const PRINT_BED_H = 256 // X1C bed depth mm — anchor plate to back-left, away from exclusion zone
+const PRINT_BED_MARGIN = 5 // mm clearance from bed edge
+
+function parseSTL(buf: ArrayBuffer) {
+	const view = new DataView(buf)
+	const count = view.getUint32(80, true)
+	const vertMap = new Map<string, number>()
+	const verts: number[] = []
+	const tris: number[] = []
+	for (let i = 0; i < count; i++) {
+		const base = 84 + i * 50 + 12
+		const tri: number[] = []
+		for (let j = 0; j < 3; j++) {
+			const x = view.getFloat32(base + j * 12, true)
+			const y = view.getFloat32(base + j * 12 + 4, true)
+			const z = view.getFloat32(base + j * 12 + 8, true)
+			const k = `${x},${y},${z}`
+			let idx = vertMap.get(k)
+			if (idx === undefined) {
+				idx = verts.length / 3
+				vertMap.set(k, idx)
+				verts.push(x, y, z)
+			}
+			tri.push(idx)
+		}
+		tris.push(...tri)
+	}
+	return { verts, tris }
+}
+
+async function build3mf(recipe: Recipe): Promise<Blob> {
+	const uniqueSizes = [...new Set(recipe.layout.map((b) => b.key))]
+	const geoms = new Map<string, { verts: number[]; tris: number[] }>()
+	await Promise.all(
+		uniqueSizes.map(async (key) => {
+			const buf = await fetch(`/gridfinity/bin_${key.replace('×', 'x')}.stl`).then((r) => r.arrayBuffer())
+			geoms.set(key, parseSTL(buf))
+		}),
+	)
+
+	// Single 3dmodel.model with all geometry objects + wrapper objects + build items.
+	// Bins where w<h (portrait in grid) get a 90° rotation so the STL's large axis (X)
+	// maps to bed Y and small axis (Y) maps to bed X.
+	let xml = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+ <resources>\n`
+
+	const sizeId = new Map(uniqueSizes.map((k, i) => [k, i + 1]))
+	for (const [key, { verts, tris }] of geoms) {
+		xml += `  <object id="${sizeId.get(key)}" type="model">\n   <mesh>\n    <vertices>\n`
+		for (let i = 0; i < verts.length; i += 3)
+			xml += `     <vertex x="${verts[i].toFixed(4)}" y="${verts[i + 1].toFixed(4)}" z="${verts[i + 2].toFixed(4)}"/>\n`
+		xml += `    </vertices>\n    <triangles>\n`
+		for (let i = 0; i < tris.length; i += 3)
+			xml += `     <triangle v1="${tris[i]}" v2="${tris[i + 1]}" v3="${tris[i + 2]}"/>\n`
+		xml += `    </triangles>\n   </mesh>\n  </object>\n`
+	}
+
+	const N = uniqueSizes.length
+	for (let i = 0; i < recipe.layout.length; i++) {
+		const bin = recipe.layout[i]
+		// STL files store larger dimension in X. For portrait bins (w<h), rotate 90° CW so
+		// STL-X (large) → bed-Y and STL-Y (small) → bed-X, matching the grid orientation.
+		const rotation = bin.w < bin.h ? '0 1 0 -1 0 0 0 0 1 0 0 0' : '1 0 0 0 1 0 0 0 1 0 0 0'
+		xml += `  <object id="${N + i + 1}" type="model">\n   <components>\n    <component objectid="${sizeId.get(bin.key)}" transform="${rotation}"/>\n   </components>\n  </object>\n`
+	}
+
+	xml += ` </resources>\n <build>\n`
+	for (let i = 0; i < recipe.layout.length; i++) {
+		const bin = recipe.layout[i]
+		const tx = PRINT_BED_MARGIN + bin.x * GF_PITCH + (bin.w * GF_PITCH) / 2
+		const ty = PRINT_BED_H - PRINT_BED_MARGIN - bin.y * GF_PITCH - (bin.h * GF_PITCH) / 2
+		xml += `  <item objectid="${N + i + 1}" transform="1 0 0 0 1 0 0 0 1 ${tx.toFixed(4)} ${ty.toFixed(4)} 0" printable="1"/>\n`
+	}
+	xml += ` </build>\n</model>`
+
+	return new Blob(
+		[
+			zipSync({
+				'[Content_Types].xml': strToU8(
+					`<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n</Types>`,
+				),
+				'_rels/.rels': strToU8(
+					`<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n</Relationships>`,
+				),
+				'3D/3dmodel.model': strToU8(xml),
+			}),
+		],
+		{ type: 'model/3mf' },
+	)
+}
+
+const ExportButton = ({ recipe, W, H }: { recipe: Recipe | null; W: number; H: number }) => {
+	const [busy, setBusy] = useState(false)
+	if (!recipe) return null
+
+	const download = async () => {
+		setBusy(true)
+		await Promise.resolve()
+		try {
+			const blob = await build3mf(recipe)
+			const url = URL.createObjectURL(blob)
+			const a = document.createElement('a')
+			a.href = url
+			a.download = `gridfinity_${W}x${H}.3mf`
+			a.click()
+			URL.revokeObjectURL(url)
+		} catch (err) {
+			console.error('3MF export failed:', err)
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	return (
+		<button type='button' className='btn btn-sm btn-primary w-full' onClick={download} disabled={busy}>
+			{busy ? 'Generating…' : 'Download 3MF'}
+		</button>
+	)
 }
 
 const TagChip = ({
@@ -445,7 +573,13 @@ const FilterMatrixPanel = ({
 	<div className='flex flex-col gap-3'>
 		<div className='flex flex-wrap gap-1.5 justify-center'>
 			{TAG_IDS.map((id) => (
-				<TagChip key={id} id={id} active={filters.tags.has(id)} onToggle={() => onTagToggle(id)} count={tagCounts.get(id) ?? 0} />
+				<TagChip
+					key={id}
+					id={id}
+					active={filters.tags.has(id)}
+					onToggle={() => onTagToggle(id)}
+					count={tagCounts.get(id) ?? 0}
+				/>
 			))}
 		</div>
 		<div className='grid gap-2' style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))' }}>
@@ -714,9 +848,7 @@ const RecipeStats = ({
 		</div>
 		<div className='stat'>
 			<div className='stat-title'>Recipe</div>
-			<div className='stat-value text-2xl'>
-				{selectedRecipe ? `${filteredIndex + 1}/${filteredCount}` : '—'}
-			</div>
+			<div className='stat-value text-2xl'>{selectedRecipe ? `${filteredIndex + 1}/${filteredCount}` : '—'}</div>
 		</div>
 		<div className='stat'>
 			<div className='stat-title'>Pieces</div>
@@ -774,7 +906,9 @@ const RecipeList = ({
 	return (
 		<div className='flex flex-col gap-2'>
 			<div className='flex items-center justify-between text-sm text-base-content/70'>
-				<span>Showing {filteredRecipes.length} of {totalCount} recipes</span>
+				<span>
+					Showing {filteredRecipes.length} of {totalCount} recipes
+				</span>
 				{filtersActive && (
 					<button type='button' className='btn btn-xs btn-ghost' onClick={onClearAll}>
 						Clear all
@@ -814,9 +948,7 @@ const RecipeList = ({
 											</span>
 											<div className='flex flex-wrap items-center gap-2'>
 												{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => {
-													const pinned = filters.constraints.some((c) =>
-														sameConstraint(c, { size, op: '=', n: count }),
-													)
+													const pinned = filters.constraints.some((c) => sameConstraint(c, { size, op: '=', n: count }))
 													return (
 														<button
 															key={size}
@@ -887,7 +1019,10 @@ const Root = () => {
 		if (restoreId) {
 			try {
 				const { counts } = decodeRecipe(restoreId)
-				const targetKey = R.entries(counts).map(([k, v]) => `${k}:${v}`).sort().join('|')
+				const targetKey = R.entries(counts)
+					.map(([k, v]) => `${k}:${v}`)
+					.sort()
+					.join('|')
 				keyToSelect = sorted.find((r) => r.key === targetKey)?.key ?? null
 			} catch {}
 		}
@@ -909,7 +1044,8 @@ const Root = () => {
 	const tagCounts = new Map<TagId, number>(TAG_IDS.map((id) => [id, 0]))
 	for (const recipe of filteredRecipes) for (const tag of recipe.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
 	const filteredSizeCounts = new Map<string, number>()
-	for (const recipe of filteredRecipes) for (const size of R.keys(recipe.counts)) filteredSizeCounts.set(size, (filteredSizeCounts.get(size) ?? 0) + 1)
+	for (const recipe of filteredRecipes)
+		for (const size of R.keys(recipe.counts)) filteredSizeCounts.set(size, (filteredSizeCounts.get(size) ?? 0) + 1)
 
 	// Filter change excluded the selected recipe → drop the selection (empty plate).
 	useEffect(() => {
@@ -938,7 +1074,13 @@ const Root = () => {
 		setFilters((f) => {
 			if (!op) return { ...f, constraints: f.constraints.filter((c) => c.size !== size) }
 			const existing = f.constraints.find((c) => c.size === size)
-			if (existing) return { ...f, constraints: f.constraints.map((c) => (c.size === size ? { ...c, op, n: op === 'exclude' ? 0 : Math.max(1, c.n) } : c)) }
+			if (existing)
+				return {
+					...f,
+					constraints: f.constraints.map((c) =>
+						c.size === size ? { ...c, op, n: op === 'exclude' ? 0 : Math.max(1, c.n) } : c,
+					),
+				}
 			return { ...f, constraints: dedupeConstraints([...f.constraints, { size, op, n: op === 'exclude' ? 0 : 1 }]) }
 		})
 
@@ -958,8 +1100,14 @@ const Root = () => {
 						<DimensionSliders
 							W={W}
 							H={H}
-							onChangeW={(v) => { setW(v); setCompactId(null) }}
-							onChangeH={(v) => { setH(v); setCompactId(null) }}
+							onChangeW={(v) => {
+								setW(v)
+								setCompactId(null)
+							}}
+							onChangeH={(v) => {
+								setH(v)
+								setCompactId(null)
+							}}
 						/>
 						<RecipeStats
 							selectedRecipe={selectedRecipe}
@@ -968,6 +1116,7 @@ const Root = () => {
 							totalPieces={totalPieces}
 						/>
 						<Plate W={W} H={H} bins={layout} />
+						<ExportButton recipe={selectedRecipe} W={W} H={H} />
 					</div>
 
 					<div className='flex flex-col gap-4 flex-1 min-w-72'>
@@ -990,7 +1139,10 @@ const Root = () => {
 							totalCount={recipes.length}
 							selectedKey={selectedKey}
 							filteredIndex={filteredIndex}
-							onSelect={(key, encoded) => { setSelectedKey(key); setCompactId(encoded) }}
+							onSelect={(key, encoded) => {
+								setSelectedKey(key)
+								setCompactId(encoded)
+							}}
 							filtersActive={filtersActive}
 							onClearAll={clearAll}
 							filters={filters}

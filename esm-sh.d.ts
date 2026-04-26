@@ -31,6 +31,10 @@ declare module 'https://esm.sh/d3-selection' {
 	export * from 'd3-selection'
 }
 
+declare module 'https://esm.sh/fflate' {
+	export * from 'fflate'
+}
+
 declare module 'https://esm.sh/heic2any' {
 	export * from 'heic2any'
 	export { default } from 'heic2any'
