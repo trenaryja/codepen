@@ -93,7 +93,7 @@ const escapeHtml = (s: string) =>
 	s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 function esmShToNpm(url: string): string {
-	const spec = url.slice('https://esm.sh/'.length)
+	const spec = url.slice('https://esm.sh/'.length).replace(/\?.*$/, '')
 
 	if (spec.startsWith('@')) {
 		const [scope, nameAndVersion, ...rest] = spec.split('/')
@@ -131,7 +131,9 @@ function syncEsmDeclarations(importUrls: string[]): void {
 	const current = readFileSync(dtsPath, 'utf-8')
 	const blocks = new Map<string, string>()
 
-	for (const m of current.matchAll(/declare module '(https:\/\/esm\.sh\/(?!\*)[^']+)'(?:\s*\{[\s\S]*?\})?/g)) {
+	for (const m of current.matchAll(
+		/declare module '(https:\/\/esm\.sh\/(?!\*)[^']+)'(?:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})?/g,
+	)) {
 		blocks.set(m[1], m[0])
 	}
 

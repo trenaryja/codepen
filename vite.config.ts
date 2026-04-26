@@ -71,7 +71,7 @@ ${fragment}
 }
 
 function esmShToNpm(url: string): string {
-	const spec = url.slice('https://esm.sh/'.length)
+	const spec = url.slice('https://esm.sh/'.length).replace(/\?.*$/, '')
 
 	if (spec.startsWith('@')) {
 		const [scope, nameAndVersion, ...rest] = spec.split('/')
