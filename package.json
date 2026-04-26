@@ -22,6 +22,7 @@
 		"heic2any": "^0.0.4",
 		"honeycomb-grid": "4.1.5",
 		"mapbox-gl": "^3.22.0",
+		"nuqs": "^2.8.9",
 		"qrcode": "^1.5.4",
 		"react": "^19.2.5",
 		"react-advanced-cropper": "^0.20.1",

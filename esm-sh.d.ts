@@ -45,6 +45,14 @@ declare module 'https://esm.sh/mapbox-gl' {
 	export { default } from 'mapbox-gl'
 }
 
+declare module 'https://esm.sh/nuqs' {
+	export * from 'nuqs'
+}
+
+declare module 'https://esm.sh/nuqs/adapters/react' {
+	export * from 'nuqs/adapters/react'
+}
+
 declare module 'https://esm.sh/qrcode' {
 	export * from 'qrcode'
 }
