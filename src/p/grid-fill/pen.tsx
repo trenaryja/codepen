@@ -4,14 +4,14 @@ import {
 	flip,
 	offset,
 	shift,
-	useClick,
-	useDismiss,
 	useFloating,
 	useHover,
 	useInteractions,
 } from 'https://esm.sh/@floating-ui/react'
 import { useVirtualizer } from 'https://esm.sh/@tanstack/react-virtual'
 import { Field, Range, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { parseAsString, useQueryState } from 'https://esm.sh/nuqs'
+import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import * as R from 'https://esm.sh/remeda'
@@ -21,13 +21,10 @@ const colorMix = (from: string, to: string, ratio: number) =>
 	`color-mix(in oklab, ${from} ${R.clamp(ratio, { min: 0, max: 100 })}%, ${to})`
 const interpolateColors = (t: number, stops: string[]) => {
 	if (stops.length === 1) return stops[0]
-	const lastIdx = stops.length - 1
-	const segment = Math.min(Math.floor(R.clamp(t, { min: 0, max: 1 }) * lastIdx), lastIdx - 1)
-	return colorMix(
-		stops[segment],
-		stops[segment + 1],
-		Math.round((1 - (R.clamp(t, { min: 0, max: 1 }) * lastIdx - segment)) * 100),
-	)
+	const lastIndex = stops.length - 1
+	const scaled = R.clamp(t, { min: 0, max: 1 }) * lastIndex
+	const segment = Math.min(Math.floor(scaled), lastIndex - 1)
+	return colorMix(stops[segment], stops[segment + 1], Math.round((1 - (scaled - segment)) * 100))
 }
 
 type Bin = { x: number; y: number; w: number; h: number; key: string }
@@ -69,7 +66,7 @@ const isSquareKey = (size: string) => {
 	return w === h
 }
 
-export const computeTags = (recipe: Recipe, ctx: TagContext): TagId[] => {
+export const computeTags = (recipe: Recipe, ctx: TagContext) => {
 	const tags: TagId[] = []
 	if (recipe.unique === ctx.maxUnique) tags.push('max-unique')
 	if (recipe.unique === 1) tags.push('monochrome')
@@ -79,13 +76,9 @@ export const computeTags = (recipe: Recipe, ctx: TagContext): TagId[] => {
 	return tags
 }
 
-const computeTagContext = (recipes: Recipe[]): TagContext => {
-	let maxUnique = 0
-	for (const recipe of recipes) if (recipe.unique > maxUnique) maxUnique = recipe.unique
-	return { maxUnique }
-}
+const computeTagContext = (recipes: Recipe[]): TagContext => ({ maxUnique: Math.max(0, ...recipes.map((r) => r.unique)) })
 
-export const matchesFilter = (recipe: Recipe, filters: Filters): boolean => {
+export const matchesFilter = (recipe: Recipe, filters: Filters) => {
 	for (const tag of filters.tags) if (!recipe.tags.includes(tag)) return false
 	for (const c of filters.constraints) {
 		const count = recipe.counts[c.size] ?? 0
@@ -97,19 +90,10 @@ export const matchesFilter = (recipe: Recipe, filters: Filters): boolean => {
 }
 
 const OP_SYMBOL: Record<Constraint['op'], string> = { '=': '=', '>=': '≥', exclude: '✕' }
-const formatConstraint = (c: Constraint) =>
-	c.op === 'exclude' ? `${c.size} excluded` : `${c.size} ${OP_SYMBOL[c.op]} ${c.n}`
+
 const constraintKey = (c: Constraint) => `${c.size}|${c.op}|${c.n}`
 const sameConstraint = (a: Constraint, b: Constraint) => constraintKey(a) === constraintKey(b)
-const dedupeConstraints = (cs: Constraint[]) => {
-	const seen = new Set<string>()
-	return cs.filter((c) => {
-		const k = constraintKey(c)
-		if (seen.has(k)) return false
-		seen.add(k)
-		return true
-	})
-}
+const dedupeConstraints = (cs: Constraint[]) => R.uniqueBy(cs, constraintKey)
 
 const STOPS = [
 	'var(--color-primary)',
@@ -125,15 +109,10 @@ const STOPS = [
 const byFamily = (a: string, b: string) => {
 	const [widthA, heightA] = a.split('×').map(Number)
 	const [widthB, heightB] = b.split('×').map(Number)
-	const [minA, maxA] = widthA <= heightA ? [widthA, heightA] : [heightA, widthA]
-	const [minB, maxB] = widthB <= heightB ? [widthB, heightB] : [heightB, widthB]
-	return minA - minB || maxA - maxB
+	return Math.min(widthA, heightA) - Math.min(widthB, heightB) || Math.max(widthA, heightA) - Math.max(widthB, heightB)
 }
 
-// Direct recipe enumeration: generate multisets of pieces (integer compositions of the grid
-// area with a target number of distinct parts), verify packability via a bitmask-grid DFS
-// that bails at the first valid packing. Sidesteps the combinatorial explosion of layouts
-// per recipe (6×5 had ~200M layout-search nodes → 12K packability nodes).
+// Enumerate piece multisets; bitmask DFS verifies each is packable (6×5: ~200M layout-search nodes → 12K).
 const keyOf = (w: number, h: number) => (w <= h ? `${w}×${h}` : `${h}×${w}`)
 
 const availableSizes = (W: number, H: number) => {
@@ -150,8 +129,8 @@ const availableSizes = (W: number, H: number) => {
 }
 
 const maxCountFor = (size: string, W: number, H: number) => {
-	const [a, b] = size.split('×').map(Number)
-	return Math.floor((W * H) / (a * b))
+	const [w, h] = size.split('×').map(Number)
+	return Math.floor((W * H) / (w * h))
 }
 
 export const solve = ({ W, H }: SolveOpts) => {
@@ -175,9 +154,9 @@ export const solve = ({ W, H }: SolveOpts) => {
 	const K = sizeKeys.length
 	const keyArea = new Int32Array(K)
 	const keyDimensions: number[][][] = []
-	for (let keyIdx = 0; keyIdx < K; keyIdx++) {
-		const [w, h] = sizeKeys[keyIdx].split('×').map(Number)
-		keyArea[keyIdx] = w * h
+	for (let keyIndex = 0; keyIndex < K; keyIndex++) {
+		const [w, h] = sizeKeys[keyIndex].split('×').map(Number)
+		keyArea[keyIndex] = w * h
 		const dimensions =
 			w === h
 				? [[w, h]]
@@ -203,13 +182,13 @@ export const solve = ({ W, H }: SolveOpts) => {
 		const recurse = (): boolean => {
 			const cell = firstEmpty()
 			if (!cell) {
-				for (let keyIdx = 0; keyIdx < K; keyIdx++) if (counts[keyIdx] !== 0) return false
+				for (let keyIndex = 0; keyIndex < K; keyIndex++) if (counts[keyIndex] !== 0) return false
 				return true
 			}
 			const [x, y] = cell
-			for (let keyIdx = 0; keyIdx < K; keyIdx++) {
-				if (counts[keyIdx] <= 0) continue
-				const dimensions = keyDimensions[keyIdx]
+			for (let keyIndex = 0; keyIndex < K; keyIndex++) {
+				if (counts[keyIndex] <= 0) continue
+				const dimensions = keyDimensions[keyIndex]
 				for (let i = 0; i < dimensions.length; i++) {
 					const [w, h] = dimensions[i]
 					if (x + w > W || y + h > H) continue
@@ -222,11 +201,11 @@ export const solve = ({ W, H }: SolveOpts) => {
 						}
 					if (!fits) continue
 					for (let dy = 0; dy < h; dy++) rows[y + dy] |= mask
-					counts[keyIdx]--
-					layout.push({ x, y, w, h, key: sizeKeys[keyIdx] })
+					counts[keyIndex]--
+					layout.push({ x, y, w, h, key: sizeKeys[keyIndex] })
 					if (recurse()) return true
 					layout.pop()
-					counts[keyIdx]++
+					counts[keyIndex]++
 					for (let dy = 0; dy < h; dy++) rows[y + dy] &= ~mask
 				}
 			}
@@ -237,29 +216,29 @@ export const solve = ({ W, H }: SolveOpts) => {
 
 	function* enumerateMultisets(uniqueTarget: number): Generator<Int8Array> {
 		const counts = new Int8Array(K)
-		function* emit(keyIdx: number, remArea: number, remUnique: number): Generator<Int8Array> {
+		function* emit(keyIndex: number, remArea: number, remUnique: number): Generator<Int8Array> {
 			if (remUnique === 0) {
 				if (remArea === 0) yield Int8Array.from(counts)
 				return
 			}
-			if (keyIdx >= K) return
-			if (K - keyIdx < remUnique) return
-			yield* emit(keyIdx + 1, remArea, remUnique)
-			const area = keyArea[keyIdx]
+			if (keyIndex >= K) return
+			if (K - keyIndex < remUnique) return
+			yield* emit(keyIndex + 1, remArea, remUnique)
+			const area = keyArea[keyIndex]
 			const maxCount = Math.floor(remArea / area)
 			for (let count = 1; count <= maxCount; count++) {
-				counts[keyIdx] = count
-				yield* emit(keyIdx + 1, remArea - count * area, remUnique - 1)
+				counts[keyIndex] = count
+				yield* emit(keyIndex + 1, remArea - count * area, remUnique - 1)
 			}
-			counts[keyIdx] = 0
+			counts[keyIndex] = 0
 		}
 		yield* emit(0, AREA, uniqueTarget)
 	}
 
 	const recipeKeyOf = (counts: Int8Array) => {
 		const parts: string[] = []
-		for (let keyIdx = 0; keyIdx < K; keyIdx++)
-			if (counts[keyIdx] > 0) parts.push(`${sizeKeys[keyIdx]}:${counts[keyIdx]}`)
+		for (let keyIndex = 0; keyIndex < K; keyIndex++)
+			if (counts[keyIndex] > 0) parts.push(`${sizeKeys[keyIndex]}:${counts[keyIndex]}`)
 		parts.sort()
 		return parts.join('|')
 	}
@@ -270,7 +249,7 @@ export const solve = ({ W, H }: SolveOpts) => {
 			const layout = tryPack(counts)
 			if (!layout) continue
 			const countsObj: Record<string, number> = {}
-			for (let keyIdx = 0; keyIdx < K; keyIdx++) if (counts[keyIdx] > 0) countsObj[sizeKeys[keyIdx]] = counts[keyIdx]
+			for (let keyIndex = 0; keyIndex < K; keyIndex++) if (counts[keyIndex] > 0) countsObj[sizeKeys[keyIndex]] = counts[keyIndex]
 			found.push({ key: recipeKeyOf(counts), counts: countsObj, unique: uniqueCount, layout, tags: [] })
 		}
 	}
@@ -279,8 +258,7 @@ export const solve = ({ W, H }: SolveOpts) => {
 	return found
 }
 
-// Recipe order: fewest unique sizes first; within ties, lex on the family-ordered (size, count)
-// sequence — smallest piece type leads, then count of that piece, then next piece, …
+// Fewest unique first; ties broken by (size, count) in family order.
 const sortRecipes = (recipes: Recipe[]) => {
 	const allKeys = R.pipe(
 		recipes,
@@ -288,18 +266,18 @@ const sortRecipes = (recipes: Recipe[]) => {
 		R.unique(),
 		R.sort(byFamily),
 	)
-	const familyIdx = R.fromEntries(allKeys.map((k, i) => [k, i] as const))
-	const seq = (r: Recipe) => R.sortBy(R.entries(r.counts), ([s]) => familyIdx[s])
+	const familyOrder = R.fromEntries(allKeys.map((k, i) => [k, i] as const))
+	const sortedEntries = (r: Recipe) => R.sortBy(R.entries(r.counts), ([s]) => familyOrder[s])
 	return R.sort(recipes, (a, b) => {
 		if (a.unique !== b.unique) return a.unique - b.unique
-		const sa = seq(a),
-			sb = seq(b)
-		for (let i = 0; i < sa.length && i < sb.length; i++) {
-			const di = familyIdx[sa[i][0]] - familyIdx[sb[i][0]]
-			if (di) return di
-			if (sa[i][1] !== sb[i][1]) return sa[i][1] - sb[i][1]
+		const sortedA = sortedEntries(a),
+			sortedB = sortedEntries(b)
+		for (let i = 0; i < sortedA.length && i < sortedB.length; i++) {
+			const diff = familyOrder[sortedA[i][0]] - familyOrder[sortedB[i][0]]
+			if (diff) return diff
+			if (sortedA[i][1] !== sortedB[i][1]) return sortedA[i][1] - sortedB[i][1]
 		}
-		return sa.length - sb.length
+		return sortedA.length - sortedB.length
 	})
 }
 
@@ -371,29 +349,6 @@ const TagChip = ({
 	)
 }
 
-const OPS: Constraint['op'][] = ['=', '>=', 'exclude']
-
-const OperatorSelector = ({
-	value,
-	onChange,
-}: {
-	value: Constraint['op']
-	onChange: (op: Constraint['op']) => void
-}) => (
-	<div className='join'>
-		{OPS.map((op) => (
-			<button
-				key={op}
-				type='button'
-				className={`btn btn-xs join-item ${value === op ? 'btn-primary' : 'btn-ghost'}`}
-				onClick={() => onChange(op)}
-			>
-				{OP_SYMBOL[op]}
-			</button>
-		))}
-	</div>
-)
-
 const CountStepper = ({ value, max, onChange }: { value: number; max: number; onChange: (n: number) => void }) => (
 	<div className='join'>
 		<button
@@ -416,123 +371,105 @@ const CountStepper = ({ value, max, onChange }: { value: number; max: number; on
 	</div>
 )
 
-const ConstraintChip = ({
-	constraint,
-	maxCount,
-	onUpdate,
-	onRemove,
-}: {
-	constraint: Constraint
-	maxCount: number
-	onUpdate: (updates: Partial<Constraint>) => void
-	onRemove: () => void
-}) => {
-	const [open, setOpen] = useState(false)
-	const { refs, floatingStyles, context } = useFloating({
-		open,
-		onOpenChange: setOpen,
-		placement: 'bottom-start',
-		middleware: [offset(6), flip(), shift({ padding: 8 })],
-		whileElementsMounted: autoUpdate,
-	})
-	const click = useClick(context)
-	const dismiss = useDismiss(context)
-	const { getReferenceProps, getFloatingProps } = useInteractions([click, dismiss])
-	return (
-		<span className='badge badge-sm badge-primary gap-1 pr-1'>
-			<button ref={refs.setReference} type='button' {...getReferenceProps()} className='cursor-pointer tabular-nums'>
-				{formatConstraint(constraint)}
-			</button>
-			<button
-				type='button'
-				onClick={onRemove}
-				aria-label={`remove ${formatConstraint(constraint)}`}
-				className='cursor-pointer opacity-70 hover:opacity-100 leading-none px-1'
-			>
-				×
-			</button>
-			{open && (
-				<FloatingPortal>
-					<div
-						ref={refs.setFloating}
-						style={floatingStyles}
-						{...getFloatingProps()}
-						className='bg-base-200 border border-current/10 rounded-box p-2 shadow-lg z-50 flex items-center gap-2'
-					>
-						<OperatorSelector
-							value={constraint.op}
-							onChange={(op) => onUpdate({ op, n: op === 'exclude' ? constraint.n : Math.max(1, constraint.n) })}
-						/>
-						{constraint.op !== 'exclude' && (
-							<CountStepper value={constraint.n} max={maxCount} onChange={(n) => onUpdate({ n })} />
-						)}
-					</div>
-				</FloatingPortal>
-			)}
-		</span>
-	)
-}
+// ── FilterMatrix ──────────────────────────────────────────────────────────────
 
-const ConstraintPicker = ({
-	sizes,
+const SizeCell = ({
+	size,
+	constraint,
+	filteredCount,
+	onSetOp,
+	onUpdateN,
 	W,
 	H,
-	onAdd,
 }: {
-	sizes: string[]
+	size: string
+	constraint: Constraint | null
+	filteredCount: number
+	onSetOp: (op: Constraint['op'] | null) => void
+	onUpdateN: (n: number) => void
 	W: number
 	H: number
-	onAdd: (c: Constraint) => void
 }) => {
-	const [size, setSize] = useState(sizes[0])
-	const [op, setOp] = useState<Constraint['op']>('=')
-	const [n, setN] = useState(1)
-
-	// Plate changed → current size may no longer fit; snap to the first valid size.
-	useEffect(() => {
-		if (!sizes.includes(size)) {
-			setSize(sizes[0])
-			setN(1)
-		}
-	}, [sizes, size])
-
-	const max = maxCountFor(size, W, H)
-	const clamped = Math.min(n, Math.max(1, max))
-
+	const impossible = filteredCount === 0 && !constraint
 	return (
-		<div className='flex items-center gap-1'>
-			<select
-				className='select select-xs w-20'
-				value={size}
-				onChange={(e) => {
-					setSize(e.target.value)
-					setN(1)
-				}}
-			>
-				{sizes.map((s) => (
-					<option key={s} value={s}>
-						{s}
-					</option>
+		<div
+			className={`flex flex-col items-center gap-1.5 p-2 rounded-btn border text-center transition-opacity ${
+				impossible
+					? 'opacity-30 pointer-events-none border-base-300 bg-base-100'
+					: constraint
+						? 'border-primary bg-primary/10'
+						: 'border-base-300 bg-base-100 hover:bg-base-200'
+			}`}
+		>
+			<span className='text-xs font-mono font-semibold'>{size}</span>
+			<div className='join'>
+				{(['=', '>=', 'exclude'] as const).map((op) => (
+					<button
+						key={op}
+						type='button'
+						className={`btn btn-xs join-item px-1.5 ${constraint?.op === op ? 'btn-primary' : 'btn-ghost'}`}
+						onClick={() => onSetOp(constraint?.op === op ? null : op)}
+					>
+						{OP_SYMBOL[op]}
+					</button>
 				))}
-			</select>
-			<OperatorSelector value={op} onChange={setOp} />
-			{op !== 'exclude' && <CountStepper value={clamped} max={max} onChange={setN} />}
-			<button
-				type='button'
-				className='btn btn-xs btn-primary'
-				onClick={() => onAdd({ size, op, n: op === 'exclude' ? 0 : clamped })}
-			>
-				add
-			</button>
+			</div>
+			<div className={constraint && constraint.op !== 'exclude' ? '' : 'invisible'}>
+				<CountStepper value={constraint?.n ?? 1} max={maxCountFor(size, W, H)} onChange={onUpdateN} />
+			</div>
 		</div>
 	)
 }
 
+const FilterMatrixPanel = ({
+	sizes,
+	filters,
+	W,
+	H,
+	onTagToggle,
+	onSetSizeOp,
+	onUpdateSizeN,
+	tagCounts,
+	filteredSizeCounts,
+}: {
+	sizes: string[]
+	filters: Filters
+	W: number
+	H: number
+	onTagToggle: (id: TagId) => void
+	onSetSizeOp: (size: string, op: Constraint['op'] | null) => void
+	onUpdateSizeN: (size: string, n: number) => void
+	tagCounts: Map<TagId, number>
+	filteredSizeCounts: Map<string, number>
+}) => (
+	<div className='flex flex-col gap-3'>
+		<div className='flex flex-wrap gap-1.5 justify-center'>
+			{TAG_IDS.map((id) => (
+				<TagChip key={id} id={id} active={filters.tags.has(id)} onToggle={() => onTagToggle(id)} count={tagCounts.get(id) ?? 0} />
+			))}
+		</div>
+		<div className='grid gap-2' style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))' }}>
+			{sizes.map((size) => (
+				<SizeCell
+					key={size}
+					size={size}
+					constraint={filters.constraints.find((c) => c.size === size) ?? null}
+					filteredCount={filteredSizeCounts.get(size) ?? 0}
+					onSetOp={(op) => onSetSizeOp(size, op)}
+					onUpdateN={(n) => onUpdateSizeN(size, n)}
+					W={W}
+					H={H}
+				/>
+			))}
+		</div>
+	</div>
+)
+
 const Plate = ({ W, H, bins }: { W: number; H: number; bins: Bin[] }) => {
-	const pad = 20,
+	const padding = 20,
 		viewBoxWidth = 600,
 		viewBoxHeight = 500
-	const cell = Math.min((viewBoxWidth - 2 * pad) / W, (viewBoxHeight - 2 * pad) / H)
+	const cell = Math.min((viewBoxWidth - 2 * padding) / W, (viewBoxHeight - 2 * padding) / H)
 	const gridW = cell * W,
 		gridH = cell * H
 	const originX = (viewBoxWidth - gridW) / 2,
@@ -614,40 +551,205 @@ const Plate = ({ W, H, bins }: { W: number; H: number; bins: Bin[] }) => {
 
 const emptyFilters = (): Filters => ({ tags: new Set(), constraints: [] })
 
-const Root = () => {
-	const [W, setW] = useState(6)
-	const [H, setH] = useState(5)
-	const [recipes, setRecipes] = useState<Recipe[]>([])
-	const [selectedKey, setSelectedKey] = useState<string | null>(null)
-	const [filters, setFilters] = useState<Filters>(emptyFilters)
+// ── Generic integer codec — TODO: move to @trenaryja/ui/utils ─────────────────
+// Layers: alphabet/BigInt (bitsToStr/strToBits) → Elias gamma (encodeIntegers/decodeIntegers) → triangular pairs (triIdx/triInv).
 
-	useEffect(() => {
-		const sorted = sortRecipes(solve({ W, H }))
-		setRecipes(sorted)
-		setSelectedKey(sorted[0]?.key ?? null)
-		const valid = new Set(availableSizes(W, H))
-		setFilters((f) => ({ tags: f.tags, constraints: f.constraints.filter((c) => valid.has(c.size)) }))
-	}, [W, H])
+/** Full printable ASCII minus space — 94 chars, most compact for typeable strings. */
+export const BASE94 = Array.from({ length: 94 }, (_, i) => String.fromCharCode(i + 33)).join('')
+/** URL-safe base-64 (no padding) — all chars pass unescaped in query strings. */
+export const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+/** Alphanumeric — safe in filenames, HTML ids, and case-sensitive contexts. */
+export const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
 
-	const plateSizes = availableSizes(W, H)
+// TODO: move to @trenaryja/ui/utils
+export const bitsToStr = (bits: boolean[], alphabet = BASE94) => {
+	const base = BigInt(alphabet.length)
+	let n = 1n
+	for (const bit of bits) n = (n << 1n) | (bit ? 1n : 0n)
+	let result = ''
+	while (n > 0n) {
+		result = alphabet[Number(n % base)] + result
+		n /= base
+	}
+	return result
+}
 
-	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters))
-	const filteredIdx = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
-	const selectedRecipe = filteredIdx >= 0 ? filteredRecipes[filteredIdx] : null
-	const layout = selectedRecipe?.layout ?? []
-	const totalPieces = selectedRecipe ? R.sum(R.values(selectedRecipe.counts)) : 0
-	const filtersActive = filters.tags.size > 0 || filters.constraints.length > 0
+// TODO: move to @trenaryja/ui/utils
+export const strToBits = (str: string, alphabet = BASE94) => {
+	const lookup = new Map(alphabet.split('').map((ch, i) => [ch, i]))
+	const base = BigInt(alphabet.length)
+	let n = 0n
+	for (const ch of str) n = n * base + BigInt(lookup.get(ch)!)
+	return [...n.toString(2).slice(1)].map((ch) => ch === '1')
+}
 
-	// How many recipes in the current filtered list carry each tag — drives
-	// per-chip count badges and disables inactive chips that would yield zero.
-	const tagCounts = new Map<TagId, number>(TAG_IDS.map((id) => [id, 0]))
-	for (const recipe of filteredRecipes) for (const tag of recipe.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+// Elias gamma: encode n ≥ 1 as ⌊log₂n⌋ leading zeros then n in binary — self-delimiting.
+const egPush = (n: number, bits: boolean[]) => {
+	const bin = n.toString(2)
+	for (let i = 1; i < bin.length; i++) bits.push(false)
+	for (const ch of bin) bits.push(ch === '1')
+}
+const egPop = (bits: boolean[], pos: number): [number, number] => {
+	let k = 0
+	while (pos + k < bits.length && !bits[pos + k]) k++
+	let n = 0
+	for (let i = 0; i <= k; i++) n = (n << 1) | (bits[pos + k + i] ? 1 : 0)
+	return [n, pos + 2 * k + 1]
+}
 
-	// Filter change excluded the selected recipe → drop the selection (empty plate).
-	useEffect(() => {
-		if (selectedKey && filteredIdx === -1) setSelectedKey(null)
-	}, [selectedKey, filteredIdx])
+// TODO: move to @trenaryja/ui/utils
+export const encodeIntegers = (values: number[], alphabet = BASE94): string => {
+	const bits: boolean[] = []
+	for (const v of values) egPush(v, bits)
+	return bitsToStr(bits, alphabet)
+}
 
+// TODO: move to @trenaryja/ui/utils
+export const decodeIntegers = (str: string, alphabet = BASE94): number[] => {
+	const bits = strToBits(str, alphabet)
+	const values: number[] = []
+	let pos = 0
+	while (pos < bits.length) {
+		const [v, next] = egPop(bits, pos)
+		values.push(v)
+		pos = next
+	}
+	return values
+}
+
+// TODO: move to @trenaryja/ui/utils
+export const triIdx = (a: number, b: number) => ((b - 1) * b) / 2 + (a - 1) // a ≤ b
+
+// TODO: move to @trenaryja/ui/utils
+export const triInv = (index: number): [number, number] => {
+	const b = Math.floor((1 + Math.sqrt(1 + 8 * index)) / 2)
+	return [index - ((b - 1) * b) / 2 + 1, b]
+}
+
+// ── Recipe codec ── [W, H, N, idx₁+1, c₁, gap₂, c₂, …, gapₙ]; last count inferred from area.
+
+export const encodeRecipe = (counts: Record<string, number>, W: number, H: number) => {
+	const pieces = R.entries(counts)
+		.map(([key, count]) => {
+			const [w, h] = key.split('×').map(Number)
+			return { w, h, count }
+		})
+		.sort((a, b) => triIdx(a.w, a.h) - triIdx(b.w, b.h))
+
+	const values = [W, H, pieces.length]
+	let prevIndex = 0
+	for (let i = 0; i < pieces.length; i++) {
+		const { w, h, count } = pieces[i]
+		const pairIndex = triIdx(w, h)
+		values.push(i === 0 ? pairIndex + 1 : pairIndex - prevIndex)
+		if (i < pieces.length - 1) values.push(count)
+		prevIndex = pairIndex
+	}
+
+	return encodeIntegers(values, BASE62)
+}
+
+export const decodeRecipe = (encoded: string) => {
+	const values = decodeIntegers(encoded, BASE62)
+	let pos = 0
+	const read = () => values[pos++]
+
+	const W = read()
+	const H = read()
+	const N = read()
+	let remaining = W * H
+	const counts: Record<string, number> = {}
+	let prevIndex = 0
+
+	for (let i = 0; i < N; i++) {
+		const raw = read()
+		const pairIndex = i === 0 ? raw - 1 : prevIndex + raw
+		const [w, h] = triInv(pairIndex)
+		const area = w * h
+		const count = i === N - 1 ? Math.floor(remaining / area) : read()
+		counts[`${w}×${h}`] = count
+		remaining -= count * area
+		prevIndex = pairIndex
+	}
+
+	return { W, H, counts }
+}
+
+const DimensionSliders = ({
+	W,
+	H,
+	onChangeW,
+	onChangeH,
+}: {
+	W: number
+	H: number
+	onChangeW: (v: number) => void
+	onChangeH: (v: number) => void
+}) => (
+	<section className='grid grid-cols-2 gap-4'>
+		<Field label={`Plate width: ${W}`}>
+			<Range min={2} max={6} value={W} onChange={(e) => onChangeW(+e.target.value)} />
+		</Field>
+		<Field label={`Plate depth: ${H}`}>
+			<Range min={2} max={6} value={H} onChange={(e) => onChangeH(+e.target.value)} />
+		</Field>
+	</section>
+)
+
+const RecipeStats = ({
+	selectedRecipe,
+	filteredIndex,
+	filteredCount,
+	totalPieces,
+}: {
+	selectedRecipe: Recipe | null
+	filteredIndex: number
+	filteredCount: number
+	totalPieces: number
+}) => (
+	<div className='stats stats-horizontal w-full *:place-items-center'>
+		<div className='stat'>
+			<div className='stat-title'>Unique sizes</div>
+			<div className='stat-value text-2xl'>{selectedRecipe?.unique ?? '—'}</div>
+		</div>
+		<div className='stat'>
+			<div className='stat-title'>Recipe</div>
+			<div className='stat-value text-2xl'>
+				{selectedRecipe ? `${filteredIndex + 1}/${filteredCount}` : '—'}
+			</div>
+		</div>
+		<div className='stat'>
+			<div className='stat-title'>Pieces</div>
+			<div className='stat-value text-2xl'>{selectedRecipe ? totalPieces : '—'}</div>
+		</div>
+	</div>
+)
+
+const RecipeList = ({
+	filteredRecipes,
+	totalCount,
+	selectedKey,
+	filteredIndex,
+	onSelect,
+	filtersActive,
+	onClearAll,
+	filters,
+	onToggleSizeConstraint,
+	W,
+	H,
+}: {
+	filteredRecipes: Recipe[]
+	totalCount: number
+	selectedKey: string | null
+	filteredIndex: number
+	onSelect: (key: string, encoded: string) => void
+	filtersActive: boolean
+	onClearAll: () => void
+	filters: Filters
+	onToggleSizeConstraint: (size: string, n: number) => void
+	W: number
+	H: number
+}) => {
 	const scrollerRef = useRef<HTMLDivElement>(null)
 	// Rows are uniform menu-sm height (36px). Fixed estimate + no measureElement keeps
 	// getTotalSize() stable so dragging the scrollbar tracks the cursor — measureElement
@@ -664,11 +766,155 @@ const Root = () => {
 		scrollerRef.current?.scrollTo(0, 0)
 	}, [W, H, filters])
 
-	// Selected row position changed → keep it visible. Phases 7+ (keyboard nav,
-	// layout carousel) will flip the selection externally and rely on this.
+	// Selected row position changed → keep it visible.
 	useEffect(() => {
-		if (filteredIdx >= 0) rowVirtualizer.scrollToIndex(filteredIdx, { align: 'auto' })
-	}, [filteredIdx, rowVirtualizer])
+		if (filteredIndex >= 0) rowVirtualizer.scrollToIndex(filteredIndex, { align: 'auto' })
+	}, [filteredIndex, rowVirtualizer])
+
+	return (
+		<div className='flex flex-col gap-2'>
+			<div className='flex items-center justify-between text-sm text-base-content/70'>
+				<span>Showing {filteredRecipes.length} of {totalCount} recipes</span>
+				{filtersActive && (
+					<button type='button' className='btn btn-xs btn-ghost' onClick={onClearAll}>
+						Clear all
+					</button>
+				)}
+			</div>
+			<div className='h-[60vh] rounded-box border border-current/10 overflow-hidden'>
+				{filteredRecipes.length === 0 ? (
+					<div className='size-full flex flex-col items-center justify-center gap-3 text-sm text-base-content/70'>
+						<span>No matching recipes.</span>
+						<button type='button' className='btn btn-sm' onClick={onClearAll}>
+							Clear all filters
+						</button>
+					</div>
+				) : (
+					<div ref={scrollerRef} className='size-full scroll-fade-y'>
+						<ul
+							className='menu menu-sm flex-nowrap p-0 w-full relative'
+							style={{ height: rowVirtualizer.getTotalSize() }}
+						>
+							{rowVirtualizer.getVirtualItems().map((virtualItem) => {
+								const recipe = filteredRecipes[virtualItem.index]
+								const isSelected = recipe.key === selectedKey
+								return (
+									<li
+										key={recipe.key}
+										className='absolute top-0 left-0 w-full'
+										style={{ transform: `translateY(${virtualItem.start}px)` }}
+									>
+										<button
+											type='button'
+											onClick={() => onSelect(recipe.key, encodeRecipe(recipe.counts, W, H))}
+											className={isSelected ? 'menu-active' : ''}
+										>
+											<span className='opacity-50 font-mono whitespace-pre'>
+												{encodeRecipe(recipe.counts, W, H).padStart(9)}
+											</span>
+											<div className='flex flex-wrap items-center gap-2'>
+												{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => {
+													const pinned = filters.constraints.some((c) =>
+														sameConstraint(c, { size, op: '=', n: count }),
+													)
+													return (
+														<button
+															key={size}
+															type='button'
+															onClick={(e) => {
+																e.stopPropagation()
+																onToggleSizeConstraint(size, count)
+															}}
+															className={`relative badge badge-lg ${pinned ? 'badge-primary' : 'badge-soft'} gap-1 tabular-nums cursor-pointer`}
+														>
+															<span>{size}</span>
+															{count > 1 && (
+																<span className='absolute -top-2 -right-2 badge badge-xs border border-current/10 px-1'>
+																	{count}
+																</span>
+															)}
+														</button>
+													)
+												})}
+												{recipe.tags.map((tag) => (
+													<TagChip key={tag} id={tag} />
+												))}
+											</div>
+										</button>
+									</li>
+								)
+							})}
+						</ul>
+					</div>
+				)}
+			</div>
+		</div>
+	)
+}
+
+const Root = () => {
+	const [compactId, setCompactId] = useQueryState('id', parseAsString)
+	const [W, setW] = useState(() => {
+		if (!compactId) return 6
+		try {
+			return decodeRecipe(compactId).W
+		} catch {
+			return 6
+		}
+	})
+	const [H, setH] = useState(() => {
+		if (!compactId) return 5
+		try {
+			return decodeRecipe(compactId).H
+		} catch {
+			return 5
+		}
+	})
+	const [recipes, setRecipes] = useState<Recipe[]>([])
+	const [selectedKey, setSelectedKey] = useState<string | null>(null)
+	const [filters, setFilters] = useState<Filters>(emptyFilters)
+	// Captured once at mount; cleared after the first solve so W/H slider changes don't re-restore.
+	const restoreIdRef = useRef<string | null>(compactId)
+
+	useEffect(() => {
+		const sorted = sortRecipes(solve({ W, H }))
+		setRecipes(sorted)
+
+		const restoreId = restoreIdRef.current
+		restoreIdRef.current = null
+
+		let keyToSelect: string | null = null
+		if (restoreId) {
+			try {
+				const { counts } = decodeRecipe(restoreId)
+				const targetKey = R.entries(counts).map(([k, v]) => `${k}:${v}`).sort().join('|')
+				keyToSelect = sorted.find((r) => r.key === targetKey)?.key ?? null
+			} catch {}
+		}
+
+		setSelectedKey(keyToSelect ?? sorted[0]?.key ?? null)
+		const valid = new Set(availableSizes(W, H))
+		setFilters((f) => ({ tags: f.tags, constraints: f.constraints.filter((c) => valid.has(c.size)) }))
+	}, [W, H])
+
+	const plateSizes = availableSizes(W, H)
+	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters))
+	const filteredIndex = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
+	const selectedRecipe = filteredIndex >= 0 ? filteredRecipes[filteredIndex] : null
+	const layout = selectedRecipe?.layout ?? []
+	const totalPieces = selectedRecipe ? R.sum(R.values(selectedRecipe.counts)) : 0
+	const filtersActive = filters.tags.size > 0 || filters.constraints.length > 0
+
+	// Per-tag and per-size counts in the filtered set — drive count badges and disabled states.
+	const tagCounts = new Map<TagId, number>(TAG_IDS.map((id) => [id, 0]))
+	for (const recipe of filteredRecipes) for (const tag of recipe.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+	const filteredSizeCounts = new Map<string, number>()
+	for (const recipe of filteredRecipes) for (const size of R.keys(recipe.counts)) filteredSizeCounts.set(size, (filteredSizeCounts.get(size) ?? 0) + 1)
+
+	// Filter change excluded the selected recipe → drop the selection (empty plate).
+	useEffect(() => {
+		if (selectedKey && filteredIndex === -1) setSelectedKey(null)
+	}, [selectedKey, filteredIndex])
 
 	const toggleTag = (id: TagId) =>
 		setFilters((f) => {
@@ -680,170 +926,88 @@ const Root = () => {
 
 	const toggleSizeConstraint = (size: string, n: number) =>
 		setFilters((f) => {
-			const target: Constraint = { size, op: '=', n }
-			const idx = f.constraints.findIndex((c) => sameConstraint(c, target))
-			if (idx >= 0) return { ...f, constraints: f.constraints.filter((_, i) => i !== idx) }
+			const target = { size, op: '=' as const, n }
+			const existingIndex = f.constraints.findIndex((c) => sameConstraint(c, target))
+			if (existingIndex >= 0) return { ...f, constraints: f.constraints.filter((_, i) => i !== existingIndex) }
 			return { ...f, constraints: [...f.constraints, target] }
 		})
 
-	const addConstraint = (c: Constraint) =>
-		setFilters((f) => ({ ...f, constraints: dedupeConstraints([...f.constraints, c]) }))
-
-	const updateConstraint = (idx: number, updates: Partial<Constraint>) =>
-		setFilters((f) => ({
-			...f,
-			constraints: dedupeConstraints(f.constraints.map((c, i) => (i === idx ? { ...c, ...updates } : c))),
-		}))
-
-	const removeConstraint = (idx: number) =>
-		setFilters((f) => ({ ...f, constraints: f.constraints.filter((_, i) => i !== idx) }))
-
 	const clearAll = () => setFilters(emptyFilters())
+
+	const setSizeConstraint = (size: string, op: Constraint['op'] | null) =>
+		setFilters((f) => {
+			if (!op) return { ...f, constraints: f.constraints.filter((c) => c.size !== size) }
+			const existing = f.constraints.find((c) => c.size === size)
+			if (existing) return { ...f, constraints: f.constraints.map((c) => (c.size === size ? { ...c, op, n: op === 'exclude' ? 0 : Math.max(1, c.n) } : c)) }
+			return { ...f, constraints: dedupeConstraints([...f.constraints, { size, op, n: op === 'exclude' ? 0 : 1 }]) }
+		})
+
+	const updateSizeN = (size: string, n: number) =>
+		setFilters((f) => ({ ...f, constraints: f.constraints.map((c) => (c.size === size ? { ...c, n } : c)) }))
 
 	return (
 		<ThemeProvider>
-			<main className='full-bleed-container p-8 gap-y-4 place-items-center'>
+			<main className='flex flex-col gap-6 p-8 items-center'>
 				<div className='flex gap-2'>
-					<h1 className='text-2xl font-medium mb-6'>Grid-fill</h1>
+					<h1 className='text-2xl font-medium'>Grid-fill</h1>
 					<ThemePicker variant='popover' />
 				</div>
 
-				<section className='grid grid-cols-2 gap-4 w-full'>
-					<Field label={`Plate width: ${W}`}>
-						<Range min={2} max={6} value={W} onChange={(e) => setW(+e.target.value)} />
-					</Field>
-					<Field label={`Plate depth: ${H}`}>
-						<Range min={2} max={6} value={H} onChange={(e) => setH(+e.target.value)} />
-					</Field>
-				</section>
-
-				<div className='stats stats-horizontal w-full *:place-items-center'>
-					<div className='stat'>
-						<div className='stat-title'>Unique sizes</div>
-						<div className='stat-value text-2xl'>{selectedRecipe?.unique ?? '—'}</div>
+				<div className='flex flex-wrap gap-8 items-start w-full'>
+					<div className='flex flex-col gap-4 flex-1 min-w-72'>
+						<DimensionSliders
+							W={W}
+							H={H}
+							onChangeW={(v) => { setW(v); setCompactId(null) }}
+							onChangeH={(v) => { setH(v); setCompactId(null) }}
+						/>
+						<RecipeStats
+							selectedRecipe={selectedRecipe}
+							filteredIndex={filteredIndex}
+							filteredCount={filteredRecipes.length}
+							totalPieces={totalPieces}
+						/>
+						<Plate W={W} H={H} bins={layout} />
 					</div>
-					<div className='stat'>
-						<div className='stat-title'>Recipe</div>
-						<div className='stat-value text-2xl'>
-							{selectedRecipe ? `${filteredIdx + 1}/${filteredRecipes.length}` : '—'}
-						</div>
-					</div>
-					<div className='stat'>
-						<div className='stat-title'>Pieces</div>
-						<div className='stat-value text-2xl'>{selectedRecipe ? totalPieces : '—'}</div>
-					</div>
-				</div>
 
-				<Plate W={W} H={H} bins={layout} />
-
-				<section className='w-full flex flex-col gap-2'>
-					<div className='flex flex-wrap items-center gap-2'>
-						{TAG_IDS.map((id) => (
-							<TagChip
-								key={id}
-								id={id}
-								active={filters.tags.has(id)}
-								onToggle={() => toggleTag(id)}
-								count={tagCounts.get(id) ?? 0}
-							/>
-						))}
+					<div className='flex flex-col gap-4 flex-1 min-w-72'>
+						<FilterMatrixPanel
+							sizes={plateSizes}
+							filters={filters}
+							W={W}
+							H={H}
+							onTagToggle={toggleTag}
+							onSetSizeOp={setSizeConstraint}
+							onUpdateSizeN={updateSizeN}
+							tagCounts={tagCounts}
+							filteredSizeCounts={filteredSizeCounts}
+						/>
 					</div>
-					<div className='flex flex-wrap items-center gap-2'>
-						{filters.constraints.map((c, i) => (
-							<ConstraintChip
-								key={constraintKey(c)}
-								constraint={c}
-								maxCount={maxCountFor(c.size, W, H)}
-								onUpdate={(updates) => updateConstraint(i, updates)}
-								onRemove={() => removeConstraint(i)}
-							/>
-						))}
-						<ConstraintPicker sizes={plateSizes} W={W} H={H} onAdd={addConstraint} />
+
+					<div className='flex flex-col gap-4 flex-1 min-w-72'>
+						<RecipeList
+							filteredRecipes={filteredRecipes}
+							totalCount={recipes.length}
+							selectedKey={selectedKey}
+							filteredIndex={filteredIndex}
+							onSelect={(key, encoded) => { setSelectedKey(key); setCompactId(encoded) }}
+							filtersActive={filtersActive}
+							onClearAll={clearAll}
+							filters={filters}
+							onToggleSizeConstraint={toggleSizeConstraint}
+							W={W}
+							H={H}
+						/>
 					</div>
-				</section>
-
-				<div className='w-full flex items-center justify-between text-sm text-base-content/70'>
-					<span>
-						Showing {filteredRecipes.length} of {recipes.length} recipes
-					</span>
-					{filtersActive && (
-						<button type='button' className='btn btn-xs btn-ghost' onClick={clearAll}>
-							Clear all
-						</button>
-					)}
-				</div>
-
-				<div className='w-full h-[60vh] rounded-box border border-current/10 overflow-hidden'>
-					{filteredRecipes.length === 0 ? (
-						<div className='size-full flex flex-col items-center justify-center gap-3 text-sm text-base-content/70'>
-							<span>No matching recipes.</span>
-							<button type='button' className='btn btn-sm' onClick={clearAll}>
-								Clear all filters
-							</button>
-						</div>
-					) : (
-						<div ref={scrollerRef} className='size-full scroll-fade-y'>
-							<ul
-								className='menu menu-sm flex-nowrap p-0 w-full relative'
-								style={{ height: rowVirtualizer.getTotalSize() }}
-							>
-								{rowVirtualizer.getVirtualItems().map((virtualItem) => {
-									const i = virtualItem.index
-									const recipe = filteredRecipes[i]
-									const isSelected = recipe.key === selectedKey
-									return (
-										<li
-											key={recipe.key}
-											className='absolute top-0 left-0 w-full'
-											style={{ transform: `translateY(${virtualItem.start}px)` }}
-										>
-											<button
-												type='button'
-												onClick={() => setSelectedKey(recipe.key)}
-												className={isSelected ? 'menu-active' : ''}
-											>
-												<span className='opacity-50 font-mono tabular-nums whitespace-pre'>
-													{`${i + 1}`.padStart(`${filteredRecipes.length}`.length, ' ')}.
-												</span>
-												<div className='flex flex-wrap items-center gap-2'>
-													{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => {
-														const pinned = filters.constraints.some((c) =>
-															sameConstraint(c, { size, op: '=', n: count }),
-														)
-														return (
-															<button
-																key={size}
-																type='button'
-																onClick={(e) => {
-																	e.stopPropagation()
-																	toggleSizeConstraint(size, count)
-																}}
-																className={`relative badge badge-lg ${pinned ? 'badge-primary' : 'badge-soft'} gap-1 tabular-nums cursor-pointer`}
-															>
-																<span>{size}</span>
-																{count > 1 && (
-																	<span className='absolute -top-2 -right-2 badge badge-xs border border-current/10 px-1'>
-																		{count}
-																	</span>
-																)}
-															</button>
-														)
-													})}
-													{recipe.tags.map((tag) => (
-														<TagChip key={tag} id={tag} />
-													))}
-												</div>
-											</button>
-										</li>
-									)
-								})}
-							</ul>
-						</div>
-					)}
 				</div>
 			</main>
 		</ThemeProvider>
 	)
 }
 
-if (typeof document !== 'undefined') createRoot(document.getElementById('root')!).render(<Root />)
+if (typeof document !== 'undefined')
+	createRoot(document.getElementById('root')!).render(
+		<NuqsAdapter>
+			<Root />
+		</NuqsAdapter>,
+	)
