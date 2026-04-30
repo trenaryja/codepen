@@ -32,12 +32,12 @@ type Bin = { x: number; y: number; w: number; h: number; key: string }
 type Recipe = { key: string; counts: Record<string, number>; unique: number; layout: Bin[]; tags: TagId[] }
 type SolveOpts = { W: number; H: number }
 
-type TagId = 'max-unique' | 'monochrome' | 'no-1x1' | 'no-repeat' | 'squares-only'
+type TagId = 'max-unique' | 'monochrome' | 'no-repeat' | 'squares-only' | 'uniform-count' | 'all-multi'
 type TagContext = { maxUnique: number }
 type Constraint = { size: string; op: '=' | '>=' | 'exclude'; n: number }
 export type Filters = { tags: Set<TagId>; constraints: Constraint[] }
 
-const TAG_IDS: TagId[] = ['max-unique', 'monochrome', 'no-1x1', 'no-repeat', 'squares-only']
+const TAG_IDS: TagId[] = ['max-unique', 'monochrome', 'no-repeat', 'squares-only', 'uniform-count', 'all-multi']
 
 const TAGS: Record<TagId, { label: string; description: string }> = {
 	'max-unique': {
@@ -48,17 +48,21 @@ const TAGS: Record<TagId, { label: string; description: string }> = {
 		label: 'mono',
 		description: 'Uses only a single piece size.',
 	},
-	'no-1x1': {
-		label: 'no 1×1',
-		description: 'Contains no 1×1 pieces.',
-	},
-	'no-repeat': {
+'no-repeat': {
 		label: 'no repeat',
 		description: 'Every piece in the recipe is a different size — no size appears twice.',
 	},
 	'squares-only': {
 		label: 'squares only',
 		description: 'Every piece is a square (width = height).',
+	},
+	'uniform-count': {
+		label: 'uniform',
+		description: 'Every piece size appears the same number of times.',
+	},
+	'all-multi': {
+		label: 'all multi',
+		description: 'Every piece size appears at least twice — no singletons.',
 	},
 }
 
@@ -71,9 +75,11 @@ export const computeTags = (recipe: Recipe, ctx: TagContext) => {
 	const tags: TagId[] = []
 	if (recipe.unique === ctx.maxUnique) tags.push('max-unique')
 	if (recipe.unique === 1) tags.push('monochrome')
-	if (!('1×1' in recipe.counts)) tags.push('no-1x1')
-	if (R.values(recipe.counts).every((c) => c === 1)) tags.push('no-repeat')
+if (R.values(recipe.counts).every((c) => c === 1)) tags.push('no-repeat')
 	if (R.keys(recipe.counts).every(isSquareKey)) tags.push('squares-only')
+	const counts = R.values(recipe.counts)
+	if (counts.every((count) => count === counts[0])) tags.push('uniform-count')
+	if (counts.every((count) => count >= 2)) tags.push('all-multi')
 	return tags
 }
 
@@ -392,7 +398,7 @@ const ExportButton = ({ recipe, W, H }: { recipe: Recipe | null; W: number; H: n
 			const url = URL.createObjectURL(blob)
 			const a = document.createElement('a')
 			a.href = url
-			a.download = `gridfinity_${W}x${H}.3mf`
+			a.download = `gridfinity_${encodeRecipe(recipe.counts, W, H)}.3mf`
 			a.click()
 			URL.revokeObjectURL(url)
 		} catch (err) {
