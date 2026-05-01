@@ -16,9 +16,9 @@ import { Button, Field, ThemePicker, ThemeProvider } from 'https://esm.sh/@trena
 import { strToU8, zipSync } from 'https://esm.sh/fflate'
 import { parseAsString, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import { useEffect, useRef, useState, type ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
-import { LuDownload, LuSlidersHorizontal } from 'https://esm.sh/react-icons/lu'
+import { LuDownload, LuHeart, LuSlidersHorizontal } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
 import { BASE62, decodeIntegers, encodeIntegers, triIndex, triInverse } from './codec'
 import { colorMix, EdgeBadges, interpolateColors, Stepper } from './migrate-to-ui'
@@ -30,7 +30,7 @@ const TAG_IDS = ['max-unique', 'monochrome', 'no-repeat', 'squares-only', 'unifo
 type TagId = (typeof TAG_IDS)[number]
 type Constraint = { size: string; op: '=' | '>=' | 'exclude'; n: number }
 const OP_SYMBOL: Record<Constraint['op'], string> = { '=': '=', '>=': '≥', exclude: '✕' }
-export type Filters = { tags: Set<TagId>; constraints: Constraint[] }
+export type Filters = { tags: Set<TagId>; favoriteOnly: boolean; constraints: Constraint[] }
 
 const GF_PITCH = 42.5 // mm/unit: 42mm nominal + 0.5mm → ~1mm min gap between printed bins
 const PRINT_BED_H = 256 // X1C bed depth mm — anchor plate to back-left, away from exclusion zone
@@ -49,7 +49,8 @@ const STOPS = [
 	'var(--color-error)',
 ]
 
-const TAGS: Record<TagId, { label: string; description: string }> = {
+const TAGS: Record<TagId | 'favorite', { label: string; description: string }> = {
+	favorite: { label: 'favorites', description: 'Recipes you have marked as favorites.' },
 	'max-unique': {
 		label: 'max unique',
 		description: 'Uses the largest number of distinct piece sizes possible for this plate.',
@@ -135,7 +136,8 @@ const computeTags = (recipe: Recipe, maxUnique: number) => {
 	return tags
 }
 
-const matchesFilter = (recipe: Recipe, filters: Filters) => {
+const matchesFilter = (recipe: Recipe, filters: Filters, favorites: Set<string>) => {
+	if (filters.favoriteOnly && !favorites.has(recipe.key)) return false
 	for (const tag of filters.tags) if (!recipe.tags.includes(tag)) return false
 	for (const c of filters.constraints) {
 		const count = recipe.counts[c.size] ?? 0
@@ -146,7 +148,27 @@ const matchesFilter = (recipe: Recipe, filters: Filters) => {
 	return true
 }
 
-const emptyFilters = (): Filters => ({ tags: new Set(), constraints: [] })
+const emptyFilters = (): Filters => ({ tags: new Set(), favoriteOnly: false, constraints: [] })
+
+const useFavorites = () => {
+	const [favorites, setFavorites] = useState<Set<string>>(() => {
+		try {
+			const stored = localStorage.getItem('grid-fill:favorites')
+			return new Set(stored ? JSON.parse(stored) : [])
+		} catch {
+			return new Set<string>()
+		}
+	})
+	const toggleFavorite = (key: string) =>
+		setFavorites((prev) => {
+			const next = new Set(prev)
+			if (next.has(key)) next.delete(key)
+			else next.add(key)
+			localStorage.setItem('grid-fill:favorites', JSON.stringify([...next]))
+			return next
+		})
+	return { favorites, toggleFavorite }
+}
 
 const byFamily = (a: string, b: string) => {
 	const [widthA, heightA] = a.split('×').map(Number)
@@ -362,9 +384,9 @@ const build3mf = async (recipe: Recipe): Promise<Blob> => {
 	return new Blob([new Uint8Array(zip.buffer as ArrayBuffer)], { type: 'model/3mf' })
 }
 
-type TagChipProps = { id: TagId; active?: boolean; onToggle?: () => void; count?: number }
+type TagChipProps = { id: TagId | 'favorite'; icon?: ReactNode; active?: boolean; onToggle?: () => void; count?: number }
 
-const TagChip = ({ id, active, onToggle, count }: TagChipProps) => {
+const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 	const [open, setOpen] = useState(false)
 	const { refs, floatingStyles, context } = useFloating({
 		open,
@@ -384,6 +406,7 @@ const TagChip = ({ id, active, onToggle, count }: TagChipProps) => {
 	const className = `badge badge-sm gap-1 ${active ? 'badge-primary' : 'badge-ghost'} ${cursor} ${disabled ? 'opacity-40' : ''}`
 	const inner = (
 		<>
+			{icon}
 			{label}
 			{count !== undefined && (
 				<span className={`badge badge-xs tabular-nums transition-opacity ${count > 0 ? 'opacity-60' : 'opacity-0'}`}>
@@ -511,6 +534,8 @@ type RecipeListProps = {
 	filtersActive: boolean
 	onClearAll: () => void
 	filters: Filters
+	favorites: Set<string>
+	toggleFavorite: (key: string) => void
 	W: number
 	H: number
 }
@@ -524,6 +549,8 @@ const RecipeList = ({
 	filtersActive,
 	onClearAll,
 	filters,
+	favorites,
+	toggleFavorite,
 	W,
 	H,
 }: RecipeListProps) => {
@@ -580,13 +607,13 @@ const RecipeList = ({
 										key={recipe.key}
 										data-index={virtualItem.index}
 										ref={rowVirtualizer.measureElement}
-										className='absolute top-0 left-0 w-full list-none pt-3'
+										className='absolute top-0 left-0 w-full list-none pt-3 flex items-center gap-2'
 										style={{ transform: `translateY(${virtualItem.start}px)` }}
 									>
 										<button
 											type='button'
 											onClick={() => onSelect(recipe.key, encoded)}
-											className={`surface cursor-pointer relative w-full p-2 transition-colors ${isSelected ? 'border-primary' : ''}`}
+											className={`surface cursor-pointer relative flex-1 p-2 transition-colors ${isSelected ? 'border-primary' : ''}`}
 										>
 											<EdgeBadges placement='top-start'>
 												<span className='badge badge-xs font-mono badge-soft'>{encoded}</span>
@@ -608,6 +635,15 @@ const RecipeList = ({
 													</span>
 												))}
 											</div>
+										</button>
+										<button
+											type='button'
+											className='btn btn-ghost btn-square btn-sm shrink-0'
+											onClick={() => toggleFavorite(recipe.key)}
+										>
+											<LuHeart
+												className={favorites.has(recipe.key) ? 'fill-primary text-primary' : 'text-base-content/30'}
+											/>
 										</button>
 									</li>
 								)
@@ -635,6 +671,7 @@ const Root = () => {
 	const [recipes, setRecipes] = useState<Recipe[]>([])
 	const [selectedKey, setSelectedKey] = useState<string | null>(null)
 	const [filters, setFilters] = useState<Filters>(emptyFilters)
+	const { favorites, toggleFavorite } = useFavorites()
 	const restoreIdRef = useRef<string | null>(compactId)
 
 	useEffect(() => {
@@ -671,11 +708,15 @@ const Root = () => {
 
 		setSelectedKey(keyToSelect ?? sorted[0]?.key ?? null)
 		const valid = new Set(availableSizes(W, H))
-		setFilters((f) => ({ tags: f.tags, constraints: f.constraints.filter((c) => valid.has(c.size)) }))
+		setFilters((f) => ({
+			tags: f.tags,
+			favoriteOnly: f.favoriteOnly,
+			constraints: f.constraints.filter((c) => valid.has(c.size)),
+		}))
 	}, [W, H])
 
 	const plateSizes = availableSizes(W, H)
-	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters))
+	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters, favorites))
 	const filteredIndex = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
 	const selectedRecipe = filteredIndex >= 0 ? filteredRecipes[filteredIndex] : null
 	const layout = selectedRecipe?.layout ?? []
@@ -688,8 +729,9 @@ const Root = () => {
 	const keys = R.sort(R.unique(layout.map((bin) => bin.key)), byFamily)
 	const baseOf = (size: string) =>
 		interpolateColors(keys.length > 1 ? keys.indexOf(size) / (keys.length - 1) : 0, STOPS)
-	const filtersActive = filters.tags.size > 0 || filters.constraints.length > 0
+	const filtersActive = filters.tags.size > 0 || filters.favoriteOnly || filters.constraints.length > 0
 
+	const favoriteCount = filteredRecipes.filter((r) => favorites.has(r.key)).length
 	const tagCounts = new Map<TagId, number>(TAG_IDS.map((id) => [id, 0]))
 	for (const recipe of filteredRecipes) for (const tag of recipe.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
 	const filteredSizeCounts = new Map<string, number>()
@@ -819,6 +861,8 @@ const Root = () => {
 								filtersActive={filtersActive}
 								onClearAll={clearAll}
 								filters={filters}
+								favorites={favorites}
+								toggleFavorite={toggleFavorite}
 								W={W}
 								H={H}
 							/>
@@ -837,6 +881,13 @@ const Root = () => {
 						</div>
 						<div className='flex flex-col gap-2'>
 							<div className='flex flex-wrap gap-2 justify-center'>
+								<TagChip
+									id='favorite'
+									icon={<LuHeart className='size-3' />}
+									active={filters.favoriteOnly}
+									onToggle={() => setFilters((f) => ({ ...f, favoriteOnly: !f.favoriteOnly }))}
+									count={favoriteCount}
+								/>
 								{TAG_IDS.map((id) => (
 									<TagChip
 										key={id}
