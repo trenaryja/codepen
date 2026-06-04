@@ -1,0 +1,37 @@
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser"></script>
+<link href="https://cdn.jsdelivr.net/npm/@trenaryja/ui" rel="stylesheet" type="text/css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<div class="full-bleed-container min-h-screen bg-base-100 text-base-content">
+<div class="content-root">
+
+  <header class="px-8 pt-14 pb-10 border-b border-base-300">
+    <p class="font-mono text-xs tracking-[.18em] uppercase text-base-content/40 mb-3">OpenType · CSS · Reference</p>
+    <h1 class="font-[Instrument_Serif] text-[clamp(2.6rem,4.5vw,3.8rem)] leading-[1.1] tracking-tight mb-3">Typography Metrics</h1>
+    <p class="text-sm text-base-content/60 max-w-prose leading-relaxed">A visual glossary of the measurements and terminology used to describe the anatomy of a typeface. Hover any term to see it illustrated.</p>
+  </header>
+
+  <div class="main-grid">
+    <div class="diagram-panel sticky top-6">
+      <div class="rounded-box border border-base-300 bg-base-200 overflow-hidden">
+        <div class="flex items-center px-4 py-2 border-b border-base-300">
+          <div class="join">
+            <button type="button" class="join-item btn btn-xs btn-active" data-font="serif">Serif</button>
+            <button type="button" class="join-item btn btn-xs" data-font="sans">Sans</button>
+            <button type="button" class="join-item btn btn-xs" data-font="mono">Mono</button>
+          </div>
+        </div>
+        <canvas id="diagram"></canvas>
+        <div class="flex items-center px-4 py-2.5 border-t border-base-300 min-h-10">
+          <span class="font-mono text-xs text-base-content/50" id="sname"></span>
+        </div>
+      </div>
+      <p class="pin-hint text-center font-mono text-xs text-base-content/25 mt-2">Click to pin · <kbd class="kbd kbd-xs">Esc</kbd> to unpin</p>
+    </div>
+    <div id="glossary"></div>
+  </div>
+
+</div>
+</div>

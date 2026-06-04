@@ -12,6 +12,7 @@ function penWrapperPlugin(): Plugin {
 	function buildWrapper(slug: string, dir: 'p' | 't'): string {
 		const base = resolve(import.meta.dirname, 'src', dir, slug)
 		const fragment = existsSync(`${base}/index.html`) ? readFileSync(`${base}/index.html`, 'utf-8') : ''
+		const penFile = existsSync(`${base}/pen.ts`) ? 'pen.ts' : 'pen.tsx'
 		return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,11 +21,11 @@ function penWrapperPlugin(): Plugin {
   <title>${slug}</title>
   <link rel="icon" type="image/svg+xml" href="https://trenary.dev/icon.svg" />
   <link rel="stylesheet" href="/src/index.css" />
-  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="/src/${dir}/${slug}/style.css" />
 </head>
 <body>
 ${fragment}
-  <script type="module" src="/src/${dir}/${slug}/pen.tsx"></script>
+  <script type="module" src="/src/${dir}/${slug}/${penFile}"></script>
 </body>
 </html>`
 	}
