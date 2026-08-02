@@ -66,7 +66,11 @@ export const Stepper = ({ value, min = 1, max, onChange, className, classNames }
 		>
 			-
 		</button>
-		<span className={cn('btn btn-ghost join-item pointer-events-none tabular-nums', classNames?.button, classNames?.value)}>{value}</span>
+		<span
+			className={cn('btn btn-ghost join-item pointer-events-none tabular-nums', classNames?.button, classNames?.value)}
+		>
+			{value}
+		</span>
 		<button
 			type='button'
 			className={cn('btn join-item', classNames?.button, classNames?.increment)}

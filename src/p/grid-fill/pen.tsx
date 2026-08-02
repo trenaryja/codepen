@@ -16,7 +16,7 @@ import { Button, Field, ThemePicker, ThemeProvider } from 'https://esm.sh/@trena
 import { strToU8, zipSync } from 'https://esm.sh/fflate'
 import { parseAsString, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
-import { useEffect, useRef, useState, type ReactNode } from 'https://esm.sh/react'
+import { type ReactNode, useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuDownload, LuHeart, LuSlidersHorizontal } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
@@ -384,7 +384,13 @@ const build3mf = async (recipe: Recipe): Promise<Blob> => {
 	return new Blob([new Uint8Array(zip.buffer as ArrayBuffer)], { type: 'model/3mf' })
 }
 
-type TagChipProps = { id: TagId | 'favorite'; icon?: ReactNode; active?: boolean; onToggle?: () => void; count?: number }
+type TagChipProps = {
+	id: TagId | 'favorite'
+	icon?: ReactNode
+	active?: boolean
+	onToggle?: () => void
+	count?: number
+}
 
 const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 	const [open, setOpen] = useState(false)
