@@ -2,10 +2,6 @@
 	--bleed-width: 80ch;
 }
 
-#diagram {
-	display: block;
-}
-
 .content-root {
 	container-type: inline-size;
 }
@@ -32,16 +28,9 @@
 	}
 }
 
-/* Applied by JS via isMobile() — switches to flex column to avoid grid-template-columns cascade issues */
 .main-grid.mobile {
 	display: flex;
 	flex-direction: column;
 	gap: 0;
 	padding: 0 0 64px;
-}
-.pin-hint.mobile {
-	display: none;
-}
-#glossary.mobile {
-	padding: 20px 16px 0;
 }
