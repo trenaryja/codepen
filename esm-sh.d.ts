@@ -1,3 +1,15 @@
+declare module 'https://esm.sh/@dnd-kit/core' {
+	export * from '@dnd-kit/core'
+}
+
+declare module 'https://esm.sh/@dnd-kit/sortable' {
+	export * from '@dnd-kit/sortable'
+}
+
+declare module 'https://esm.sh/@dnd-kit/utilities' {
+	export * from '@dnd-kit/utilities'
+}
+
 declare module 'https://esm.sh/@faker-js/faker' {
 	export * from '@faker-js/faker'
 }
@@ -80,6 +92,10 @@ declare module 'https://esm.sh/react-icons/fa' {
 
 declare module 'https://esm.sh/react-icons/lu' {
 	export * from 'react-icons/lu'
+}
+
+declare module 'https://esm.sh/react-icons/wi' {
+	export * from 'react-icons/wi'
 }
 
 declare module 'https://esm.sh/remeda' {
