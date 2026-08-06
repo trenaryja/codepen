@@ -30,6 +30,7 @@ import {
 // ── Constants ─────────────────────────────────────────────────────────────────
 const HOUR = 3_600_000
 const DAY = 86_400_000
+const QUARTER_HOUR = 900_000
 const RADIAN = Math.PI / 180
 const STORAGE_KEY = 'clox'
 const GHOST_BUTTON = 'btn btn-ghost btn-xs'
@@ -68,7 +69,7 @@ const getFormatter = (options: Intl.DateTimeFormatOptions) => {
 
 const offsetCache = new Map<string, number>()
 const zoneOffset = (timeZone: string, instant: number) => {
-	const key = `${timeZone}:${Math.floor(instant / 900_000)}`
+	const key = `${timeZone}:${Math.floor(instant / QUARTER_HOUR)}`
 	const cached = offsetCache.get(key)
 	if (cached !== undefined) return cached
 	const parts = getFormatter({ timeZone, timeZoneName: 'longOffset' }).formatToParts(instant)
@@ -401,6 +402,8 @@ const useCitySearch = (query: string) => {
 }
 
 // ── Tracks + shared view settings ─────────────────────────────────────────────
+const VIEWS = ['list', 'slider'] as const
+type View = (typeof VIEWS)[number]
 type Track = { id: string; label: string; city: City }
 type ScrubToWall = (timeZone: string, candidates: number[]) => void
 type Preferences = {
@@ -410,7 +413,7 @@ type Preferences = {
 	forecastMode: ForecastMode
 	homeOverride: City | null
 }
-type Stored = Partial<Preferences> & { tracks?: { label: string; city: City }[] }
+type Stored = Partial<Preferences> & { tracks?: { label: string; city: City }[]; view?: View }
 
 // Everything below the App reads the same view state, so it rides context instead of props
 type Settings = Omit<Preferences, 'homeOverride'> & {
@@ -677,6 +680,114 @@ const TrackCard = ({
 	)
 }
 
+// ── Slider view ───────────────────────────────────────────────────────────────
+const snapQuarter = (instant: number) => Math.round(instant / QUARTER_HOUR) * QUARTER_HOUR
+
+const SliderRow = ({ label, city }: { label: string; city: City }) => {
+	const { instant, home, hour12, showSeconds } = useSettings()
+	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(home.timeZone, instant)
+	const delta = dayDelta(city.timeZone, home.timeZone, instant)
+	return (
+		<div className='flex items-baseline justify-between gap-3'>
+			<div className='flex min-w-0 items-baseline gap-2'>
+				<span className='truncate text-xl font-medium'>{label}</span>
+				{city.name.toLowerCase() !== label.toLowerCase() && (
+					<span className='truncate text-xs uppercase tracking-wider opacity-40'>{city.name}</span>
+				)}
+			</div>
+			<div className='flex items-baseline gap-2'>
+				{delta !== 0 && <span className='badge badge-sm'>{dayDeltaLabel(delta)}</span>}
+				<span className='font-mono text-sm opacity-60'>{formatSignedGap(gap)}</span>
+				<span className='font-mono text-3xl font-extralight tracking-tight'>
+					{formatTime(instant, city.timeZone, hour12, showSeconds)}
+				</span>
+			</div>
+		</div>
+	)
+}
+
+const SliderView = ({
+	roster,
+	now,
+	scrubbed,
+	onScrub,
+	onSettle,
+}: {
+	roster: Track[]
+	now: number
+	scrubbed: number | null
+	onScrub: (instant: number) => void
+	onSettle: (instant: number | null) => void
+}) => {
+	const { instant, home } = useSettings()
+	const drag = useRef<{ y: number; instant: number } | null>(null)
+	const wheelSettle = useRef(0)
+	const surface = useRef<HTMLElement>(null)
+	// the full surface height is one day of drag, so scrub speed scales with the window
+	const dayPixels = () => surface.current?.clientHeight ?? 1
+	const centerOffset = (instant - now) / HOUR
+	const firstTick = Math.ceil(centerOffset) - 12
+	return (
+		<main
+			ref={surface}
+			className='relative flex grow cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing'
+			onPointerDown={(event) => {
+				if (event.target instanceof Element && event.target.closest('button')) return
+				event.currentTarget.setPointerCapture(event.pointerId)
+				drag.current = { y: event.clientY, instant }
+			}}
+			onPointerMove={(event) => {
+				if (drag.current) onScrub(drag.current.instant + ((drag.current.y - event.clientY) / dayPixels()) * DAY)
+			}}
+			onPointerUp={() => {
+				if (drag.current) onSettle(snapQuarter(instant))
+				drag.current = null
+			}}
+			onPointerCancel={() => {
+				drag.current = null
+			}}
+			onWheel={(event) => {
+				const next = instant + (event.deltaY / dayPixels()) * DAY
+				onScrub(next)
+				clearTimeout(wheelSettle.current)
+				wheelSettle.current = window.setTimeout(() => onSettle(snapQuarter(next)), 250)
+			}}
+		>
+			{/* ruler tape: hour ticks slide under the fixed center marker; labels every 3h.
+			    1ch marker gutter + 4ch labels ('+12h'); inset keeps edge labels from clipping */}
+			<div className='relative ml-2 w-[5ch] shrink-0 font-mono text-xs opacity-60'>
+				<span className='absolute top-1/2 -translate-y-1/2'>▸</span>
+				<div className='absolute inset-y-3 left-[1ch] right-0'>
+					{Array.from({ length: 25 }, (_, index) => firstTick + index).map((hour) => (
+						<span
+							key={hour}
+							className='absolute -translate-y-1/2'
+							style={{ top: `${50 - ((hour - centerOffset) / 24) * 100}%` }}
+						>
+							{hour % 3 === 0 ? formatSignedGap(hour * HOUR) : '·'}
+						</span>
+					))}
+				</div>
+			</div>
+			<div className='mx-auto flex w-full min-w-0 max-w-xl flex-col justify-center gap-4 p-4'>
+				<div className='flex items-center justify-center gap-3 text-sm opacity-70'>
+					<span>{formatDateLong(instant, home.timeZone)}</span>
+					{scrubbed !== null && <span className='font-mono'>{formatSignedGap(instant - now)}</span>}
+					{scrubbed !== null && (
+						<button type='button' className='btn btn-xs' onClick={() => onSettle(null)}>
+							↺ now
+						</button>
+					)}
+				</div>
+				<SliderRow label={home.name} city={home} />
+				{roster.map((track) => (
+					<SliderRow key={track.id} label={track.label} city={track.city} />
+				))}
+			</div>
+		</main>
+	)
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 type SearchMode = { kind: 'add' | 'home' } | { kind: 'track'; id: string }
 
@@ -693,6 +804,8 @@ const App = () => {
 	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
 	const [query, setQuery] = useState('')
 	const [expandedIds, setExpandedIds] = useState<string[]>([])
+	// find, not includes/cast — a stale stored value from a removed view falls back to list
+	const [view, setView] = useState<View>(VIEWS.find((entry) => entry === stored?.view) ?? 'list')
 
 	const { detected, pending: homePending } = useDetectedHome()
 	const home = homeOverride ?? detected
@@ -701,9 +814,9 @@ const App = () => {
 	const { matches, searching } = useCitySearch(query)
 	const { weather, ready: weatherReady } = useWeather([home, ...roster.map((track) => track.city)], fahrenheit)
 
-	const stateRef = useRef({ now, instant })
+	const stateRef = useRef({ now, instant, searchOpen: false })
 	useEffect(() => {
-		stateRef.current = { now, instant }
+		stateRef.current = { now, instant, searchOpen: searchMode !== null }
 	})
 
 	useEffect(() => {
@@ -725,9 +838,10 @@ const App = () => {
 			showSeconds,
 			forecastMode,
 			homeOverride,
+			view,
 		}
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-	}, [roster, hour12, fahrenheit, showSeconds, forecastMode, homeOverride])
+	}, [roster, hour12, fahrenheit, showSeconds, forecastMode, homeOverride, view])
 
 	// ── scrub ──
 	const animationRef = useRef(0)
@@ -750,11 +864,11 @@ const App = () => {
 		setQuery('')
 	}
 
-	// arrows scrub an hour (shift = a day), n = back to now, esc closes search.
+	// arrows scrub an hour (shift = a day), n = back to now, esc closes search — or clears the scrub.
 	// Registered once: everything it touches is a stable setter or a ref.
 	useEffect(() => {
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') return closeSearch()
+			if (event.key === 'Escape') return stateRef.current.searchOpen ? closeSearch() : animateTo(null)
 			if (event.target instanceof HTMLElement && event.target.closest('input')) return
 			const step = event.shiftKey ? DAY : HOUR
 			if (event.key === 'ArrowRight') animateTo(stateRef.current.instant + step)
@@ -835,28 +949,47 @@ const App = () => {
 		scrubToWall: actions.scrubToWall,
 	}
 
+	// weather/forecast toggles only matter where weather shows — the list's cards
 	const toggles = [
-		{
-			key: 'expand',
-			content: allExpanded ? <LuChevronsDownUp /> : <LuChevronsUpDown />,
-			label: `${allExpanded ? 'collapse' : 'expand'} all cards`,
-			onClick: () => setExpandedIds(allExpanded ? [] : expandableIds),
-		},
-		{
-			key: 'mode',
-			content: forecastMode,
-			onClick: () => setForecastMode(forecastMode === 'hourly' ? 'daily' : 'hourly'),
-		},
+		...(view === 'list'
+			? [
+					{
+						key: 'expand',
+						content: allExpanded ? <LuChevronsDownUp /> : <LuChevronsUpDown />,
+						label: `${allExpanded ? 'collapse' : 'expand'} all cards`,
+						onClick: () => setExpandedIds(allExpanded ? [] : expandableIds),
+					},
+					{
+						key: 'mode',
+						content: forecastMode,
+						onClick: () => setForecastMode(forecastMode === 'hourly' ? 'daily' : 'hourly'),
+					},
+					{ key: 'unit', content: `°${fahrenheit ? 'F' : 'C'}`, onClick: () => setFahrenheit(!fahrenheit) },
+				]
+			: []),
 		{ key: 'seconds', content: showSeconds ? ':ss' : ':—', onClick: () => setShowSeconds(!showSeconds) },
-		{ key: 'unit', content: `°${fahrenheit ? 'F' : 'C'}`, onClick: () => setFahrenheit(!fahrenheit) },
 		{ key: 'cycle', content: hour12 ? '12h' : '24h', onClick: () => setHour12(!hour12) },
 	]
 
 	return (
 		<ThemeProvider>
 			<SettingsContext value={settings}>
-				<div className='min-h-dvh'>
-					<header className='flex items-center justify-end gap-2 px-4 py-3'>
+				<div className='flex min-h-dvh flex-col'>
+					<header className='flex items-center gap-2 px-4 py-3'>
+						<div role='tablist' className='tabs tabs-border tabs-sm mr-auto'>
+							{VIEWS.map((entry) => (
+								<button
+									key={entry}
+									type='button'
+									role='tab'
+									aria-selected={entry === view}
+									className={`tab ${entry === view ? 'tab-active' : ''}`}
+									onClick={() => setView(entry)}
+								>
+									{entry}
+								</button>
+							))}
+						</div>
 						<ThemePicker variant='modal' />
 						{toggles.map(({ key, content, label, onClick }) => (
 							<button key={key} type='button' aria-label={label} className={GHOST_BUTTON} onClick={onClick}>
@@ -865,59 +998,66 @@ const App = () => {
 						))}
 					</header>
 
-					<main className='mx-auto flex max-w-xl flex-col gap-3 p-4 pb-28'>
-						<div className='flex flex-col items-center gap-1 py-8'>
-							<EditableTime timeZone={home.timeZone} className='text-7xl font-extralight tracking-tight' />
-							<div className='flex items-center gap-3 text-base opacity-70'>
-								<span>{formatDateLong(instant, home.timeZone)}</span>
-								<WeatherChip city={home} />
-								{!homeOverride && homePending ? (
-									<span className='skeleton text-transparent'>{fallbackHome.name}</span>
-								) : (
-									<button
-										type='button'
-										title='not where you are? set your location'
-										className='hover:opacity-75'
-										onClick={() => openSearch({ kind: 'home' }, home.name)}
-									>
-										{home.name}
-									</button>
-								)}
-								{scrubbed !== null && (
-									<button type='button' className='btn btn-xs' onClick={() => animateTo(null)}>
-										↺ now
-									</button>
-								)}
-								<ExpandButton expanded={homeExpanded} onClick={() => toggleExpanded('home')} />
+					{view === 'slider' && (
+						<SliderView roster={roster} now={now} scrubbed={scrubbed} onScrub={setScrubbed} onSettle={animateTo} />
+					)}
+					{view === 'list' && (
+						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-4 pb-28'>
+							<div className='flex flex-col items-center gap-1 py-8'>
+								<EditableTime timeZone={home.timeZone} className='text-7xl font-extralight tracking-tight' />
+								<div className='flex items-center gap-3 text-base opacity-70'>
+									<span>{formatDateLong(instant, home.timeZone)}</span>
+									<WeatherChip city={home} />
+									{!homeOverride && homePending ? (
+										<span className='skeleton text-transparent'>{fallbackHome.name}</span>
+									) : (
+										<button
+											type='button'
+											title='not where you are? set your location'
+											className='hover:opacity-75'
+											onClick={() => openSearch({ kind: 'home' }, home.name)}
+										>
+											{home.name}
+										</button>
+									)}
+									{scrubbed !== null && (
+										<button type='button' className='btn btn-xs' onClick={() => animateTo(null)}>
+											↺ now
+										</button>
+									)}
+									<ExpandButton expanded={homeExpanded} onClick={() => toggleExpanded('home')} />
+								</div>
+								{homeExpanded && <ForecastPanel city={home} />}
 							</div>
-							{homeExpanded && <ForecastPanel city={home} />}
-						</div>
-						<DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-							<SortableContext items={roster.map((track) => track.id)} strategy={verticalListSortingStrategy}>
-								{roster.map((track) => (
-									<TrackCard
-										key={track.id}
-										track={track}
-										actions={actions}
-										expanded={expandedIds.includes(track.id)}
-										onToggle={() => toggleExpanded(track.id)}
-										onEditLocation={() => openSearch({ kind: 'track', id: track.id }, track.city.name)}
-									/>
-								))}
-							</SortableContext>
-						</DndContext>
-					</main>
+							<DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+								<SortableContext items={roster.map((track) => track.id)} strategy={verticalListSortingStrategy}>
+									{roster.map((track) => (
+										<TrackCard
+											key={track.id}
+											track={track}
+											actions={actions}
+											expanded={expandedIds.includes(track.id)}
+											onToggle={() => toggleExpanded(track.id)}
+											onEditLocation={() => openSearch({ kind: 'track', id: track.id }, track.city.name)}
+										/>
+									))}
+								</SortableContext>
+							</DndContext>
+						</main>
+					)}
 
-					<div className='fab'>
-						<button
-							type='button'
-							aria-label='add a place'
-							className='btn btn-circle btn-xl shadow-lg'
-							onClick={() => openSearch({ kind: 'add' })}
-						>
-							＋
-						</button>
-					</div>
+					{view === 'list' && (
+						<div className='fab'>
+							<button
+								type='button'
+								aria-label='add a place'
+								className='btn btn-circle btn-xl shadow-lg'
+								onClick={() => openSearch({ kind: 'add' })}
+							>
+								＋
+							</button>
+						</div>
+					)}
 
 					{searchMode !== null && (
 						<div className='modal modal-open modal-bottom sm:modal-middle'>
