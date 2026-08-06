@@ -33,11 +33,7 @@ const DAY = 86_400_000
 const QUARTER_HOUR = 900_000
 const RADIAN = Math.PI / 180
 const STORAGE_KEY = 'clox'
-const GHOST_BUTTON = 'btn btn-ghost btn-xs'
 const ICON_BUTTON = 'btn btn-circle btn-ghost btn-xs'
-// Editable's display and its input share this box so swapping between them shifts nothing.
-// 1lh is exactly one line of whatever text size the caller passed, so the box tracks it for free
-const EDITABLE_BOX = 'h-[1lh] leading-tight field-sizing-content'
 
 type City = { name: string; country: string; latitude: number; longitude: number; timeZone: string }
 const UTC_CITY: City = { name: 'UTC', country: '', latitude: 0, longitude: 0, timeZone: 'UTC' }
@@ -81,8 +77,6 @@ const zoneOffset = (timeZone: string, instant: number) => {
 
 // Shifting the instant by the zone's offset makes UTC rendering read as that zone's wall clock
 const localMs = (timeZone: string, instant: number) => instant + zoneOffset(timeZone, instant)
-const wallClock = (timeZone: string, instant: number) =>
-	new Date(localMs(timeZone, instant)).toISOString().slice(11, 16)
 
 const formatTime = (instant: number, timeZone: string, hour12: boolean, seconds: boolean) =>
 	getFormatter({
@@ -107,12 +101,11 @@ const dayDelta = (timeZone: string, baseTimeZone: string, instant: number) =>
 const dayDeltaLabel = (delta: number) =>
 	delta === 1 ? 'tomorrow' : delta === -1 ? 'yesterday' : `${delta > 0 ? '+' : ''}${delta} days`
 
-const localeHour12 = () => {
-	const cycle = new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions().hourCycle
-	return cycle === 'h11' || cycle === 'h12'
-}
+const LOCALE_HOUR12 = !!new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions().hour12
+const LOCALE_FAHRENHEIT = navigator.language.toUpperCase().includes('US')
 
-const localeFahrenheit = () => navigator.language.toUpperCase().includes('US')
+// keyboard hints only make sense where a keyboard is likely (the CDN tailwind build lacks pointer-* variants)
+const FINE_POINTER = matchMedia('(pointer: fine)').matches
 
 // Signed like Android's world clock: "-9h 30m", "+2h 30m", "0h"
 const formatSignedGap = (milliseconds: number) => {
@@ -162,13 +155,9 @@ const solarAltitude = (instant: number, latitude: number, longitude: number) => 
 	)
 }
 
-const isDaytime = (instant: number, city: City) =>
-	isUtc(city) || solarAltitude(instant, city.latitude, city.longitude) > -6
-
 // ── Weather (open-meteo, no key) ──────────────────────────────────────────────
 type Weather = { temperature: number; code: number; feelsLike: number }
 const weatherKey = (city: City) => `${city.latitude.toFixed(2)},${city.longitude.toFixed(2)}`
-const tempUnit = (fahrenheit: boolean) => (fahrenheit ? '&temperature_unit=fahrenheit' : '')
 
 const weatherIcon = (code: number, day: boolean) => {
 	if (code === 0) return day ? WiDaySunny : WiNightClear
@@ -200,7 +189,7 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 				const coords = (index: number) => keys.map((key) => key.split(',')[index]).join(',')
 				const parsed = await (
 					await fetch(
-						`https://api.open-meteo.com/v1/forecast?latitude=${coords(0)}&longitude=${coords(1)}&current=temperature_2m,weather_code,apparent_temperature${tempUnit(fahrenheit)}`,
+						`https://api.open-meteo.com/v1/forecast?latitude=${coords(0)}&longitude=${coords(1)}&current=temperature_2m,weather_code,apparent_temperature${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
 					)
 				).json()
 				type Current = { temperature_2m: number; weather_code: number; apparent_temperature: number }
@@ -235,15 +224,7 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 
 // ── Forecast, fetched per city per mode on first expand ───────────────────────
 // One cell shape serves both modes: hourly = temp + rain %, daily = high/low + rain %
-type ForecastCell = {
-	key: string
-	label: string
-	hour: number
-	code: number
-	day: boolean
-	primary: string
-	precip: number
-}
+type ForecastCell = { time: string; label: string; code: number; day: boolean; primary: string; precip: number }
 type ForecastMode = 'hourly' | 'daily'
 const FORECAST_FIELDS: Record<ForecastMode, string> = {
 	hourly: 'hourly=temperature_2m,weather_code,precipitation_probability,is_day&forecast_hours=12',
@@ -262,7 +243,7 @@ const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 			try {
 				const parsed: Partial<Record<ForecastMode, Record<string, unknown[]>>> = await (
 					await fetch(
-						`https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&${FORECAST_FIELDS[mode]}&timezone=auto${tempUnit(fahrenheit)}`,
+						`https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&${FORECAST_FIELDS[mode]}&timezone=auto${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
 					)
 				).json()
 				const block = parsed[mode] ?? {}
@@ -271,10 +252,9 @@ const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 				forecastCache.set(
 					key,
 					(block.time ?? []).map(String).map((time, index) => ({
-						key: time,
-						// hourly labels depend on the 12/24h setting, so they resolve from `hour` at render
+						time,
+						// hourly labels depend on the 12/24h setting, so ForecastPanel derives them from `time` at render
 						label: index === 0 ? (hourly ? 'now' : 'today') : hourly ? '' : weekdayOf(time),
-						hour: Number(time.slice(11, 13)),
 						code: at('weather_code', index),
 						day: !hourly || at('is_day', index) === 1,
 						primary: hourly
@@ -316,16 +296,14 @@ const fallbackHome: City = {
 	timeZone: homeTimeZone,
 }
 
-// ipwho.is first (keyless, CORS, generous), ipapi.co as backup — both throttle bursts with 429s
-const IP_LOOKUPS = ['https://ipwho.is/', 'https://ipapi.co/json/']
-
 const useDetectedHome = () => {
 	const [detected, setDetected] = useState(fallbackHome)
 	const [pending, setPending] = useState(true)
 	useEffect(() => {
 		let cancelled = false
 		const lookup = async () => {
-			for (const url of IP_LOOKUPS) {
+			// ipwho.is first (keyless, CORS, generous), ipapi.co as backup — both throttle bursts with 429s
+			for (const url of ['https://ipwho.is/', 'https://ipapi.co/json/']) {
 				try {
 					const data = await (await fetch(url)).json()
 					if (cancelled || typeof data?.latitude !== 'number' || !data.city) continue
@@ -402,10 +380,9 @@ const useCitySearch = (query: string) => {
 }
 
 // ── Tracks + shared view settings ─────────────────────────────────────────────
-const VIEWS = ['list'] as const
+const VIEWS = ['list', 'bands'] as const
 type View = (typeof VIEWS)[number]
 type Track = { id: string; label: string; city: City }
-type ScrubToWall = (timeZone: string, candidates: number[]) => void
 type Preferences = {
 	hour12: boolean
 	fahrenheit: boolean
@@ -421,7 +398,9 @@ type Settings = Omit<Preferences, 'homeOverride'> & {
 	home: City
 	weather: Record<string, Weather>
 	weatherReady: boolean
-	scrubToWall: ScrubToWall
+	scrubToWall: (timeZone: string, candidates: number[]) => void
+	rename: (id: string, label: string) => void
+	remove: (id: string) => void
 }
 const SettingsContext = createContext<Settings>(null!)
 const useSettings = () => useContext(SettingsContext)
@@ -433,11 +412,6 @@ const loadStored = (): Stored | null => {
 		return null
 	}
 }
-
-const initialRoster = (stored: Stored | null): Track[] =>
-	(stored?.tracks ?? DEMO_TRACKS.filter((entry) => entry.city.timeZone !== homeTimeZone))
-		.filter((entry) => entry.city?.timeZone)
-		.map((entry, index) => ({ id: `track-${index}`, label: entry.label, city: entry.city }))
 
 // ── Editable primitive ────────────────────────────────────────────────────────
 // A display button that swaps in place for a daisy input sized to match its own type scale
@@ -457,7 +431,8 @@ const Editable = ({
 	className?: string
 }) => {
 	const [draft, setDraft] = useState<string | null>(null)
-	const shared = `${EDITABLE_BOX} ${className ?? ''}`
+	// display and input share one box so swapping shifts nothing — 1lh is exactly one line of the caller's own text size
+	const shared = `h-[1lh] leading-tight field-sizing-content ${className ?? ''}`
 	if (draft === null)
 		return (
 			<button
@@ -517,7 +492,7 @@ const EditableTime = ({ timeZone, className }: { timeZone: string; className?: s
 				<input
 					type='time'
 					className='input field-sizing-content font-mono [&::-webkit-calendar-picker-indicator]:hidden'
-					value={wallClock(timeZone, instant)}
+					value={new Date(localMs(timeZone, instant)).toISOString().slice(11, 16)}
 					onChange={(event) => {
 						const [hours, minutes] = event.target.value.split(':')
 						if (hours && minutes) scrubToWall(timeZone, [Number(hours) * 60 + Number(minutes)])
@@ -545,8 +520,7 @@ const WeatherChip = ({ city }: { city: City }) => {
 	if (isUtc(city)) return null
 	if (!weatherReady) return <span className='skeleton text-transparent'>00°</span>
 	const current = weather[weatherKey(city)]
-	const day = isDaytime(instant, city)
-	const Icon = weatherIcon(current?.code ?? 0, day)
+	const Icon = weatherIcon(current?.code ?? 0, solarAltitude(instant, city.latitude, city.longitude) > -6)
 	if (!current) return <Icon className='text-xl' />
 	const temperature = round(current.temperature)
 	const feels = round(current.feelsLike)
@@ -571,8 +545,8 @@ const ForecastPanel = ({ city }: { city: City }) => {
 					{cells.map((cell) => {
 						const Icon = weatherIcon(cell.code, cell.day)
 						return (
-							<div key={cell.key} className='flex flex-col items-center gap-0.5 text-xs opacity-80'>
-								<span>{cell.label || hourLabel(cell.hour, hour12)}</span>
+							<div key={cell.time} className='flex flex-col items-center gap-0.5 text-xs opacity-80'>
+								<span>{cell.label || hourLabel(Number(cell.time.slice(11, 13)), hour12)}</span>
 								<Icon className='text-2xl' />
 								<span className='font-mono'>{cell.primary}</span>
 								<span className='font-mono opacity-60'>{cell.precip >= 10 ? `${cell.precip}%` : ' '}</span>
@@ -586,26 +560,18 @@ const ForecastPanel = ({ city }: { city: City }) => {
 }
 
 // ── Cards ─────────────────────────────────────────────────────────────────────
-type Actions = {
-	rename: (id: string, label: string) => void
-	remove: (id: string) => void
-	scrubToWall: ScrubToWall
-}
-
 const TrackCard = ({
 	track,
-	actions,
 	expanded,
 	onToggle,
 	onEditLocation,
 }: {
 	track: Track
-	actions: Actions
 	expanded: boolean
 	onToggle: () => void
 	onEditLocation: () => void
 }) => {
-	const { instant, home } = useSettings()
+	const { instant, home, rename, remove } = useSettings()
 	const { city, id, label } = track
 	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(home.timeZone, instant)
 	const delta = dayDelta(city.timeZone, home.timeZone, instant)
@@ -636,7 +602,7 @@ const TrackCard = ({
 							<Editable
 								display={label}
 								edit={label}
-								commit={(draft) => draft.trim() && actions.rename(id, draft.trim())}
+								commit={(draft) => draft.trim() && rename(id, draft.trim())}
 								title='rename'
 								className='text-xl font-medium'
 							/>
@@ -666,7 +632,7 @@ const TrackCard = ({
 								type='button'
 								aria-label={`remove ${label}`}
 								className={`${ICON_BUTTON} opacity-0 transition group-hover:opacity-60 hover:opacity-100!`}
-								onClick={() => actions.remove(id)}
+								onClick={() => remove(id)}
 							>
 								✕
 							</button>
@@ -680,6 +646,127 @@ const TrackCard = ({
 	)
 }
 
+// ── Bands view ────────────────────────────────────────────────────────────────
+const BAND_SAMPLE = HOUR / 2 // civil twilight lasts about one half-hour stop, so the gradient interpolates it softly
+const LABEL_STEP = 3 * HOUR
+
+// Wall-clock tick → instant. The offset sampled at the tick itself can be stale near a DST edge; one resample fixes it
+const instantOfLocal = (timeZone: string, local: number) =>
+	local - zoneOffset(timeZone, local - zoneOffset(timeZone, local))
+
+// Day/night at this city across the window, as evenly spaced gradient stops. Tones nudge the theme's own
+// base-200 lighter (day) or darker (night) in oklch — base-100/base-300 alone are near-identical in dark
+// themes. Nightness ramps over 0…-6°, the same civil-twilight cutoff WeatherChip picks day icons by
+const bandGradient = (city: City, start: number) =>
+	`linear-gradient(90deg, ${Array.from({ length: DAY / BAND_SAMPLE + 1 }, (_, index) => {
+		const altitude = solarAltitude(start + index * BAND_SAMPLE, city.latitude, city.longitude)
+		const night = Math.min(1, Math.max(0, -altitude / 6))
+		return `oklch(from var(--color-base-200) calc(l + ${(0.06 - 0.18 * night).toFixed(3)}) c h)`
+	}).join()})`
+
+// The whole row is the band: meta rides on top of the gradient, so bars get the full width
+// and the row auto-sizes to its content before growing into the leftover screen
+const BandRow = ({ label, city, start }: { label: string; city: City; start: number }) => {
+	const { instant, home, hour12, showSeconds } = useSettings()
+	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(home.timeZone, instant)
+	const delta = dayDelta(city.timeZone, home.timeZone, instant)
+	const firstTick = Math.ceil(localMs(city.timeZone, start) / LABEL_STEP) * LABEL_STEP
+	return (
+		<div
+			className='relative grow overflow-hidden rounded-field bg-base-200'
+			style={isUtc(city) ? undefined : { background: bandGradient(city, start) }}
+		>
+			<div className='flex items-baseline justify-between gap-3 p-3'>
+				<div className='flex min-w-0 items-baseline gap-2'>
+					<span className='font-medium'>{label}</span>
+					{city.name.toLowerCase() !== label.toLowerCase() && (
+						<span className='truncate text-xs uppercase tracking-wider opacity-40'>{city.name}</span>
+					)}
+					{delta !== 0 && <span className='badge badge-sm'>{dayDeltaLabel(delta)}</span>}
+				</div>
+				{/* time anchors right so an extra digit grows into the slack instead of shifting the row */}
+				<div className='flex items-baseline gap-2 whitespace-nowrap font-mono'>
+					<span className='text-sm opacity-60'>{formatSignedGap(gap)}</span>
+					<span className='text-2xl font-extralight tracking-tight'>
+						{formatTime(instant, city.timeZone, hour12, showSeconds)}
+					</span>
+				</div>
+			</div>
+			{Array.from({ length: DAY / LABEL_STEP }, (_, index) => firstTick + index * LABEL_STEP).map((tick, index) => (
+				<span
+					key={tick}
+					// narrow bars fit only every other label — a 6h rhythm instead of colliding 3h ones
+					className={`absolute bottom-1 -translate-x-1/2 text-xs opacity-40 ${index % 2 ? 'max-sm:hidden' : ''}`}
+					style={{ left: `${((instantOfLocal(city.timeZone, tick) - start) / DAY) * 100}%` }}
+				>
+					{hourLabel(Math.floor(tick / HOUR) % 24, hour12)}
+				</span>
+			))}
+		</div>
+	)
+}
+
+const BandsView = ({
+	roster,
+	now,
+	scrubbed,
+	onScrub,
+	onSettle,
+}: {
+	roster: Track[]
+	now: number
+	scrubbed: number | null
+	onScrub: (instant: number) => void
+	onSettle: (target: number | null) => void
+}) => {
+	const { instant, home } = useSettings()
+	const surfaceRef = useRef<HTMLDivElement>(null)
+	// ±12h around now, floored to the scrub grain so bars and labels don't creep a hair every tick
+	const start = Math.floor(now / QUARTER_HOUR) * QUARTER_HOUR - DAY / 2
+	const rows = [{ id: 'home', label: home.name, city: home }, ...roster]
+	const instantAt = (clientX: number) => {
+		const { left, width } = surfaceRef.current!.getBoundingClientRect()
+		return start + Math.min(1, Math.max(0, (clientX - left) / width)) * DAY
+	}
+	return (
+		<main className='mx-auto flex w-full max-w-6xl grow flex-col p-4'>
+			<div className='flex items-center justify-center gap-3 pb-4 opacity-70'>
+				<span>{formatDateLong(instant, home.timeZone)}</span>
+				{scrubbed !== null && (
+					<>
+						<span className='font-mono'>{formatSignedGap(instant - now)}</span>
+						<button type='button' className='btn btn-xs' onClick={() => onSettle(null)}>
+							↺ now
+						</button>
+					</>
+				)}
+			</div>
+			{/* Rows share the leftover height; the container is the drag surface so one line
+			    crosses every bar, gaps included. Keyboard scrubbing stays on the global arrow keys */}
+			<div
+				ref={surfaceRef}
+				className='relative flex grow cursor-ew-resize touch-none select-none flex-col gap-2'
+				onPointerDown={(event) => {
+					event.currentTarget.setPointerCapture(event.pointerId)
+					onScrub(instantAt(event.clientX))
+				}}
+				onPointerMove={(event) => {
+					if (event.buttons) onScrub(instantAt(event.clientX))
+				}}
+				onPointerUp={(event) => onSettle(Math.round(instantAt(event.clientX) / QUARTER_HOUR) * QUARTER_HOUR)}
+			>
+				{rows.map((row) => (
+					<BandRow key={row.id} label={row.label} city={row.city} start={start} />
+				))}
+				<div
+					className='pointer-events-none absolute inset-y-0 border-l border-base-content/40'
+					style={{ left: `${((Math.min(start + DAY, Math.max(start, instant)) - start) / DAY) * 100}%` }}
+				/>
+			</div>
+		</main>
+	)
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 type SearchMode = { kind: 'add' | 'home' } | { kind: 'track'; id: string }
 
@@ -687,9 +774,13 @@ const App = () => {
 	const stored = useRef(loadStored()).current
 	const [now, setNow] = useState(() => Date.now())
 	const [scrubbed, setScrubbed] = useState<number | null>(null)
-	const [roster, setRoster] = useState<Track[]>(() => initialRoster(stored))
-	const [hour12, setHour12] = useState(stored?.hour12 ?? localeHour12())
-	const [fahrenheit, setFahrenheit] = useState(stored?.fahrenheit ?? localeFahrenheit())
+	const [roster, setRoster] = useState<Track[]>(() =>
+		(stored?.tracks ?? DEMO_TRACKS.filter((entry) => entry.city.timeZone !== homeTimeZone))
+			.filter((entry) => entry.city?.timeZone)
+			.map((entry, index) => ({ id: `track-${index}`, label: entry.label, city: entry.city })),
+	)
+	const [hour12, setHour12] = useState(stored?.hour12 ?? LOCALE_HOUR12)
+	const [fahrenheit, setFahrenheit] = useState(stored?.fahrenheit ?? LOCALE_FAHRENHEIT)
 	const [showSeconds, setShowSeconds] = useState(stored?.showSeconds ?? true)
 	const [forecastMode, setForecastMode] = useState<ForecastMode>(stored?.forecastMode ?? 'hourly')
 	const [homeOverride, setHomeOverride] = useState<City | null>(stored?.homeOverride ?? null)
@@ -706,9 +797,9 @@ const App = () => {
 	const { matches, searching } = useCitySearch(query)
 	const { weather, ready: weatherReady } = useWeather([home, ...roster.map((track) => track.city)], fahrenheit)
 
-	const stateRef = useRef({ now, instant, searchOpen: false })
+	const stateRef = useRef({ now, instant, searchOpen: false, homeTimeZone: home.timeZone })
 	useEffect(() => {
-		stateRef.current = { now, instant, searchOpen: searchMode !== null }
+		stateRef.current = { now, instant, searchOpen: searchMode !== null, homeTimeZone: home.timeZone }
 	})
 
 	useEffect(() => {
@@ -737,8 +828,11 @@ const App = () => {
 
 	// ── scrub ──
 	const animationRef = useRef(0)
+	// where the last scrub is headed — arrow walks step from here, not the mid-animation instant
+	const scrubTarget = useRef<number | null>(null)
 
 	const animateTo = (target: number | null) => {
+		scrubTarget.current = target
 		cancelAnimationFrame(animationRef.current)
 		const from = stateRef.current.instant
 		const start = performance.now()
@@ -756,16 +850,22 @@ const App = () => {
 		setQuery('')
 	}
 
-	// arrows scrub an hour (shift = a day), n = back to now, esc closes search — or clears the scrub.
-	// Registered once: everything it touches is a stable setter or a ref.
+	// arrows walk 15-min boundaries of home wall time (⌘/ctrl = hours), n = back to now,
+	// esc closes search — or clears the scrub. Registered once: it only touches setters and refs.
 	useEffect(() => {
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key === 'Escape') return stateRef.current.searchOpen ? closeSearch() : animateTo(null)
 			if (event.target instanceof HTMLElement && event.target.closest('input')) return
-			const step = event.shiftKey ? DAY : HOUR
-			if (event.key === 'ArrowRight') animateTo(stateRef.current.instant + step)
-			else if (event.key === 'ArrowLeft') animateTo(stateRef.current.instant - step)
-			else if (event.key === 'n') animateTo(null)
+			if (event.key === 'n') return animateTo(null)
+			if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
+			event.preventDefault() // ⌘← is history-back in macOS browsers
+			const step = event.metaKey || event.ctrlKey ? HOUR : QUARTER_HOUR
+			const forward = event.key === 'ArrowRight'
+			const base = scrubTarget.current ?? stateRef.current.instant
+			const local = localMs(stateRef.current.homeTimeZone, base)
+			// off a boundary walks to the nearest one in that direction; on one, a full step
+			const target = forward ? Math.floor(local / step + 1) * step : Math.ceil(local / step - 1) * step
+			animateTo(base + target - local)
 		}
 		window.addEventListener('keydown', onKeyDown)
 		return () => window.removeEventListener('keydown', onKeyDown)
@@ -816,7 +916,15 @@ const App = () => {
 		if (from !== -1 && to !== -1) setRoster(arrayMove(roster, from, to))
 	}
 
-	const actions: Actions = {
+	const settings: Settings = {
+		instant,
+		home,
+		hour12,
+		showSeconds,
+		fahrenheit,
+		forecastMode,
+		weather,
+		weatherReady,
 		rename: (id, label) => setRoster(roster.map((track) => (track.id === id ? { ...track, label } : track))),
 		remove: (id) => setRoster(roster.filter((track) => track.id !== id)),
 		scrubToWall: (timeZone, candidates) => {
@@ -827,18 +935,6 @@ const App = () => {
 				.reduce((best, delta) => (Math.abs(delta) < Math.abs(best) ? delta : best))
 			animateTo(stateRef.current.instant + nearest * 60_000)
 		},
-	}
-
-	const settings: Settings = {
-		instant,
-		home,
-		hour12,
-		showSeconds,
-		fahrenheit,
-		forecastMode,
-		weather,
-		weatherReady,
-		scrubToWall: actions.scrubToWall,
 	}
 
 	// weather/forecast toggles only matter where weather shows — the list's cards
@@ -884,11 +980,15 @@ const App = () => {
 						</div>
 						<ThemePicker variant='modal' />
 						{toggles.map(({ key, content, label, onClick }) => (
-							<button key={key} type='button' aria-label={label} className={GHOST_BUTTON} onClick={onClick}>
+							<button key={key} type='button' aria-label={label} className='btn btn-ghost btn-xs' onClick={onClick}>
 								{content}
 							</button>
 						))}
 					</header>
+
+					{view === 'bands' && (
+						<BandsView roster={roster} now={now} scrubbed={scrubbed} onScrub={setScrubbed} onSettle={animateTo} />
+					)}
 
 					{view === 'list' && (
 						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-4 pb-28'>
@@ -924,7 +1024,6 @@ const App = () => {
 										<TrackCard
 											key={track.id}
 											track={track}
-											actions={actions}
 											expanded={expandedIds.includes(track.id)}
 											onToggle={() => toggleExpanded(track.id)}
 											onEditLocation={() => openSearch({ kind: 'track', id: track.id }, track.city.name)}
@@ -933,6 +1032,25 @@ const App = () => {
 								</SortableContext>
 							</DndContext>
 						</main>
+					)}
+
+					{FINE_POINTER && (
+						<footer className='mt-auto flex items-center justify-center gap-4 p-4 text-xs opacity-40'>
+							{[
+								['15m', '←', '→'],
+								['1h', '⌘/ctrl', '←', '→'],
+								['now', 'n'],
+							].map(([label, ...keys]) => (
+								<span key={label} className='flex items-center gap-1'>
+									{keys.map((key) => (
+										<kbd key={key} className='kbd kbd-xs'>
+											{key}
+										</kbd>
+									))}
+									{label}
+								</span>
+							))}
+						</footer>
 					)}
 
 					{view === 'list' && (
