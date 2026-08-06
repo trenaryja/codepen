@@ -19,9 +19,7 @@ const flag = (name: string) => {
 }
 
 const selector = flag('selector')
-const clip = flag('clip')
-	?.split(',')
-	.map(Number)
+const clip = flag('clip')?.split(',').map(Number)
 const expression = flag('eval')
 const out = flag('out') ?? `${process.env.TMPDIR ?? '/tmp'}/${slug}.png`
 const scale = Number(flag('scale') ?? (clip ? 3 : 2))
