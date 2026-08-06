@@ -402,7 +402,7 @@ const useCitySearch = (query: string) => {
 }
 
 // ── Tracks + shared view settings ─────────────────────────────────────────────
-const VIEWS = ['list', 'slider'] as const
+const VIEWS = ['list'] as const
 type View = (typeof VIEWS)[number]
 type Track = { id: string; label: string; city: City }
 type ScrubToWall = (timeZone: string, candidates: number[]) => void
@@ -680,114 +680,6 @@ const TrackCard = ({
 	)
 }
 
-// ── Slider view ───────────────────────────────────────────────────────────────
-const snapQuarter = (instant: number) => Math.round(instant / QUARTER_HOUR) * QUARTER_HOUR
-
-const SliderRow = ({ label, city }: { label: string; city: City }) => {
-	const { instant, home, hour12, showSeconds } = useSettings()
-	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(home.timeZone, instant)
-	const delta = dayDelta(city.timeZone, home.timeZone, instant)
-	return (
-		<div className='flex items-baseline justify-between gap-3'>
-			<div className='flex min-w-0 items-baseline gap-2'>
-				<span className='truncate text-xl font-medium'>{label}</span>
-				{city.name.toLowerCase() !== label.toLowerCase() && (
-					<span className='truncate text-xs uppercase tracking-wider opacity-40'>{city.name}</span>
-				)}
-			</div>
-			<div className='flex items-baseline gap-2'>
-				{delta !== 0 && <span className='badge badge-sm'>{dayDeltaLabel(delta)}</span>}
-				<span className='font-mono text-sm opacity-60'>{formatSignedGap(gap)}</span>
-				<span className='font-mono text-3xl font-extralight tracking-tight'>
-					{formatTime(instant, city.timeZone, hour12, showSeconds)}
-				</span>
-			</div>
-		</div>
-	)
-}
-
-const SliderView = ({
-	roster,
-	now,
-	scrubbed,
-	onScrub,
-	onSettle,
-}: {
-	roster: Track[]
-	now: number
-	scrubbed: number | null
-	onScrub: (instant: number) => void
-	onSettle: (instant: number | null) => void
-}) => {
-	const { instant, home } = useSettings()
-	const drag = useRef<{ y: number; instant: number } | null>(null)
-	const wheelSettle = useRef(0)
-	const surface = useRef<HTMLElement>(null)
-	// the full surface height is one day of drag, so scrub speed scales with the window
-	const dayPixels = () => surface.current?.clientHeight ?? 1
-	const centerOffset = (instant - now) / HOUR
-	const firstTick = Math.ceil(centerOffset) - 12
-	return (
-		<main
-			ref={surface}
-			className='relative flex grow cursor-grab touch-none select-none overflow-hidden active:cursor-grabbing'
-			onPointerDown={(event) => {
-				if (event.target instanceof Element && event.target.closest('button')) return
-				event.currentTarget.setPointerCapture(event.pointerId)
-				drag.current = { y: event.clientY, instant }
-			}}
-			onPointerMove={(event) => {
-				if (drag.current) onScrub(drag.current.instant + ((drag.current.y - event.clientY) / dayPixels()) * DAY)
-			}}
-			onPointerUp={() => {
-				if (drag.current) onSettle(snapQuarter(instant))
-				drag.current = null
-			}}
-			onPointerCancel={() => {
-				drag.current = null
-			}}
-			onWheel={(event) => {
-				const next = instant + (event.deltaY / dayPixels()) * DAY
-				onScrub(next)
-				clearTimeout(wheelSettle.current)
-				wheelSettle.current = window.setTimeout(() => onSettle(snapQuarter(next)), 250)
-			}}
-		>
-			{/* ruler tape: hour ticks slide under the fixed center marker; labels every 3h.
-			    1ch marker gutter + 4ch labels ('+12h'); inset keeps edge labels from clipping */}
-			<div className='relative ml-2 w-[5ch] shrink-0 font-mono text-xs opacity-60'>
-				<span className='absolute top-1/2 -translate-y-1/2'>▸</span>
-				<div className='absolute inset-y-3 left-[1ch] right-0'>
-					{Array.from({ length: 25 }, (_, index) => firstTick + index).map((hour) => (
-						<span
-							key={hour}
-							className='absolute -translate-y-1/2'
-							style={{ top: `${50 - ((hour - centerOffset) / 24) * 100}%` }}
-						>
-							{hour % 3 === 0 ? formatSignedGap(hour * HOUR) : '·'}
-						</span>
-					))}
-				</div>
-			</div>
-			<div className='mx-auto flex w-full min-w-0 max-w-xl flex-col justify-center gap-4 p-4'>
-				<div className='flex items-center justify-center gap-3 text-sm opacity-70'>
-					<span>{formatDateLong(instant, home.timeZone)}</span>
-					{scrubbed !== null && <span className='font-mono'>{formatSignedGap(instant - now)}</span>}
-					{scrubbed !== null && (
-						<button type='button' className='btn btn-xs' onClick={() => onSettle(null)}>
-							↺ now
-						</button>
-					)}
-				</div>
-				<SliderRow label={home.name} city={home} />
-				{roster.map((track) => (
-					<SliderRow key={track.id} label={track.label} city={track.city} />
-				))}
-			</div>
-		</main>
-	)
-}
-
 // ── App ───────────────────────────────────────────────────────────────────────
 type SearchMode = { kind: 'add' | 'home' } | { kind: 'track'; id: string }
 
@@ -998,9 +890,6 @@ const App = () => {
 						))}
 					</header>
 
-					{view === 'slider' && (
-						<SliderView roster={roster} now={now} scrubbed={scrubbed} onScrub={setScrubbed} onSettle={animateTo} />
-					)}
 					{view === 'list' && (
 						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-4 pb-28'>
 							<div className='flex flex-col items-center gap-1 py-8'>
