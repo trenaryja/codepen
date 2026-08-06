@@ -8,7 +8,7 @@ const args = process.argv.slice(2)
 const slug = args[0]
 if (!slug || slug.startsWith('--')) {
 	console.error(
-		'usage: shot.ts <slug> [--selector css] [--clip x,y,w,h] [--eval expr] [--out path] [--scale n] [--wait ms] [--light]',
+		'usage: shot.ts <slug> [--selector css] [--clip x,y,w,h] [--eval expr] [--out path] [--scale n] [--wait ms] [--light] [--width px] [--height px]',
 	)
 	process.exit(1)
 }
@@ -45,7 +45,8 @@ const port = await findPort()
 
 const browser = await chromium.launch({ channel: 'chrome' }) // Playwright's pinned chromium build is not in the local cache
 const page = await browser.newPage({
-	viewport: { width: 1280, height: 1000 },
+	viewport: { width: Number(flag('width') ?? 1280), height: Number(flag('height') ?? 1000) },
+	isMobile: Number(flag('width') ?? 1280) < 640, // touch + no hover, so hover-only affordances stay hidden
 	deviceScaleFactor: scale,
 	colorScheme: args.includes('--light') ? 'light' : 'dark',
 })
@@ -56,6 +57,12 @@ page.on('console', (message) => message.type() === 'error' && errors.push(messag
 
 await page.goto(`http://localhost:${port}/p/${slug}/`, { waitUntil: 'networkidle' })
 await page.waitForTimeout(wait) // webfonts swap after networkidle; shooting earlier catches fallback metrics
+
+// states behind a press — an expanded panel, another tab — are only reachable by clicking into them first
+for (const target of args.flatMap((arg, index) => (arg === '--click' ? [args[index + 1]] : []))) {
+	await page.locator(target).first().click()
+	await page.waitForTimeout(400)
+}
 
 if (expression) {
 	console.log(JSON.stringify(await page.evaluate(expression), null, 2))

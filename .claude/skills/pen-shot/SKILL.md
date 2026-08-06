@@ -28,6 +28,8 @@ bun --install=fallback .claude/skills/pen-shot/shot.ts <slug> [flags]
 | `--eval <expr>` | Measure — run the expression in page context, print the result as JSON |
 | `--out <path>` | Default `$TMPDIR/<slug>.png` |
 | `--scale <n>` | deviceScaleFactor, default 2 |
+| `--width <px>` / `--height <px>` | Viewport, default 1280×1000. Under 640 wide also switches the page to touch/no-hover |
+| `--click <selector>` | Press before shooting, to reach a state behind an interaction. Repeatable, applied in order |
 | `--wait <ms>` | Delay after networkidle, default 1200 so webfonts have swapped |
 | `--light` | Light colour scheme; default is dark |
 

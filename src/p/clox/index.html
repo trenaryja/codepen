@@ -1,3 +1,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser"></script>
-<link href="https://cdn.jsdelivr.net/npm/@trenaryja/ui" rel="stylesheet" type="text/css" />
+<!-- imported into a layer, not linked: @trenaryja/ui ships a full precompiled Tailwind build, and as the
+     last plain stylesheet its unvariant `.w-full` would outrank this page's own `sm:w-auto` -->
+<style>
+	@import url('https://cdn.jsdelivr.net/npm/@trenaryja/ui') layer(base);
+</style>
 <div id="root"></div>

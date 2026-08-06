@@ -9,10 +9,10 @@ import {
 } from 'https://esm.sh/@dnd-kit/core'
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from 'https://esm.sh/@dnd-kit/sortable'
 import { CSS } from 'https://esm.sh/@dnd-kit/utilities'
-import { ThemePicker, ThemeProvider, useNativePopover } from 'https://esm.sh/@trenaryja/ui'
+import { ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
-import { LuChevronDown, LuChevronsDownUp, LuChevronsUpDown, LuClock, LuMapPin } from 'https://esm.sh/react-icons/lu'
+import { LuChevronsDownUp, LuChevronsUpDown, LuClock, LuMapPin } from 'https://esm.sh/react-icons/lu'
 import {
 	WiCloudy,
 	WiDayCloudy,
@@ -33,7 +33,6 @@ const DAY = 86_400_000
 const QUARTER_HOUR = 900_000
 const RADIAN = Math.PI / 180
 const STORAGE_KEY = 'clox'
-const ICON_BUTTON = 'btn btn-circle btn-ghost btn-xs'
 
 type City = { name: string; country: string; latitude: number; longitude: number; timeZone: string }
 const UTC_CITY: City = { name: 'UTC', country: '', latitude: 0, longitude: 0, timeZone: 'UTC' }
@@ -223,8 +222,16 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 }
 
 // ── Forecast, fetched per city per mode on first expand ───────────────────────
-// One cell shape serves both modes: hourly = temp + rain %, daily = high/low + rain %
-type ForecastCell = { time: string; label: string; code: number; day: boolean; primary: string; precip: number }
+// One cell shape serves both modes: hourly = temp + rain %, daily = high (primary) / low (secondary) + rain %
+type ForecastCell = {
+	time: string
+	label: string
+	code: number
+	day: boolean
+	primary: string
+	secondary?: string
+	precip: number
+}
 type ForecastMode = 'hourly' | 'daily'
 const FORECAST_FIELDS: Record<ForecastMode, string> = {
 	hourly: 'hourly=temperature_2m,weather_code,precipitation_probability,is_day&forecast_hours=12',
@@ -257,9 +264,8 @@ const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 						label: index === 0 ? (hourly ? 'now' : 'today') : hourly ? '' : weekdayOf(time),
 						code: at('weather_code', index),
 						day: !hourly || at('is_day', index) === 1,
-						primary: hourly
-							? `${at('temperature_2m', index)}°`
-							: `${at('temperature_2m_max', index)}°/${at('temperature_2m_min', index)}°`,
+						primary: `${at(hourly ? 'temperature_2m' : 'temperature_2m_max', index)}°`,
+						secondary: hourly ? undefined : `${at('temperature_2m_min', index)}°`,
 						precip: at(hourly ? 'precipitation_probability' : 'precipitation_probability_max', index),
 					})),
 				)
@@ -466,9 +472,40 @@ const Editable = ({
 
 const EditableTime = ({ timeZone, className }: { timeZone: string; className?: string }) => {
 	const { instant, hour12, showSeconds, scrubToWall } = useSettings()
-	const { triggerProps, contentProps } = useNativePopover({ position: 'bottom center' })
+	const pickerRef = useRef<HTMLInputElement>(null)
 	return (
-		<span className='inline-flex items-center gap-1'>
+		// picker leads, digits trail — so the time itself is what lines up with the edge it's aligned to
+		<span className='relative inline-flex items-center gap-1'>
+			<button
+				type='button'
+				aria-label='pick a time'
+				className='btn btn-circle btn-ghost btn-sm text-lg opacity-40 hover:opacity-100'
+				onClick={() => {
+					// showPicker throws where it isn't allowed — notably a cross-origin frame, which is
+					// what a CodePen preview is. Focusing is the most a fallback can do; phones raise
+					// their own wheel for a focused time input anyway
+					try {
+						pickerRef.current?.showPicker()
+					} catch {
+						pickerRef.current?.focus()
+					}
+				}}
+			>
+				<LuClock />
+			</button>
+			{/* invisible, but rendered and sized like the button: it's what the native picker anchors to */}
+			<input
+				ref={pickerRef}
+				type='time'
+				aria-hidden
+				tabIndex={-1}
+				className='pointer-events-none absolute left-0 size-8 opacity-0'
+				value={new Date(localMs(timeZone, instant)).toISOString().slice(11, 16)}
+				onChange={(event) => {
+					const [hours, minutes] = event.target.value.split(':')
+					if (hours && minutes) scrubToWall(timeZone, [Number(hours) * 60 + Number(minutes)])
+				}}
+			/>
 			<Editable
 				display={formatTime(instant, timeZone, hour12, showSeconds)}
 				edit=''
@@ -480,39 +517,16 @@ const EditableTime = ({ timeZone, className }: { timeZone: string; className?: s
 				placeholder={hour12 ? '9:30p' : '21:30'}
 				className={`font-mono ${className ?? ''}`}
 			/>
-			<button
-				type='button'
-				aria-label='pick a time'
-				className={`${ICON_BUTTON} opacity-40 hover:opacity-100`}
-				{...triggerProps}
-			>
-				<LuClock />
-			</button>
-			<div {...contentProps} className='rounded-box bg-base-200 p-3 shadow-xl'>
-				<input
-					type='time'
-					className='input field-sizing-content font-mono [&::-webkit-calendar-picker-indicator]:hidden'
-					value={new Date(localMs(timeZone, instant)).toISOString().slice(11, 16)}
-					onChange={(event) => {
-						const [hours, minutes] = event.target.value.split(':')
-						if (hours && minutes) scrubToWall(timeZone, [Number(hours) * 60 + Number(minutes)])
-					}}
-				/>
-			</div>
 		</span>
 	)
 }
 
-const ExpandButton = ({ expanded, onClick }: { expanded: boolean; onClick: () => void }) => (
-	<button
-		type='button'
-		aria-label={`${expanded ? 'collapse' : 'expand'} forecast`}
-		className={ICON_BUTTON}
-		onClick={onClick}
-	>
-		<LuChevronDown className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
-	</button>
-)
+// Pressing the block itself expands its forecast; clicks that land on a control belong to that control
+const expandOnClick = (onToggle: () => void) => (event: { target: EventTarget | null }) => {
+	// Element, not HTMLElement — clicks on the react-icons <svg> inside buttons must be caught too
+	if (event.target instanceof Element && event.target.closest('button, input')) return
+	onToggle()
+}
 
 // ── Weather widgets ───────────────────────────────────────────────────────────
 const WeatherChip = ({ city }: { city: City }) => {
@@ -525,7 +539,7 @@ const WeatherChip = ({ city }: { city: City }) => {
 	const temperature = round(current.temperature)
 	const feels = round(current.feelsLike)
 	return (
-		<span className='flex items-center gap-0.5'>
+		<span className='flex flex-wrap items-center gap-x-0.5'>
 			<Icon className='text-xl' />
 			{temperature}°{fahrenheit ? 'F' : 'C'}
 			{Math.abs(feels - temperature) >= 2 && <span className='ml-1 opacity-60'>feels {feels}°</span>}
@@ -548,7 +562,16 @@ const ForecastPanel = ({ city }: { city: City }) => {
 							<div key={cell.time} className='flex flex-col items-center gap-0.5 text-xs opacity-80'>
 								<span>{cell.label || hourLabel(Number(cell.time.slice(11, 13)), hour12)}</span>
 								<Icon className='text-2xl' />
-								<span className='font-mono'>{cell.primary}</span>
+								{/* high over low on phones — seven days of "89°/76°" on one line needs a scroll to read */}
+								<span className='flex flex-col items-center font-mono leading-tight sm:flex-row'>
+									{cell.primary}
+									{cell.secondary && (
+										<>
+											<span className='hidden sm:inline'>/</span>
+											<span className='opacity-60 sm:opacity-100'>{cell.secondary}</span>
+										</>
+									)}
+								</span>
 								<span className='font-mono opacity-60'>{cell.precip >= 10 ? `${cell.precip}%` : ' '}</span>
 							</div>
 						)
@@ -578,8 +601,8 @@ const TrackCard = ({
 	const expandable = !isUtc(city)
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: drag-reorder + expand surface — the chevron <button> is the accessible path, and the div can't be a button (nested-interactive)
-		// biome-ignore lint/a11y/useKeyWithClickEvents: same — keyboard users expand via the chevron button
+		// biome-ignore lint/a11y/noStaticElementInteractions: drag-reorder + expand surface — the div can't be a button (nested-interactive), and the header's expand-all button is the keyboard path
+		// biome-ignore lint/a11y/useKeyWithClickEvents: same — keyboard users expand via the header's expand-all button
 		<div
 			ref={setNodeRef}
 			// Translate, not Transform — Transform includes a scale that stretches cards when
@@ -588,23 +611,18 @@ const TrackCard = ({
 			{...attributes}
 			{...listeners}
 			className={`card group cursor-grab bg-base-200 active:cursor-grabbing ${isDragging ? 'z-10 opacity-60' : ''}`}
-			onClick={(event) => {
-				// Element, not HTMLElement — clicks on the react-icons <svg> inside buttons must be caught too.
-				// [popover] keeps clicks inside the time-picker popover from toggling the card.
-				if (event.target instanceof Element && event.target.closest('button, input, [popover]')) return
-				if (expandable) onToggle()
-			}}
+			onClick={expandOnClick(() => expandable && onToggle())}
 		>
-			<div className='card-body px-5 py-4'>
-				<div className='flex items-center justify-between gap-3'>
-					<div className='min-w-0'>
+			<div className='card-body gap-2 px-4 py-3 sm:px-5 sm:py-4'>
+				<div className='flex items-center gap-2 sm:gap-3'>
+					<div className='min-w-0 grow'>
 						<div className='flex items-baseline gap-2'>
 							<Editable
 								display={label}
 								edit={label}
 								commit={(draft) => draft.trim() && rename(id, draft.trim())}
 								title='rename'
-								className='text-xl font-medium'
+								className='text-lg font-medium sm:text-xl'
 							/>
 							<button
 								type='button'
@@ -619,26 +637,22 @@ const TrackCard = ({
 							<WeatherChip city={city} />
 						</div>
 					</div>
-					<div className='flex items-center gap-1'>
-						<div className='flex flex-col items-end'>
-							<EditableTime timeZone={city.timeZone} className='text-5xl font-extralight tracking-tight' />
-							<div className='flex items-center gap-2 font-mono text-sm opacity-60'>
-								<span>{formatSignedGap(gap)}</span>
-								{delta !== 0 && <span className='badge badge-sm'>{dayDeltaLabel(delta)}</span>}
-							</div>
-						</div>
-						<div className='flex flex-col items-center gap-1'>
-							<button
-								type='button'
-								aria-label={`remove ${label}`}
-								className={`${ICON_BUTTON} opacity-0 transition group-hover:opacity-60 hover:opacity-100!`}
-								onClick={() => remove(id)}
-							>
-								✕
-							</button>
-							{expandable && <ExpandButton expanded={expanded} onClick={onToggle} />}
+					<div className='flex shrink-0 flex-col items-end'>
+						<EditableTime timeZone={city.timeZone} className='text-3xl font-extralight tracking-tight sm:text-5xl' />
+						<div className='flex items-center gap-2 font-mono text-xs opacity-60 sm:text-sm'>
+							<span>{formatSignedGap(gap)}</span>
+							{delta !== 0 && <span className='badge badge-sm'>{dayDeltaLabel(delta)}</span>}
 						</div>
 					</div>
+					{/* no hover on touch, so the remove button only fades out where a pointer can bring it back */}
+					<button
+						type='button'
+						aria-label={`remove ${label}`}
+						className={`btn btn-circle btn-xs transition sm:opacity-0 sm:group-hover:opacity-60 hover:opacity-100! absolute -top-2 -right-2`}
+						onClick={() => remove(id)}
+					>
+						✕
+					</button>
 				</div>
 				{expanded && expandable && <ForecastPanel city={city} />}
 			</div>
@@ -676,9 +690,9 @@ const BandRow = ({ label, city, start }: { label: string; city: City; start: num
 			className='relative grow overflow-hidden rounded-field bg-base-200'
 			style={isUtc(city) ? undefined : { background: bandGradient(city, start) }}
 		>
-			<div className='flex items-baseline justify-between gap-3 p-3'>
+			<div className='flex items-baseline justify-between gap-2 p-2 pb-5 sm:gap-3 sm:p-3 sm:pb-3'>
 				<div className='flex min-w-0 items-baseline gap-2'>
-					<span className='font-medium'>{label}</span>
+					<span className='truncate font-medium'>{label}</span>
 					{city.name.toLowerCase() !== label.toLowerCase() && (
 						<span className='truncate text-xs uppercase tracking-wider opacity-40'>{city.name}</span>
 					)}
@@ -686,8 +700,8 @@ const BandRow = ({ label, city, start }: { label: string; city: City; start: num
 				</div>
 				{/* time anchors right so an extra digit grows into the slack instead of shifting the row */}
 				<div className='flex items-baseline gap-2 whitespace-nowrap font-mono'>
-					<span className='text-sm opacity-60'>{formatSignedGap(gap)}</span>
-					<span className='text-2xl font-extralight tracking-tight'>
+					<span className='text-xs opacity-60 sm:text-sm'>{formatSignedGap(gap)}</span>
+					<span className='text-xl font-extralight tracking-tight sm:text-2xl'>
 						{formatTime(instant, city.timeZone, hour12, showSeconds)}
 					</span>
 				</div>
@@ -729,8 +743,8 @@ const BandsView = ({
 		return start + Math.min(1, Math.max(0, (clientX - left) / width)) * DAY
 	}
 	return (
-		<main className='mx-auto flex w-full max-w-6xl grow flex-col p-4'>
-			<div className='flex items-center justify-center gap-3 pb-4 opacity-70'>
+		<main className='mx-auto flex w-full max-w-6xl grow flex-col p-3 sm:p-4'>
+			<div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 pb-4 text-sm opacity-70 sm:text-base'>
 				<span>{formatDateLong(instant, home.timeZone)}</span>
 				{scrubbed !== null && (
 					<>
@@ -781,8 +795,9 @@ const App = () => {
 	)
 	const [hour12, setHour12] = useState(stored?.hour12 ?? LOCALE_HOUR12)
 	const [fahrenheit, setFahrenheit] = useState(stored?.fahrenheit ?? LOCALE_FAHRENHEIT)
-	const [showSeconds, setShowSeconds] = useState(stored?.showSeconds ?? true)
-	const [forecastMode, setForecastMode] = useState<ForecastMode>(stored?.forecastMode ?? 'hourly')
+	// quietest defaults win: no seconds ticking, and the 7-cell daily strip over the 12-cell hourly one
+	const [showSeconds, setShowSeconds] = useState(stored?.showSeconds ?? false)
+	const [forecastMode, setForecastMode] = useState<ForecastMode>(stored?.forecastMode ?? 'daily')
 	const [homeOverride, setHomeOverride] = useState<City | null>(stored?.homeOverride ?? null)
 	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
 	const [query, setQuery] = useState('')
@@ -963,8 +978,10 @@ const App = () => {
 		<ThemeProvider>
 			<SettingsContext value={settings}>
 				<div className='flex min-h-dvh flex-col'>
-					<header className='flex items-center gap-2 px-4 py-3'>
-						<div role='tablist' className='tabs tabs-border tabs-sm mr-auto'>
+					{/* shrink-0 keeps the tablist from being squeezed into a two-line stack; the toggle
+					    group wraps whole, and its ml-auto keeps it right-aligned on the line it lands on */}
+					<header className='flex flex-wrap items-center gap-2 px-4 py-3'>
+						<div role='tablist' className='tabs tabs-border tabs-sm mr-auto shrink-0'>
 							{VIEWS.map((entry) => (
 								<button
 									key={entry}
@@ -978,12 +995,14 @@ const App = () => {
 								</button>
 							))}
 						</div>
-						<ThemePicker variant='modal' />
-						{toggles.map(({ key, content, label, onClick }) => (
-							<button key={key} type='button' aria-label={label} className='btn btn-ghost btn-xs' onClick={onClick}>
-								{content}
-							</button>
-						))}
+						<div className='ml-auto flex items-center gap-1 sm:gap-2'>
+							<ThemePicker variant='modal' />
+							{toggles.map(({ key, content, label, onClick }) => (
+								<button key={key} type='button' aria-label={label} className='btn btn-ghost btn-xs' onClick={onClick}>
+									{content}
+								</button>
+							))}
+						</div>
 					</header>
 
 					{view === 'bands' && (
@@ -991,10 +1010,18 @@ const App = () => {
 					)}
 
 					{view === 'list' && (
-						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-4 pb-28'>
-							<div className='flex flex-col items-center gap-1 py-8'>
-								<EditableTime timeZone={home.timeZone} className='text-7xl font-extralight tracking-tight' />
-								<div className='flex items-center gap-3 text-base opacity-70'>
+						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-3 pb-28 sm:p-4 sm:pb-28'>
+							{/* biome-ignore lint/a11y/noStaticElementInteractions: expand surface, like the cards below it — keyboard users expand via the header's expand-all button */}
+							{/* biome-ignore lint/a11y/useKeyWithClickEvents: same */}
+							<div
+								className='flex cursor-pointer flex-col items-center gap-1 py-6 sm:py-8'
+								onClick={expandOnClick(() => toggleExpanded('home'))}
+							>
+								<EditableTime
+									timeZone={home.timeZone}
+									className='text-5xl font-extralight tracking-tight sm:text-7xl'
+								/>
+								<div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm opacity-70 sm:text-base'>
 									<span>{formatDateLong(instant, home.timeZone)}</span>
 									<WeatherChip city={home} />
 									{!homeOverride && homePending ? (
@@ -1014,7 +1041,6 @@ const App = () => {
 											↺ now
 										</button>
 									)}
-									<ExpandButton expanded={homeExpanded} onClick={() => toggleExpanded('home')} />
 								</div>
 								{homeExpanded && <ForecastPanel city={home} />}
 							</div>
