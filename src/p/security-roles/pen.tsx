@@ -325,7 +325,7 @@ const UserCard = ({
 				<Fieldset
 					legend='Account'
 					className='bg-base-300/40 rounded-lg p-3'
-					legendClassName='badge badge-soft badge-sm'
+					classNames={{ legend: 'badge badge-soft badge-sm' }}
 				>
 					<div className='grid grid-cols-2 gap-1.5'>
 						<Field label='First Name'>
@@ -363,7 +363,7 @@ const UserCard = ({
 				<Fieldset
 					legend='Security'
 					className='bg-base-300/40 rounded-lg p-3'
-					legendClassName='badge badge-soft badge-sm'
+					classNames={{ legend: 'badge badge-soft badge-sm' }}
 				>
 					<Field label='System Admin'>
 						<Toggle
@@ -378,7 +378,7 @@ const UserCard = ({
 				<Fieldset
 					legend='Actions'
 					className='bg-base-300/40 rounded-lg p-3'
-					legendClassName='badge badge-soft badge-sm'
+					classNames={{ legend: 'badge badge-soft badge-sm' }}
 				>
 					<div className='flex flex-wrap gap-2'>
 						<Button
