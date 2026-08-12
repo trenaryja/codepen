@@ -9,3 +9,4 @@ dist/
 !.claude/skills/
 .vercel/
 .env*.local
+.worktrees/
