@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import babel from '@rolldown/plugin-babel'
 import tailwindcss from '@tailwindcss/vite'
-import react from '@vitejs/plugin-react'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import type { Plugin } from 'vite'
 import { defineConfig } from 'vite'
 
@@ -135,7 +136,10 @@ function discoverPenEntries(): Record<string, string> {
 }
 
 export default defineConfig({
-	plugins: [tailwindcss(), react(), esmShPlugin(), penWrapperPlugin()],
+	// `esmShPlugin` is `enforce: 'pre'`, so pen imports are rewritten from esm.sh URLs to bare
+	// specifiers before the compiler pass — it then emits `react/compiler-runtime`, which resolves
+	// to the same local React instance the pens render with.
+	plugins: [tailwindcss(), react(), babel({ presets: [reactCompilerPreset()] }), esmShPlugin(), penWrapperPlugin()],
 	server: {},
 	build: {
 		rollupOptions: {
