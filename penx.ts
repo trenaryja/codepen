@@ -104,6 +104,17 @@ function esmShToNpm(url: string): string {
 	return [nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
 }
 
+const npmPkgRoot = (npmSpec: string) =>
+	npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
+
+// package.json is the source of truth for what a pen may import, never node_modules — an orphaned
+// install dir (dropped from package.json but never pruned) otherwise reads as a satisfied dependency,
+// so the package silently resolves locally while nothing keeps it installed or up to date
+function declaredPkgs(): Set<string> {
+	const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'))
+	return new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})])
+}
+
 function hasOwnTypes(pkgName: string): boolean {
 	try {
 		const pkg = JSON.parse(readFileSync(join(ROOT, 'node_modules', pkgName, 'package.json'), 'utf-8'))
@@ -137,22 +148,20 @@ function syncEsmDeclarations(importUrls: string[]): void {
 		blocks.set(m[1], m[0])
 	}
 
-	let added = 0
+	const imported = new Set(importUrls)
+	const orphaned = [...blocks.keys()].filter((url) => !imported.has(url))
+	for (const url of orphaned) blocks.delete(url)
 
-	for (const url of importUrls) {
-		if (blocks.has(url)) continue
-		const npmSpec = esmShToNpm(url)
-		const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
-		if (!existsSync(join(ROOT, 'node_modules', pkgRoot))) continue
-		blocks.set(url, `declare module '${url}' {\n\texport * from '${npmSpec}'\n}`)
-		added += 1
-	}
+	const declared = declaredPkgs()
+	const added = importUrls.filter((url) => !blocks.has(url) && declared.has(npmPkgRoot(esmShToNpm(url))))
+	for (const url of added) blocks.set(url, `declare module '${url}' {\n\texport * from '${esmShToNpm(url)}'\n}`)
 
-	if (added === 0) return
+	if (added.length === 0 && orphaned.length === 0) return
 
 	const sorted = [...blocks.entries()].sort(([a], [b]) => a.localeCompare(b))
 	writeFileSync(dtsPath, `${sorted.map(([, block]) => block).join('\n\n')}\n\ndeclare module 'https://esm.sh/*'\n`)
-	console.log(`✓ Added ${added} declaration(s) to esm-sh.d.ts`)
+	if (added.length > 0) console.log(`✓ Added ${added.length} declaration(s): ${added.join(', ')}`)
+	if (orphaned.length > 0) console.log(`✓ Removed ${orphaned.length} unused declaration(s): ${orphaned.join(', ')}`)
 }
 
 async function readMultiline(): Promise<string> {
@@ -356,7 +365,7 @@ async function importUrl(slugFlag?: string, urlFlag?: string): Promise<void> {
 	note(`Preview: http://localhost:5173/p/${slug}/`, `Imported to p/${slug}/`)
 }
 
-function scanEsmImports(): { fullUrls: Set<string>; referencedPkgs: Set<string>; uninstalled: string[] } {
+function scanEsmImports(): { fullUrls: Set<string>; referencedPkgs: Set<string>; undeclared: string[] } {
 	const files: string[] = []
 
 	for (const dir of ['p', 't']) {
@@ -381,14 +390,14 @@ function scanEsmImports(): { fullUrls: Set<string>; referencedPkgs: Set<string>;
 		for (const m of readFileSync(file, 'utf-8').matchAll(esmPattern)) {
 			const url = `https://esm.sh/${m[1]}`
 			fullUrls.add(url)
-			const npm = esmShToNpm(url)
-			referencedPkgs.add(npm.startsWith('@') ? npm.split('/').slice(0, 2).join('/') : npm.split('/')[0])
+			referencedPkgs.add(npmPkgRoot(esmShToNpm(url)))
 		}
 	}
 
-	const uninstalled = [...referencedPkgs].filter((pkg) => !existsSync(join(ROOT, 'node_modules', pkg)))
+	const declared = declaredPkgs()
+	const undeclared = [...referencedPkgs].filter((pkg) => !declared.has(pkg))
 
-	return { fullUrls, referencedPkgs, uninstalled }
+	return { fullUrls, referencedPkgs, undeclared }
 }
 
 function findStaleDeps(referencedPkgs: Set<string>): string[] {
@@ -400,43 +409,43 @@ function findStaleDeps(referencedPkgs: Set<string>): string[] {
 
 type CheckResult = {
 	fullUrls: Set<string>
-	uninstalled: string[]
+	undeclared: string[]
 	stale: string[]
 }
 
 function runCheck(): CheckResult {
-	const { fullUrls, referencedPkgs, uninstalled } = scanEsmImports()
+	const { fullUrls, referencedPkgs, undeclared } = scanEsmImports()
 	const stale = findStaleDeps(referencedPkgs)
 	syncEsmDeclarations([...fullUrls])
 
-	return { fullUrls, uninstalled, stale }
+	return { fullUrls, undeclared, stale }
 }
 
-function formatIssues(uninstalled: string[], stale: string[]): string {
+function formatIssues(undeclared: string[], stale: string[]): string {
 	const lines: string[] = []
-	if (uninstalled.length > 0) lines.push(`Missing: ${uninstalled.join(', ')}`)
-	if (stale.length > 0) lines.push(`Stale: ${stale.join(', ')}`)
+	if (undeclared.length > 0) lines.push(`Imported but not in package.json: ${undeclared.join(', ')}`)
+	if (stale.length > 0) lines.push(`In package.json but imported by no pen: ${stale.join(', ')}`)
 
 	return lines.join('\n')
 }
 
 async function cmdCheck(opts: { fix?: boolean }): Promise<void> {
-	const { fullUrls, uninstalled, stale } = runCheck()
-	const hasIssues = uninstalled.length > 0 || stale.length > 0
+	const { fullUrls, undeclared, stale } = runCheck()
+	const hasIssues = undeclared.length > 0 || stale.length > 0
 
-	if (!hasIssues) return note('All esm.sh imports are installed and no stale dependencies found.', 'Check')
+	if (!hasIssues) return note('Every esm.sh import is a declared dependency, and none are unused.', 'Check')
 
-	note(formatIssues(uninstalled, stale), 'Issues found')
+	note(formatIssues(undeclared, stale), 'Issues found')
 
 	if (!opts.fix) fail(`Run: penx check --fix`)
 
-	// Fix missing packages
-	if (uninstalled.length > 0) {
+	// Fix undeclared packages
+	if (undeclared.length > 0) {
 		const s = spinner()
-		s.start(`Installing ${uninstalled.length} missing package(s)…`)
-		spawnSync('bun', ['add', ...uninstalled], { cwd: ROOT, stdio: 'pipe' })
-		s.stop(`Installed ${uninstalled.length} package(s).`)
-		installAtTypes(uninstalled.filter((pkg) => !hasOwnTypes(pkg)))
+		s.start(`Installing ${undeclared.length} undeclared package(s)…`)
+		spawnSync('bun', ['add', ...undeclared], { cwd: ROOT, stdio: 'pipe' })
+		s.stop(`Installed ${undeclared.length} package(s).`)
+		installAtTypes(undeclared.filter((pkg) => !hasOwnTypes(pkg)))
 		syncEsmDeclarations([...fullUrls])
 	}
 

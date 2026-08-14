@@ -140,7 +140,6 @@ export default defineConfig({
 	// specifiers before the compiler pass — it then emits `react/compiler-runtime`, which resolves
 	// to the same local React instance the pens render with.
 	plugins: [tailwindcss(), react(), babel({ presets: [reactCompilerPreset()] }), esmShPlugin(), penWrapperPlugin()],
-	server: {},
 	build: {
 		rollupOptions: {
 			input: discoverPenEntries(),
