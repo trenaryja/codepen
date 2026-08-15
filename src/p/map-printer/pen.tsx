@@ -5,12 +5,12 @@ import {
 	RadioGroup,
 	Select,
 	ThemeProvider,
-	Toaster,
 	toast,
+	Toaster,
 	useTheme,
 } from 'https://esm.sh/@trenaryja/ui'
 import mapboxgl from 'https://esm.sh/mapbox-gl'
-import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	FaBorderAll,
@@ -43,7 +43,9 @@ const STYLES = {
 } as const
 
 type MapStyle = keyof typeof STYLES
-type Format = 'png' | 'jpg'
+
+type Format = 'jpg' | 'png'
+
 type TileBounds = { north: number; south: number; east: number; west: number }
 
 const ZERO_BOUNDS: TileBounds = { north: 0, south: 0, east: 0, west: 0 }
@@ -56,19 +58,25 @@ const { CANVAS_MAX_TILES_PER_DIM, CANVAS_MAX_TILE_AREA } = (() => {
 			const ctx = c.getContext('2d')
 			if (!ctx) return false
 			ctx.fillRect(0, 0, 1, 1)
-			return ctx.getImageData(0, 0, 1, 1).data[3] > 0
+			return ctx.getImageData(0, 0, 1, 1).data[3]! > 0
 		} catch {
 			return false
 		}
 	}
-	const search = (lo: number, hi: number, ok: (n: number) => boolean) => {
+
+	const search = (low: number, high: number, ok: (n: number) => boolean) => {
+		let lo = low
+		let hi = high
+
 		while (lo < hi) {
 			const mid = Math.ceil((lo + hi) / 2)
 			if (ok(mid)) lo = mid
 			else hi = mid - 1
 		}
+
 		return lo
 	}
+
 	const maxDim = search(1, 32, (n) => test(n * TILE_SIZE, TILE_SIZE))
 	const maxArea = search(1, maxDim ** 2, (n) => {
 		const side = Math.min(Math.ceil(Math.sqrt(n)), maxDim)
@@ -124,7 +132,8 @@ const chunkGrid = (cols: number, rows: number) => {
 }
 
 const syncTileGrid = (map: mapboxgl.Map, show: boolean, bounds: TileBounds, zoom: number) => {
-	const source = map.getSource('tile-grid') as mapboxgl.GeoJSONSource | undefined
+	const source = map.getSource<mapboxgl.GeoJSONSource>('tile-grid')
+
 	if (!show) {
 		if (source) map.setLayoutProperty('tile-grid-lines', 'visibility', 'none')
 		return
@@ -156,6 +165,7 @@ const syncTileGrid = (map: mapboxgl.Map, show: boolean, bounds: TileBounds, zoom
 	]
 
 	const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features }
+
 	if (source) {
 		source.setData(data)
 		map.setLayoutProperty('tile-grid-lines', 'visibility', 'visible')
@@ -171,7 +181,9 @@ const syncTileGrid = (map: mapboxgl.Map, show: boolean, bounds: TileBounds, zoom
 }
 
 const getPosition = () =>
-	new Promise<GeolocationPosition>((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject))
+	new Promise<GeolocationPosition>((resolve, reject) => {
+		navigator.geolocation.getCurrentPosition(resolve, reject)
+	})
 		.then((p) => [p.coords.longitude, p.coords.latitude] satisfies [number, number])
 		.catch(() => [-74.006, 40.7128] satisfies [number, number])
 
@@ -224,6 +236,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 				if (!ctx) throw new Error('Could not create canvas context')
 
 				const pieces: { url: string; dx: number; dy: number }[] = []
+
 				for (let x = 0; x < cCols; x++) {
 					for (let y = 0; y < cRows; y++) {
 						const tileX = bounds.west + startCol + x
@@ -239,6 +252,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 				for (let i = 0; i < pieces.length; i += TILE_BATCH_SIZE) {
 					signal.throwIfAborted()
 					await Promise.all(
+						// eslint-disable-next-line @typescript-eslint/no-loop-func -- each batch is awaited before the next, so the totalLoaded closure runs sequentially
 						pieces.slice(i, i + TILE_BATCH_SIZE).map(async (p) => {
 							const res = await fetch(p.url, { signal, cache: 'force-cache' })
 							if (!res.ok) throw new Error(`Tile fetch failed: ${res.status}`)
@@ -259,6 +273,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 
 				const type = format === 'jpg' ? 'image/jpeg' : 'image/png'
 				let blob: Blob
+
 				try {
 					blob = await canvas.convertToBlob({ type, ...(format === 'jpg' && { quality: 0.92 }) })
 				} catch (blobErr) {
@@ -268,6 +283,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 							`${blobErr instanceof Error ? blobErr.message : blobErr}`,
 					)
 				}
+
 				totalSize += blob.size
 
 				const name = multiFile ? `${stem}_r${cy}c${cx}${ext}` : `${stem}${ext}`
@@ -287,6 +303,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 			toast.dismiss(id)
 			return
 		}
+
 		toast.error('Download failed', { id, description: e instanceof Error ? e.message : 'Unknown error' })
 		throw e
 	} finally {
@@ -311,13 +328,14 @@ const MapPrinter = () => {
 	const [style, setStyle] = useState<MapStyle>(() => DEFAULT_MAP_STYLE[colorScheme])
 	const [downloading, setDownloading] = useState(false)
 	const [showGrid, setShowGrid] = useState(false)
-	const showGridRef = useRef(showGrid)
-	showGridRef.current = showGrid
 
-	useEffect(() => {
-		const container = containerRef.current
-		if (!container) return
+	// Reads showGrid at style.load time, not at map-creation time
+	const onStyleLoad = useEffectEvent((map: mapboxgl.Map) => {
+		const z = Math.floor(map.getZoom())
+		syncTileGrid(map, showGrid, getTileBounds(map, z), z)
+	})
 
+	const createMap = useEffectEvent((container: HTMLDivElement) => {
 		getPosition().then((center) => {
 			const map = new mapboxgl.Map({
 				container,
@@ -330,17 +348,22 @@ const MapPrinter = () => {
 
 			const sync = () => {
 				const z = Math.floor(map.getZoom())
+				// eslint-disable-next-line @eslint-react/set-state-in-effect -- sync runs from mapbox moveend/load listeners, not the effect body
 				setCurrentZoom(z)
+				// eslint-disable-next-line @eslint-react/set-state-in-effect -- sync runs from mapbox moveend/load listeners, not the effect body
 				setBounds(getTileBounds(map, z))
 			}
 
 			map.on('moveend', sync)
 			map.on('load', sync)
-			map.on('style.load', () => {
-				const z = Math.floor(map.getZoom())
-				syncTileGrid(map, showGridRef.current, getTileBounds(map, z), z)
-			})
+			map.on('style.load', () => onStyleLoad(map))
 		})
+	})
+
+	useEffect(() => {
+		const container = containerRef.current
+		if (!container) return
+		createMap(container)
 
 		return () => {
 			mapRef.current?.remove()
@@ -348,10 +371,16 @@ const MapPrinter = () => {
 		}
 	}, [])
 
+	// Track the theme as it changes, then restyle the map in the effect below
+	const [prevColorScheme, setPrevColorScheme] = useState(colorScheme)
+
+	if (prevColorScheme !== colorScheme) {
+		setPrevColorScheme(colorScheme)
+		setStyle(DEFAULT_MAP_STYLE[colorScheme])
+	}
+
 	useEffect(() => {
-		const s = DEFAULT_MAP_STYLE[colorScheme]
-		setStyle(s)
-		mapRef.current?.setStyle(`mapbox://styles/mapbox/${s}`)
+		mapRef.current?.setStyle(`mapbox://styles/mapbox/${DEFAULT_MAP_STYLE[colorScheme]}`)
 	}, [colorScheme])
 
 	useEffect(() => {
@@ -363,6 +392,7 @@ const MapPrinter = () => {
 	}, [showGrid, bounds, currentZoom, zoomLocked, lockedZoom])
 
 	const zoom = zoomLocked ? lockedZoom : currentZoom
+	// eslint-disable-next-line react-hooks/refs, @eslint-react/refs -- the mapbox instance is an external store; bounds at the locked zoom are derived from it on demand
 	const effectiveBounds = zoomLocked ? (mapRef.current ? getTileBounds(mapRef.current, zoom) : ZERO_BOUNDS) : bounds
 	const { cols, rows } = boundsToGrid(effectiveBounds)
 	const tileCount = cols * rows
@@ -383,12 +413,14 @@ const MapPrinter = () => {
 								const geoBounds = mapRef.current?.getBounds()
 								if (!geoBounds) return
 								const nw = geoBounds.getNorthWest()
+								// eslint-disable-next-line no-alert -- filename prompt is the pen's save UX
 								const name = prompt(
 									'Filename:',
 									`map_z${zoom}_[${nw.lat.toFixed(4)}_${nw.lng.toFixed(4)}]_${cols}x${rows}.${format}`,
 								)
 								if (!name) return
 								setDownloading(true)
+
 								try {
 									await downloadMap(effectiveBounds, zoom, format, style, name)
 								} finally {

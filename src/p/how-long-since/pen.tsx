@@ -48,7 +48,7 @@ function Root() {
 		return () => clearInterval(id)
 	}, [])
 
-	const primaryUnit = elapsed.find((u) => u.value >= 1) ?? elapsed[elapsed.length - 1]
+	const primaryUnit = elapsed.find((u) => u.value >= 1) ?? elapsed.at(-1)!
 	const directionLabel = isFuture ? 'until' : 'since'
 
 	return (

@@ -100,15 +100,18 @@ const LEVELS = ['very_low', 'low', 'average', 'high', 'very_high'] as const
 type Level = (typeof LEVELS)[number]
 
 type RangeValue = { level: Level } | { min?: number; max?: number }
-type FilterValue = string[] | RangeValue | boolean | string
+
+type FilterValue = boolean | string | RangeValue | string[]
+
 type Filters = Record<string, FilterValue>
 
 type FieldBase = { id: string; label: string; width: number; hint: string }
+
 type Field = FieldBase &
 	(
+		| { kind: 'bool'; get: (mon: Mon) => boolean }
 		| { kind: 'enum'; values: readonly string[]; get: (mon: Mon) => string[] }
 		| { kind: 'range'; get: (mon: Mon) => number; decimals?: number }
-		| { kind: 'bool'; get: (mon: Mon) => boolean }
 		| { kind: 'text'; get: (mon: Mon) => string }
 	)
 
@@ -227,14 +230,14 @@ const deriveMon = (raw: RawMon): Mon => {
 		name: raw.name.english,
 		thumbnail: raw.image.thumbnail,
 		types: raw.type,
-		color: COLORS[Number(COLOR_CODES[raw.id - 1] ?? 0)],
+		color: COLORS[Number(COLOR_CODES[raw.id - 1] ?? 0)]!, // COLOR_CODES digits are all < COLORS.length
 		generation: GENERATION_ENDS.findIndex((end) => raw.id <= end) + 1,
 		...stats,
 		total: R.sum(R.values(stats)),
 		height: Number.parseFloat(raw.profile?.height ?? '0') || 0,
 		weight: Number.parseFloat(raw.profile?.weight ?? '0') || 0,
 		eggGroups: raw.profile?.egg ?? [],
-		abilities: (raw.profile?.ability ?? []).map(([name]) => name),
+		abilities: (raw.profile?.ability ?? []).map(([name]) => name!), // dataset ability entries are [name, hidden] pairs
 		legendary: LEGENDARY.has(raw.id),
 		mythical: MYTHICAL.has(raw.id),
 		finalForm: !raw.evolution?.next,
@@ -249,17 +252,18 @@ const deriveMon = (raw: RawMon): Mon => {
  * definitions referentially stable.
  */
 type RangeStat = { min: number; max: number; levels: Record<Level, [number | null, number | null]> }
+
 const RANGE_STATS: Record<string, RangeStat> = {}
 
 const percentile = (sorted: number[], p: number) =>
-	sorted[Math.min(sorted.length - 1, Math.round((p / 100) * (sorted.length - 1)))]
+	sorted[Math.min(sorted.length - 1, Math.round((p / 100) * (sorted.length - 1)))]! // index clamped to length - 1
 
 const computeRangeStats = (rows: Mon[]) => {
 	for (const field of FIELDS) {
 		if (field.kind !== 'range') continue
 		const sorted = R.sortBy(rows.map(field.get), R.identity())
 		RANGE_STATS[field.id] = {
-			min: sorted[0],
+			min: sorted[0]!,
 			max: sorted.at(-1)!,
 			levels: {
 				very_low: [null, percentile(sorted, 10)],
@@ -300,6 +304,7 @@ const matchField = (field: Field, mon: Mon, value: FilterValue) => {
 const sanitizeFilters = (raw: unknown): Filters => {
 	if (!R.isPlainObject(raw)) return {}
 	const out: Filters = {}
+
 	for (const [id, value] of R.entries(raw)) {
 		const field = FIELD_BY_ID[id]
 		if (!field || value == null) continue
@@ -320,6 +325,7 @@ const sanitizeFilters = (raw: unknown): Filters => {
 			if (typeof value === 'boolean') out[id] = value
 		} else if (typeof value === 'string' && value.trim()) out[id] = value
 	}
+
 	return out
 }
 
@@ -542,6 +548,7 @@ const closeOpen = (text: string) => {
 	const stack: string[] = []
 	let inString = false
 	let escaped = false
+
 	for (const char of text) {
 		if (escaped) escaped = false
 		else if (char === '\\') escaped = true
@@ -549,12 +556,14 @@ const closeOpen = (text: string) => {
 		else if (!inString && (char === '{' || char === '[')) stack.push(char === '{' ? '}' : ']')
 		else if (!inString && (char === '}' || char === ']')) stack.pop()
 	}
+
 	const closed = (inString ? `${text}"` : text).replace(/[,:]\s*$/, '')
 	return closed + stack.reverse().join('')
 }
 
 const repairJson = (text: string): unknown => {
 	let work = text.trim()
+
 	for (let attempt = 0; attempt < 8 && work.length > 1; attempt++) {
 		try {
 			return JSON.parse(closeOpen(work))
@@ -566,6 +575,7 @@ const repairJson = (text: string): unknown => {
 			else return null
 		}
 	}
+
 	return null
 }
 
@@ -601,7 +611,12 @@ const CDN = `https://esm${'.'}run/`
 const nextPaint = () =>
 	new Promise((resolve) => {
 		const done = () => resolve(undefined)
-		if (document.visibilityState === 'hidden') return void setTimeout(done, 0)
+
+		if (document.visibilityState === 'hidden') {
+			setTimeout(done, 0)
+			return
+		}
+
 		setTimeout(done, 2000)
 		requestAnimationFrame(() => requestAnimationFrame(done))
 	})
@@ -691,10 +706,12 @@ type ControlProps = {
 const EnumControl = ({ field, value, onChange }: ControlProps) => {
 	const selected = (value as string[] | undefined) ?? []
 	const values = field.kind === 'enum' ? field.values : []
+
 	const toggle = (entry: string) => {
 		const next = selected.includes(entry) ? selected.filter((own) => own !== entry) : [...selected, entry]
 		onChange(next.length ? next : undefined)
 	}
+
 	return (
 		<div className='flex flex-wrap gap-1'>
 			{values.map((entry) => {
@@ -719,7 +736,7 @@ const RangeControl = ({ field, value, onChange }: ControlProps) => {
 	const stat = RANGE_STATS[field.id]
 	const level = value && 'level' in (value as object) ? (value as { level: Level }).level : null
 	const bounds: { min?: number; max?: number } = value && !level ? (value as { min?: number; max?: number }) : {}
-	const bound = (which: 'min' | 'max') => (
+	const bound = (which: 'max' | 'min') => (
 		<Input
 			type='number'
 			className='input input-xs w-full'
@@ -895,7 +912,7 @@ const COLUMNS: ColumnDef<Mon>[] = FIELDS.map((field) => ({
 	accessorFn: (mon: Mon) => (field.kind === 'enum' ? field.get(mon).join(',') : field.get(mon)),
 	enableSorting: field.kind !== 'enum',
 	cell: cellFor(field),
-	filterFn: (row, id, value) => matchField(FIELD_BY_ID[id], row.original, value as FilterValue),
+	filterFn: (row, id, value) => matchField(FIELD_BY_ID[id]!, row.original, value as FilterValue),
 }))
 
 const HeaderFilter = ({
@@ -956,7 +973,7 @@ const LoadOverlay = ({ label, size }: { label: string; size: string }) => {
 
 // ─── Root ─────────────────────────────────────────────────────
 
-type ModelState = 'idle' | 'loading' | 'ready' | 'error'
+type ModelState = 'error' | 'idle' | 'loading' | 'ready'
 
 type Rejection = { reason: string; message: string }
 
@@ -973,6 +990,7 @@ const loadEngine = async (
 ) => {
 	loadProgress.set('Starting…', 0)
 	const started = performance.now()
+
 	try {
 		// A React state change does not guarantee a paint, and the frames immediately after this are
 		// the contended ones. Without waiting, the overlay never reaches the screen: the page freezes
@@ -994,8 +1012,7 @@ const loadEngine = async (
 }
 
 type StreamResult =
-	| { ok: true; decodeMs: number; tokensPerSecond?: number; rejection: Rejection | null }
-	| { ok: false; message: string }
+	{ ok: false; message: string } | { ok: true; decodeMs: number; tokensPerSecond?: number; rejection: Rejection | null }
 
 const streamFilters = async (
 	engine: Engine,
@@ -1003,6 +1020,7 @@ const streamFilters = async (
 	onProgress: (text: string, parsed: Record<string, unknown> | null) => void,
 ): Promise<StreamResult> => {
 	const started = performance.now()
+
 	try {
 		const stream = await engine.chat.completions.create({
 			stream: true,
@@ -1015,6 +1033,7 @@ const streamFilters = async (
 
 		let text = ''
 		let tokensPerSecond: number | undefined
+
 		for await (const chunk of stream) {
 			text += chunk.choices[0]?.delta?.content ?? ''
 			const parsed = repairJson(text)
@@ -1043,12 +1062,12 @@ const Root = () => {
 	)
 
 	const [prompt, setPrompt] = useState('')
-	const [modelId, setModelId] = useState<string>(MODELS[1].id)
+	const [modelId, setModelId] = useState<string>(MODELS[1]!.id)
 	const [modelState, setModelState] = useState<ModelState>('idle')
 	const [modelError, setModelError] = useState('')
 	const [running, setRunning] = useState(false)
 	const [streamText, setStreamText] = useState('')
-	const [touched, setTouched] = useState<Set<string>>(new Set())
+	const [touched, setTouched] = useState<Set<string>>(() => new Set())
 	const [rejection, setRejection] = useState<Rejection | null>(null)
 	const [timing, setTiming] = useState<{ load?: number; decode?: number; tokensPerSecond?: number }>({})
 	const [showJson, setShowJson] = useState(false)
@@ -1057,14 +1076,18 @@ const Root = () => {
 	const scrollRef = useRef<HTMLDivElement>(null)
 
 	useEffect(() => {
-		fetch(DATA_URL)
+		const controller = new AbortController()
+		fetch(DATA_URL, { signal: controller.signal })
 			.then((response) => response.json())
 			.then((raw: RawMon[]) => {
 				const derived = raw.map(deriveMon)
 				computeRangeStats(derived)
 				setRows(derived)
 			})
-			.catch((error) => setLoadError(error instanceof Error ? error.message : String(error)))
+			.catch((error) => {
+				if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : String(error))
+			})
+		return () => controller.abort()
 	}, [])
 
 	// Referentially stable via React Compiler. TanStack Table keys its filtered-row-model memo on this
@@ -1125,7 +1148,7 @@ const Root = () => {
 		if (parsed.ok === false) return
 		if (Array.isArray(parsed.fields)) setTouched(new Set(parsed.fields.filter((id) => typeof id === 'string')))
 		if ('query' in parsed) setFilters(sanitizeFilters(parsed.query))
-		const sort = parsed.sort
+		const { sort } = parsed
 		if (R.isPlainObject(sort) && typeof sort.field === 'string' && FIELD_BY_ID[sort.field])
 			setSorting([{ id: sort.field, desc: Boolean(sort.desc) }])
 	}
@@ -1268,7 +1291,7 @@ const Root = () => {
 										style={{ gridTemplateColumns: gridTemplate }}
 									>
 										{table.getHeaderGroups()[0]?.headers.map((header) => {
-											const field = FIELD_BY_ID[header.column.id]
+											const field = FIELD_BY_ID[header.column.id]! // column ids are generated from FIELDS
 											const sorted = header.column.getIsSorted()
 											return (
 												<div key={header.id} className='flex items-center gap-1 px-2 py-1.5 min-w-0'>
@@ -1290,7 +1313,7 @@ const Root = () => {
 
 									<div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
 										{virtualizer.getVirtualItems().map((virtualRow) => {
-											const row = tableRows[virtualRow.index]
+											const row = tableRows[virtualRow.index]! // virtualizer only yields in-range indexes
 											return (
 												<div
 													key={row.id}
@@ -1301,9 +1324,9 @@ const Root = () => {
 														transform: `translateY(${virtualRow.start}px)`,
 													}}
 												>
-													{row.getVisibleCells().map((cell) => (
-														<div key={cell.id} className='px-2 min-w-0 truncate'>
-															{flexRender(cell.column.columnDef.cell, cell.getContext())}
+													{row.getVisibleCells().map((visibleCell) => (
+														<div key={visibleCell.id} className='px-2 min-w-0 truncate'>
+															{flexRender(visibleCell.column.columnDef.cell, visibleCell.getContext())}
 														</div>
 													))}
 												</div>
@@ -1343,7 +1366,7 @@ const Root = () => {
 						<span className='flex items-center gap-1 flex-wrap min-w-0'>
 							{R.entries(filters).map(([id, value]) => (
 								<span key={id} className='badge badge-xs badge-primary badge-soft gap-1'>
-									{FIELD_BY_ID[id].label}: {summarize(FIELD_BY_ID[id], value)}
+									{FIELD_BY_ID[id]!.label}: {summarize(FIELD_BY_ID[id]!, value)}
 									<button type='button' onClick={() => setFilter(id, undefined)}>
 										<LuX size={9} />
 									</button>
@@ -1373,7 +1396,7 @@ const Root = () => {
 										checked={column.getIsVisible()}
 										onChange={column.getToggleVisibilityHandler()}
 									/>
-									<span className='text-xs'>{FIELD_BY_ID[column.id].label}</span>
+									<span className='text-xs'>{FIELD_BY_ID[column.id]!.label}</span>
 								</label>
 							))}
 						</div>

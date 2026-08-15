@@ -1,6 +1,6 @@
 import { useClipboard, useLocalStorage } from 'https://esm.sh/@mantine/hooks'
 import { Button, Field, Input, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import React, { useRef, useState } from 'https://esm.sh/react'
+import React, { useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	LuChevronDown,
@@ -43,8 +43,11 @@ const ScenarioSchema = z
 // ─── Types (runtime) ────────────────────────────────────────────────────────
 
 type Item = { id: string; displayName: string; variable: string }
+
 type Bundle = { id: string; name: string; price: number; quantities: Record<string, number> }
+
 type Scenario = { id: string; name: string; items: Item[]; bundles: Bundle[] }
+
 type Need = Record<string, number>
 
 type Solution = {
@@ -60,9 +63,8 @@ const uid = () => crypto.randomUUID().slice(0, 8)
 
 // ─── Hydrate / Dehydrate ────────────────────────────────────────────────────
 
-// biome-ignore lint/correctness/noUnusedVariables: public API for scenario import
 function parseScenario(json: string): ScenarioImport {
-	return ScenarioSchema.parse(JSON.parse(json)) as ScenarioImport
+	return ScenarioSchema.parse(JSON.parse(json))
 }
 
 function hydrate(input: ScenarioImport): Scenario {
@@ -71,7 +73,7 @@ function hydrate(input: ScenarioImport): Scenario {
 		id: uid(),
 		name: b.name,
 		price: b.price,
-		quantities: Object.fromEntries(items.map((item, i) => [item.id, b.quantities[i]])),
+		quantities: Object.fromEntries(items.map((item, i) => [item.id, b.quantities[i] ?? 0])),
 	}))
 	return { id: uid(), name: input.name, items, bundles }
 }
@@ -111,11 +113,14 @@ function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
 		if (depth === bundles.length) {
 			const totals: Record<string, number> = {}
 			let cost = 0
-			for (let i = 0; i < bundles.length; i++) {
-				cost += bundles[i].price * counts[i]
-				for (const id of itemIds) totals[id] = (totals[id] ?? 0) + (bundles[i].quantities[id] ?? 0) * counts[i]
+
+			for (const [i, bundle] of bundles.entries()) {
+				cost += bundle.price * counts[i]
+				for (const id of itemIds) totals[id] = (totals[id] ?? 0) + (bundle.quantities[id] ?? 0) * counts[i]
 			}
+
 			for (const id of itemIds) if ((totals[id] ?? 0) < (needs[id] ?? 0)) return
+
 			if (best === null || cost < best.totalCost) {
 				const surplus: Record<string, number> = {}
 				for (const id of itemIds) surplus[id] = (totals[id] ?? 0) - (needs[id] ?? 0)
@@ -126,20 +131,27 @@ function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
 					surplus,
 				}
 			}
+
 			return
 		}
-		for (let c = 0; c <= maxPerBundle[depth]; c++) {
+
+		// depth < bundles.length: the depth === bundles.length branch returned above
+		for (let c = 0; c <= maxPerBundle[depth]!; c++) {
 			counts[depth] = c
+
 			if (best !== null) {
 				let partialCost = 0
-				for (let i = 0; i <= depth; i++) partialCost += bundles[i].price * counts[i]
+				for (let i = 0; i <= depth; i++) partialCost += bundles[i]!.price * counts[i] // i <= depth < bundles.length
+
 				if (partialCost >= best.totalCost) {
 					counts[depth] = 0
 					return
 				}
 			}
+
 			search(depth + 1)
 		}
+
 		counts[depth] = 0
 	}
 
@@ -153,37 +165,40 @@ function deriveImpliedValues(bundles: Bundle[], items: Item[]): ImpliedValue[] {
 	if (bundles.length === 0 || items.length === 0) return []
 
 	const n = items.length
-	const m = bundles.length
 	const A: number[][] = bundles.map((bundle) => items.map((item) => bundle.quantities[item.id] ?? 0))
 	const b = bundles.map((bundle) => bundle.price)
 
-	const AtA: number[][] = Array.from({ length: n }, () => new Array(n).fill(0))
-	const Atb: number[] = new Array(n).fill(0)
+	// A rows have length n; b.length === A.length
+	const AtA = Array.from({ length: n }, (_, i) =>
+		Array.from({ length: n }, (_cell, j) => A.reduce((sum, row) => sum + row[i]! * row[j]!, 0)),
+	)
+	const Atb = Array.from({ length: n }, (_, i) => A.reduce((sum, row, k) => sum + row[i]! * b[k]!, 0))
 
-	for (let i = 0; i < n; i++) {
-		for (let j = 0; j < n; j++) for (let k = 0; k < m; k++) AtA[i][j] += A[k][i] * A[k][j]
-		for (let k = 0; k < m; k++) Atb[i] += A[k][i] * b[k]
-	}
+	const aug: number[][] = AtA.map((row, i) => [...row, Atb[i]!])
 
-	const aug: number[][] = AtA.map((row, i) => [...row, Atb[i]])
-
+	// aug has n rows of length n + 1; every row/col index below stays in bounds
 	for (let col = 0; col < n; col++) {
 		let maxRow = col
-		for (let row = col + 1; row < n; row++) if (Math.abs(aug[row][col]) > Math.abs(aug[maxRow][col])) maxRow = row
-		;[aug[col], aug[maxRow]] = [aug[maxRow], aug[col]]
-		if (Math.abs(aug[col][col]) < 1e-10) continue
+		for (let row = col + 1; row < n; row++) if (Math.abs(aug[row]![col]!) > Math.abs(aug[maxRow]![col]!)) maxRow = row
+		;[aug[col], aug[maxRow]] = [aug[maxRow]!, aug[col]!]
+		const pivotRow = aug[col]!
+		if (Math.abs(pivotRow[col]!) < 1e-10) continue
+
 		for (let row = col + 1; row < n; row++) {
-			const factor = aug[row][col] / aug[col][col]
-			for (let j = col; j <= n; j++) aug[row][j] -= factor * aug[col][j]
+			const currentRow = aug[row]!
+			const factor = currentRow[col]! / pivotRow[col]!
+			for (let j = col; j <= n; j++) currentRow[j]! -= factor * pivotRow[j]!
 		}
 	}
 
 	const x = new Array(n).fill(0)
+
 	for (let i = n - 1; i >= 0; i--) {
-		if (Math.abs(aug[i][i]) < 1e-10) continue
-		x[i] = aug[i][n]
-		for (let j = i + 1; j < n; j++) x[i] -= aug[i][j] * x[j]
-		x[i] /= aug[i][i]
+		const row = aug[i]!
+		if (Math.abs(row[i]!) < 1e-10) continue
+		x[i] = row[n]
+		for (let j = i + 1; j < n; j++) x[i] -= row[j]! * x[j]
+		x[i] /= row[i]!
 	}
 
 	return items.map((item, i) => ({ itemId: item.id, value: x[i] }))
@@ -482,8 +497,9 @@ function ValueDecomposition({
 		const discountPct = predicted > 0 ? ((predicted - bundle.price) / predicted) * 100 : 0
 		return { bundle, predicted, error, discountPct }
 	})
-	const bestDealIdx = bundleErrors.reduce((best, curr, i) => (curr.error < bundleErrors[best].error ? i : best), 0)
-	const bestDeal = bundleErrors[bestDealIdx]
+	// impliedValues nonempty -> bundles nonempty (deriveImpliedValues returns [] otherwise), so bundleErrors is nonempty
+	const bestDealIdx = bundleErrors.reduce((best, curr, i) => (curr.error < bundleErrors[best]!.error ? i : best), 0)
+	const bestDeal = bundleErrors[bestDealIdx]!
 	const hasMeaningfulBestDeal = bestDeal.error < -0.01
 
 	return (
@@ -667,6 +683,7 @@ function AllCombinationsTable({
 	})
 
 	type Combo = { counts: number[]; cost: number; totals: Record<string, number> }
+
 	const combos: Combo[] = []
 	const counts = new Array(bundles.length).fill(0)
 
@@ -675,18 +692,23 @@ function AllCombinationsTable({
 		if (depth === bundles.length) {
 			const totals: Record<string, number> = {}
 			let cost = 0
-			for (let i = 0; i < bundles.length; i++) {
-				cost += bundles[i].price * counts[i]
-				for (const id of itemIds) totals[id] = (totals[id] ?? 0) + (bundles[i].quantities[id] ?? 0) * counts[i]
+
+			for (const [i, bundle] of bundles.entries()) {
+				cost += bundle.price * counts[i]
+				for (const id of itemIds) totals[id] = (totals[id] ?? 0) + (bundle.quantities[id] ?? 0) * counts[i]
 			}
+
 			for (const id of itemIds) if ((totals[id] ?? 0) < (needs[id] ?? 0)) return
 			combos.push({ counts: [...counts], cost, totals })
 			return
 		}
-		for (let c = 0; c <= maxPerBundle[depth]; c++) {
+
+		// depth < bundles.length: the depth === bundles.length branch returned above
+		for (let c = 0; c <= maxPerBundle[depth]!; c++) {
 			counts[depth] = c
 			enumerate(depth + 1)
 		}
+
 		counts[depth] = 0
 	}
 
@@ -726,6 +748,7 @@ function AllCombinationsTable({
 									<td className='text-right opacity-50'>#{idx + 1}</td>
 									{bundles.map((b, j) => (
 										<td key={b.id} className='text-center font-mono'>
+											{/* eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- a zero count intentionally renders the dimmed 0 */}
 											{combo.counts[j] || <span className='opacity-20'>0</span>}
 										</td>
 									))}
@@ -967,16 +990,17 @@ function Root() {
 	})
 	const [needs, setNeeds] = useState<Need>({})
 	const [configOpen, setConfigOpen] = useState(false)
-	const needsInitialized = useRef(false)
+	const [seededScenarioId, setSeededScenarioId] = useState<string | null>(null)
 
 	const scenario = scenarios.find((s) => s.id === activeId) ?? scenarios[0]
 	if (!scenario) return null
 
-	if (!needsInitialized.current || !Object.keys(needs).some((k) => scenario.items.some((i) => i.id === k))) {
+	// Re-seed needs during render when the active scenario changes or its items stop matching
+	if (seededScenarioId !== scenario.id || !Object.keys(needs).some((k) => scenario.items.some((i) => i.id === k))) {
+		if (seededScenarioId !== scenario.id) setSeededScenarioId(scenario.id)
 		const defaultNeeds: Need = {}
 		for (const item of scenario.items) defaultNeeds[item.id] = needs[item.id] ?? 0
-		if (JSON.stringify(defaultNeeds) !== JSON.stringify(needs)) setTimeout(() => setNeeds(defaultNeeds), 0)
-		needsInitialized.current = true
+		if (JSON.stringify(defaultNeeds) !== JSON.stringify(needs)) setNeeds(defaultNeeds)
 	}
 
 	const updateScenario = (patch: Partial<Scenario>) =>
@@ -1002,36 +1026,27 @@ function Root() {
 						scenarios={scenarios}
 						activeId={scenario.id}
 						activeScenario={scenario}
-						onSelect={(id) => {
-							setActiveId(id)
-							needsInitialized.current = false
-						}}
+						onSelect={(id) => setActiveId(id)}
 						onDelete={(id) => {
 							const remaining = scenarios.filter((s) => s.id !== id)
 							setScenarios(remaining)
-							if (activeId === id) {
-								setActiveId(remaining[0].id)
-								needsInitialized.current = false
-							}
+							if (activeId === id && remaining[0]) setActiveId(remaining[0].id)
 						}}
 						onNew={() => {
 							const s = { ...EMPTY_SCENARIO, id: uid() }
 							setScenarios((prev) => [...prev, s])
 							setActiveId(s.id)
-							needsInitialized.current = false
 							setConfigOpen(true)
 						}}
 						onDuplicate={() => {
 							const s = { ...scenario, id: uid(), name: `${scenario.name} (copy)` }
 							setScenarios((prev) => [...prev, s])
 							setActiveId(s.id)
-							needsInitialized.current = false
 						}}
 						onRestoreDefaults={() => {
 							const defaults = [USB_C_SCENARIO, ...PRESET_SCENARIOS.map(hydrate)]
 							setScenarios(defaults)
-							setActiveId(defaults[0].id)
-							needsInitialized.current = false
+							setActiveId(USB_C_SCENARIO.id)
 						}}
 					/>
 

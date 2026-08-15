@@ -13,10 +13,12 @@ export const bitsToString = (bits: boolean[], alphabet = BASE94) => {
 	let n = 1n
 	for (const bit of bits) n = (n << 1n) | (bit ? 1n : 0n)
 	let result = ''
+
 	while (n > 0n) {
 		result = alphabet[Number(n % base)] + result
 		n /= base
 	}
+
 	return result
 }
 
@@ -35,6 +37,7 @@ const egEncode = (n: number, bits: boolean[]) => {
 	for (let i = 1; i < bin.length; i++) bits.push(false)
 	for (const ch of bin) bits.push(ch === '1')
 }
+
 /** Decode one Elias gamma value from bits at position; returns [value, nextPosition]. */
 const egDecode = (bits: boolean[], position: number): [number, number] => {
 	let k = 0
@@ -56,11 +59,13 @@ export const decodeIntegers = (str: string, alphabet = BASE94): number[] => {
 	const bits = stringToBits(str, alphabet)
 	const values: number[] = []
 	let pos = 0
+
 	while (pos < bits.length) {
 		const [v, next] = egDecode(bits, pos)
 		values.push(v)
 		pos = next
 	}
+
 	return values
 }
 

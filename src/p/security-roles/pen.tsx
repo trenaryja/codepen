@@ -7,9 +7,9 @@ import {
 	Input,
 	ThemePicker,
 	ThemeProvider,
+	toast,
 	Toaster,
 	Toggle,
-	toast,
 } from 'https://esm.sh/@trenaryja/ui'
 import React, { useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -38,8 +38,11 @@ const ORG_NAMES = ['Coal', 'Oil & Gas', 'Solar', 'Wind', 'Nuclear'] as const
 // ─── Types ────────────────────────────────────────────────────
 
 type OldRoleDef = { name: string; baseRole: string; permissions: Permission[]; orgs: string[] }
+
 type NewRoleDef = { name: string; permissions: Permission[] }
+
 type OrgRole = { org: string; roles: string[] }
+
 type UserData = {
 	id: string
 	firstName: string
@@ -119,6 +122,7 @@ const toggleOldRoleForUser = (user: UserData, roleName: string, oldRoles: OldRol
 			)
 		} else {
 			const existing = newOrgRoles.find((or) => or.org === org)
+
 			if (existing) {
 				if (!existing.roles.includes(role.baseRole)) existing.roles.push(role.baseRole)
 			} else {
@@ -177,6 +181,7 @@ const OldRoleCard = ({
 			: [...role.permissions, perm]
 		onUpdate({ ...role, permissions })
 	}
+
 	const toggleOrg = (org: string) => {
 		const orgs = role.orgs.includes(org) ? role.orgs.filter((x) => x !== org) : [...role.orgs, org]
 		onUpdate({ ...role, orgs })
@@ -454,7 +459,7 @@ const NewUserSecurity = ({
 	}
 
 	const addOrg = (org: string) =>
-		onUpdate({ ...user, orgRoles: [...user.orgRoles, { org, roles: [roleNames[roleNames.length - 1]] }] })
+		onUpdate({ ...user, orgRoles: [...user.orgRoles, { org, roles: [roleNames.at(-1)!] }] })
 	const removeOrg = (idx: number) => onUpdate({ ...user, orgRoles: user.orgRoles.filter((_, i) => i !== idx) })
 	const availableOrgs = ORG_NAMES.filter((o) => !user.orgRoles.some((or) => or.org === o))
 
@@ -492,7 +497,6 @@ const NewUserSecurity = ({
 					<Button tabIndex={0} className='btn-xs btn-ghost opacity-40 hover:opacity-100'>
 						<LuPlus size={10} /> org
 					</Button>
-					{/* biome-ignore lint/a11y/noNoninteractiveTabindex: daisyUI dropdown pattern requires tabIndex on ul */}
 					<ul tabIndex={0} className='dropdown-content menu bg-base-300 rounded-box z-20 w-36 p-1 shadow-lg'>
 						{availableOrgs.map((o) => (
 							<li key={o}>
@@ -524,17 +528,18 @@ const Root = () => {
 		key: 'security-users-v3',
 		defaultValue: genAll(newRoleNames),
 	})
-	const [tab, setTab] = useState<'users' | 'roles'>('users')
+	const [tab, setTab] = useState<'roles' | 'users'>('users')
 	const [search, setSearch] = useState('')
 	const [proposed, setProposed] = useState(false)
 
 	// Migrate old data without firstName/lastName
-	const safeUsers = (users.length > 0 && 'firstName' in users[0] ? users : null) ?? genAll(newRoleNames)
+	const safeUsers = (users.length > 0 && 'firstName' in users[0]! ? users : null) ?? genAll(newRoleNames)
 
 	const updateUser = (i: number, u: UserData) => setUsers((prev) => prev.map((x, j) => (j === i ? u : x)))
 
 	const updateOldRole = (i: number, r: OldRoleDef) => setOldRoles((prev) => prev.map((x, j) => (j === i ? r : x)))
 	const deleteOldRole = (i: number) => setOldRoles((prev) => prev.filter((_, j) => j !== i))
+
 	const addOldRole = () => {
 		const name = `New Role ${oldRoles.length + 1}`
 		setOldRoles((prev) => [...prev, { name, baseRole: name, permissions: [], orgs: [] }])
@@ -545,6 +550,7 @@ const Root = () => {
 	const addNewRole = () => setNewRoles((prev) => [...prev, { name: `New Role ${prev.length + 1}`, permissions: [] }])
 
 	const randomizeAll = () => setUsers(genAll(newRoleNames))
+
 	const reset = () => {
 		for (const k of ['security-old-roles-v1', 'security-new-roles-v1', 'security-users-v3']) localStorage.removeItem(k)
 		setOldRoles(DEFAULT_OLD_ROLES)

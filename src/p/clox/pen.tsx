@@ -1,16 +1,17 @@
 import {
 	closestCenter,
 	DndContext,
-	type DragEndEvent,
 	PointerSensor,
 	TouchSensor,
 	useSensor,
 	useSensors,
 } from 'https://esm.sh/@dnd-kit/core'
+import type { DragEndEvent } from 'https://esm.sh/@dnd-kit/core'
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from 'https://esm.sh/@dnd-kit/sortable'
 import { CSS } from 'https://esm.sh/@dnd-kit/utilities'
 import { ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'https://esm.sh/react'
+import { createContext, use, useEffect, useReducer, useRef, useState } from 'https://esm.sh/react'
+import type { ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuChevronsDownUp, LuChevronsUpDown, LuClock, LuMapPin } from 'https://esm.sh/react-icons/lu'
 import {
@@ -35,6 +36,7 @@ const RADIAN = Math.PI / 180
 const STORAGE_KEY = 'clox'
 
 type City = { name: string; country: string; latitude: number; longitude: number; timeZone: string }
+
 const UTC_CITY: City = { name: 'UTC', country: '', latitude: 0, longitude: 0, timeZone: 'UTC' }
 const isUtc = (city: City) => city.timeZone === 'UTC'
 const DEMO_TRACKS = [
@@ -53,6 +55,7 @@ const round = (value: unknown) => Math.round(Number(value ?? 0))
 
 // ── Time helpers (Intl-based) ─────────────────────────────────────────────────
 const formatterCache = new Map<string, Intl.DateTimeFormat>()
+
 const getFormatter = (options: Intl.DateTimeFormatOptions) => {
 	const key = JSON.stringify(options)
 	const cached = formatterCache.get(key)
@@ -63,12 +66,13 @@ const getFormatter = (options: Intl.DateTimeFormatOptions) => {
 }
 
 const offsetCache = new Map<string, number>()
+
 const zoneOffset = (timeZone: string, instant: number) => {
 	const key = `${timeZone}:${Math.floor(instant / QUARTER_HOUR)}`
 	const cached = offsetCache.get(key)
 	if (cached !== undefined) return cached
 	const parts = getFormatter({ timeZone, timeZoneName: 'longOffset' }).formatToParts(instant)
-	const match = parts.find((part) => part.type === 'timeZoneName')?.value.match(/GMT([+-])(\d{2}):(\d{2})/)
+	const match = /GMT([+-])(\d{2}):(\d{2})/.exec(parts.find((part) => part.type === 'timeZoneName')?.value ?? '')
 	const offset = match ? (match[1] === '-' ? -1 : 1) * (Number(match[2]) * HOUR + Number(match[3]) * 60_000) : 0
 	offsetCache.set(key, offset)
 	return offset
@@ -122,7 +126,7 @@ const parseWallTime = (raw: string): number[] | null => {
 	const text = raw.trim().toLowerCase()
 	if (text === 'noon') return [720]
 	if (text === 'midnight') return [0]
-	const match = text.match(/^(\d{1,2})(?:[:. ]?(\d{2}))?\s*(?:(a|p)\.?m?\.?)?$/)
+	const match = /^(\d{1,2})(?:[ .:]?(\d{2}))?\s*(?:(a|p)\.?m?\.?)?$/.exec(text)
 	if (!match) return null
 	let hour = Number(match[1])
 	const minute = Number(match[2] ?? 0)
@@ -130,7 +134,7 @@ const parseWallTime = (raw: string): number[] | null => {
 	const meridiem = match[3]
 	if (meridiem === 'p' && hour < 12) hour += 12
 	if (meridiem === 'a' && hour === 12) hour = 0
-	const explicit24 = match[1].length === 2 && match[1].startsWith('0')
+	const explicit24 = match[1]!.length === 2 && match[1]!.startsWith('0')
 	if (meridiem || explicit24 || hour === 0 || hour > 12) return [hour * 60 + minute]
 	return [(hour % 12) * 60 + minute, ((hour % 12) + 12) * 60 + minute]
 }
@@ -156,6 +160,7 @@ const solarAltitude = (instant: number, latitude: number, longitude: number) => 
 
 // ── Weather (open-meteo, no key) ──────────────────────────────────────────────
 type Weather = { temperature: number; code: number; feelsLike: number }
+
 const weatherKey = (city: City) => `${city.latitude.toFixed(2)},${city.longitude.toFixed(2)}`
 
 const weatherIcon = (code: number, day: boolean) => {
@@ -171,6 +176,13 @@ const weatherIcon = (code: number, day: boolean) => {
 	return WiThunderstorm
 }
 
+// Render helper: picking one of the static react-icons components is a lookup, not a component creation
+const weatherGlyph = (code: number, day: boolean, className: string) => {
+	const Icon = weatherIcon(code, day)
+
+	return <Icon className={className} />
+}
+
 const useWeather = (cities: City[], fahrenheit: boolean) => {
 	const [weather, setWeather] = useState<Record<string, Weather>>({})
 	const [ready, setReady] = useState(false)
@@ -183,6 +195,7 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 		if (!signature) return
 		let cancelled = false
 		const keys = signature.split(';')
+
 		const load = async () => {
 			try {
 				const coords = (index: number) => keys.map((key) => key.split(',')[index]).join(',')
@@ -192,12 +205,13 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 					)
 				).json()
 				type Current = { temperature_2m: number; weather_code: number; apparent_temperature: number }
+
 				const list: { current?: Current }[] = Array.isArray(parsed) ? parsed : [parsed]
 				if (cancelled) return
 				const next: Record<string, Weather> = {}
 				list.forEach(({ current }, index) => {
 					if (current)
-						next[keys[index]] = {
+						next[keys[index]!] = {
 							temperature: current.temperature_2m,
 							code: current.weather_code,
 							feelsLike: current.apparent_temperature,
@@ -210,8 +224,10 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 				if (!cancelled) setReady(true)
 			}
 		}
+
 		load()
 		const id = setInterval(load, 15 * 60_000)
+
 		return () => {
 			cancelled = true
 			clearInterval(id)
@@ -232,7 +248,9 @@ type ForecastCell = {
 	secondary?: string
 	precip: number
 }
-type ForecastMode = 'hourly' | 'daily'
+
+type ForecastMode = 'daily' | 'hourly'
+
 const FORECAST_FIELDS: Record<ForecastMode, string> = {
 	hourly: 'hourly=temperature_2m,weather_code,precipitation_probability,is_day&forecast_hours=12',
 	daily: 'daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=7',
@@ -240,12 +258,13 @@ const FORECAST_FIELDS: Record<ForecastMode, string> = {
 const forecastCache = new Map<string, ForecastCell[]>()
 
 const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
-	const [, bump] = useState(0)
+	const [, bump] = useReducer((count: number) => count + 1, 0)
 	const key = `${weatherKey(city)}:${fahrenheit}:${mode}`
 
 	useEffect(() => {
 		if (forecastCache.has(key)) return
 		let cancelled = false
+
 		const load = async () => {
 			try {
 				const parsed: Partial<Record<ForecastMode, Record<string, unknown[]>>> = await (
@@ -272,9 +291,12 @@ const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 			} catch {
 				forecastCache.set(key, []) // failed — panel just shows nothing
 			}
-			if (!cancelled) bump((count) => count + 1)
+
+			if (!cancelled) bump()
 		}
+
 		load()
+
 		return () => {
 			cancelled = true
 		}
@@ -307,6 +329,7 @@ const useDetectedHome = () => {
 	const [pending, setPending] = useState(true)
 	useEffect(() => {
 		let cancelled = false
+
 		const lookup = async () => {
 			// ipwho.is first (keyless, CORS, generous), ipapi.co as backup — both throttle bursts with 429s
 			for (const url of ['https://ipwho.is/', 'https://ipapi.co/json/']) {
@@ -322,11 +345,16 @@ const useDetectedHome = () => {
 						timeZone: unalias(data.timezone?.id ?? data.timezone) ?? homeTimeZone,
 					})
 					break
-				} catch {}
+				} catch {
+					// provider unreachable — try the next one
+				}
 			}
+
 			if (!cancelled) setPending(false)
 		}
+
 		lookup()
+
 		return () => {
 			cancelled = true
 		}
@@ -336,16 +364,29 @@ const useDetectedHome = () => {
 
 // ── City search (open-meteo geocoding, no key) ────────────────────────────────
 const useCitySearch = (query: string) => {
-	const [matches, setMatches] = useState<City[]>([])
-	const [searching, setSearching] = useState(false)
-	useEffect(() => {
+	const [matches, setMatches] = useState<City[]>(() => {
 		const lower = query.trim().toLowerCase()
-		const utcMatch = lower && 'utc'.startsWith(lower) ? [UTC_CITY] : []
+		return lower && lower.length < 2 && 'utc'.startsWith(lower) ? [UTC_CITY] : []
+	})
+	const [searching, setSearching] = useState(query.trim().length >= 2)
+
+	// Short queries resolve synchronously — adjust state during render, not in the effect
+	const [prevQuery, setPrevQuery] = useState(query)
+
+	if (prevQuery !== query) {
+		setPrevQuery(query)
+		const lower = query.trim().toLowerCase()
+
 		if (lower.length < 2) {
 			setSearching(false)
-			return setMatches(utcMatch)
-		}
-		setSearching(true)
+			setMatches(lower && 'utc'.startsWith(lower) ? [UTC_CITY] : [])
+		} else setSearching(true)
+	}
+
+	useEffect(() => {
+		const lower = query.trim().toLowerCase()
+		if (lower.length < 2) return
+		const utcMatch = 'utc'.startsWith(lower) ? [UTC_CITY] : []
 		const controller = new AbortController()
 		const id = setTimeout(async () => {
 			try {
@@ -357,6 +398,7 @@ const useCitySearch = (query: string) => {
 					longitude: number
 					timezone?: string
 				}
+
 				const parsed: { results?: Result[] } = await (
 					await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(lower)}&count=8`, {
 						signal: controller.signal,
@@ -364,9 +406,9 @@ const useCitySearch = (query: string) => {
 				).json()
 				const cities = (parsed.results ?? [])
 					.filter((result) => result.timezone)
-					.map(({ name, admin1, country_code, latitude, longitude, timezone }) => ({
+					.map(({ name, admin1, country_code: countryCode, latitude, longitude, timezone }) => ({
 						name,
-						country: [admin1, country_code].filter(Boolean).join(', '),
+						country: [admin1, countryCode].filter(Boolean).join(', '),
 						latitude,
 						longitude,
 						timeZone: timezone ?? 'UTC',
@@ -377,6 +419,7 @@ const useCitySearch = (query: string) => {
 				// aborted or offline — keep previous matches
 			}
 		}, 250)
+
 		return () => {
 			clearTimeout(id)
 			controller.abort()
@@ -388,7 +431,9 @@ const useCitySearch = (query: string) => {
 // ── Tracks + shared view settings ─────────────────────────────────────────────
 const VIEWS = ['list', 'bands'] as const
 type View = (typeof VIEWS)[number]
+
 type Track = { id: string; label: string; city: City }
+
 type Preferences = {
 	hour12: boolean
 	fahrenheit: boolean
@@ -396,6 +441,7 @@ type Preferences = {
 	forecastMode: ForecastMode
 	homeOverride: City | null
 }
+
 type Stored = Partial<Preferences> & { tracks?: { label: string; city: City }[]; view?: View }
 
 // Everything below the App reads the same view state, so it rides context instead of props
@@ -408,8 +454,9 @@ type Settings = Omit<Preferences, 'homeOverride'> & {
 	rename: (id: string, label: string) => void
 	remove: (id: string) => void
 }
+
 const SettingsContext = createContext<Settings>(null!)
-const useSettings = () => useContext(SettingsContext)
+const useSettings = () => use(SettingsContext)
 
 const loadStored = (): Stored | null => {
 	try {
@@ -455,7 +502,6 @@ const Editable = ({
 			className={`input px-[0.15em] ${shared}`}
 			value={draft}
 			placeholder={placeholder}
-			// biome-ignore lint/a11y/noAutofocus: input only exists after an explicit click on the value it replaces
 			autoFocus
 			onChange={(event) => setDraft(event.target.value)}
 			onBlur={() => {
@@ -534,13 +580,13 @@ const WeatherChip = ({ city }: { city: City }) => {
 	if (isUtc(city)) return null
 	if (!weatherReady) return <span className='skeleton text-transparent'>00°</span>
 	const current = weather[weatherKey(city)]
-	const Icon = weatherIcon(current?.code ?? 0, solarAltitude(instant, city.latitude, city.longitude) > -6)
-	if (!current) return <Icon className='text-xl' />
+	const day = solarAltitude(instant, city.latitude, city.longitude) > -6
+	if (!current) return weatherGlyph(0, day, 'text-xl')
 	const temperature = round(current.temperature)
 	const feels = round(current.feelsLike)
 	return (
 		<span className='flex flex-wrap items-center gap-x-0.5'>
-			<Icon className='text-xl' />
+			{weatherGlyph(current.code, day, 'text-xl')}
 			{temperature}°{fahrenheit ? 'F' : 'C'}
 			{Math.abs(feels - temperature) >= 2 && <span className='ml-1 opacity-60'>feels {feels}°</span>}
 		</span>
@@ -557,11 +603,10 @@ const ForecastPanel = ({ city }: { city: City }) => {
 			{!!cells?.length && (
 				<div className='flex justify-between gap-2 overflow-x-auto pb-1'>
 					{cells.map((cell) => {
-						const Icon = weatherIcon(cell.code, cell.day)
 						return (
 							<div key={cell.time} className='flex flex-col items-center gap-0.5 text-xs opacity-80'>
 								<span>{cell.label || hourLabel(Number(cell.time.slice(11, 13)), hour12)}</span>
-								<Icon className='text-2xl' />
+								{weatherGlyph(cell.code, cell.day, 'text-2xl')}
 								{/* high over low on phones — seven days of "89°/76°" on one line needs a scroll to read */}
 								<span className='flex flex-col items-center font-mono leading-tight sm:flex-row'>
 									{cell.primary}
@@ -601,8 +646,7 @@ const TrackCard = ({
 	const expandable = !isUtc(city)
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: drag-reorder + expand surface — the div can't be a button (nested-interactive), and the header's expand-all button is the keyboard path
-		// biome-ignore lint/a11y/useKeyWithClickEvents: same — keyboard users expand via the header's expand-all button
+		// eslint-disable-next-line jsx-a11y/click-events-have-key-events -- drag-reorder + expand surface; the div can't be a button (nested-interactive), and the header's expand-all button is the keyboard path
 		<div
 			ref={setNodeRef}
 			// Translate, not Transform — Transform includes a scale that stretches cards when
@@ -648,7 +692,7 @@ const TrackCard = ({
 					<button
 						type='button'
 						aria-label={`remove ${label}`}
-						className={`btn btn-circle btn-xs transition sm:opacity-0 sm:group-hover:opacity-60 hover:opacity-100! absolute -top-2 -right-2`}
+						className='btn btn-circle btn-xs transition sm:opacity-0 sm:group-hover:opacity-60 hover:opacity-100! absolute -top-2 -right-2'
 						onClick={() => remove(id)}
 					>
 						✕
@@ -738,10 +782,12 @@ const BandsView = ({
 	// ±12h around now, floored to the scrub grain so bars and labels don't creep a hair every tick
 	const start = Math.floor(now / QUARTER_HOUR) * QUARTER_HOUR - DAY / 2
 	const rows = [{ id: 'home', label: home.name, city: home }, ...roster]
+
 	const instantAt = (clientX: number) => {
 		const { left, width } = surfaceRef.current!.getBoundingClientRect()
 		return start + Math.min(1, Math.max(0, (clientX - left) / width)) * DAY
 	}
+
 	return (
 		<main className='mx-auto flex w-full max-w-6xl grow flex-col p-3 sm:p-4'>
 			<div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 pb-4 text-sm opacity-70 sm:text-base'>
@@ -823,12 +869,13 @@ const App = () => {
 	}, [])
 
 	// persist (skip the initial render so an untouched demo roster stays ephemeral)
-	const persistReady = useRef(false)
+	const persistReadyRef = useRef(false)
 	useEffect(() => {
-		if (!persistReady.current) {
-			persistReady.current = true
+		if (!persistReadyRef.current) {
+			persistReadyRef.current = true
 			return
 		}
+
 		const payload: Stored = {
 			tracks: roster.map(({ label, city }) => ({ label, city })),
 			hour12,
@@ -844,19 +891,21 @@ const App = () => {
 	// ── scrub ──
 	const animationRef = useRef(0)
 	// where the last scrub is headed — arrow walks step from here, not the mid-animation instant
-	const scrubTarget = useRef<number | null>(null)
+	const scrubTargetRef = useRef<number | null>(null)
 
 	const animateTo = (target: number | null) => {
-		scrubTarget.current = target
+		scrubTargetRef.current = target
 		cancelAnimationFrame(animationRef.current)
 		const from = stateRef.current.instant
 		const start = performance.now()
+
 		const step = (frameTime: number) => {
 			const t = Math.min(1, (frameTime - start) / 300)
 			const goal = target ?? stateRef.current.now
 			setScrubbed(t < 1 ? from + (goal - from) * (1 - (1 - t) ** 3) : target)
 			if (t < 1) animationRef.current = requestAnimationFrame(step)
 		}
+
 		animationRef.current = requestAnimationFrame(step)
 	}
 
@@ -876,12 +925,13 @@ const App = () => {
 			event.preventDefault() // ⌘← is history-back in macOS browsers
 			const step = event.metaKey || event.ctrlKey ? HOUR : QUARTER_HOUR
 			const forward = event.key === 'ArrowRight'
-			const base = scrubTarget.current ?? stateRef.current.instant
+			const base = scrubTargetRef.current ?? stateRef.current.instant
 			const local = localMs(stateRef.current.homeTimeZone, base)
 			// off a boundary walks to the nearest one in that direction; on one, a full step
 			const target = forward ? Math.floor(local / step + 1) * step : Math.ceil(local / step - 1) * step
 			animateTo(base + target - local)
 		}
+
 		window.addEventListener('keydown', onKeyDown)
 		return () => window.removeEventListener('keydown', onKeyDown)
 	}, [])
@@ -931,6 +981,7 @@ const App = () => {
 		if (from !== -1 && to !== -1) setRoster(arrayMove(roster, from, to))
 	}
 
+	// eslint-disable-next-line @eslint-react/no-unstable-context-value -- React Compiler memoizes this value; manual useMemo is banned here
 	const settings: Settings = {
 		instant,
 		home,
@@ -1011,8 +1062,7 @@ const App = () => {
 
 					{view === 'list' && (
 						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-3 pb-28 sm:p-4 sm:pb-28'>
-							{/* biome-ignore lint/a11y/noStaticElementInteractions: expand surface, like the cards below it — keyboard users expand via the header's expand-all button */}
-							{/* biome-ignore lint/a11y/useKeyWithClickEvents: same */}
+							{/* eslint-disable-next-line jsx-a11y/click-events-have-key-events -- expand surface, like the cards below it; keyboard users expand via the header's expand-all button */}
 							<div
 								className='flex cursor-pointer flex-col items-center gap-1 py-6 sm:py-8'
 								onClick={expandOnClick(() => toggleExpanded('home'))}
@@ -1100,7 +1150,6 @@ const App = () => {
 										className='grow'
 										placeholder={searchMode.kind === 'home' ? 'where are you actually?' : 'search any city…'}
 										value={query}
-										// biome-ignore lint/a11y/noAutofocus: modal exists only after an explicit press; focus belongs in its search box
 										autoFocus
 										onFocus={(event) => event.target.select()}
 										onChange={(event) => setQuery(event.target.value)}

@@ -21,17 +21,17 @@ bun --install=fallback .claude/skills/pen-shot/shot.ts <slug> [flags]
 
 `--install=fallback` resolves Playwright without adding it to `package.json`.
 
-| Flag | Effect |
-| ---- | ------ |
-| `--selector <css>` | Shoot one element instead of the whole page |
-| `--clip x,y,w,h` | Crop inside `--selector`, in its viewBox units when it has one, else CSS px. Scale defaults to 3 |
-| `--eval <expr>` | Measure — run the expression in page context, print the result as JSON |
-| `--out <path>` | Default `$TMPDIR/<slug>.png` |
-| `--scale <n>` | deviceScaleFactor, default 2 |
-| `--width <px>` / `--height <px>` | Viewport, default 1280×1000. Under 640 wide also switches the page to touch/no-hover |
-| `--click <selector>` | Press before shooting, to reach a state behind an interaction. Repeatable, applied in order |
-| `--wait <ms>` | Delay after networkidle, default 1200 so webfonts have swapped |
-| `--light` | Light colour scheme; default is dark |
+| Flag                             | Effect                                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `--selector <css>`               | Shoot one element instead of the whole page                                                      |
+| `--clip x,y,w,h`                 | Crop inside `--selector`, in its viewBox units when it has one, else CSS px. Scale defaults to 3 |
+| `--eval <expr>`                  | Measure — run the expression in page context, print the result as JSON                           |
+| `--out <path>`                   | Default `$TMPDIR/<slug>.png`                                                                     |
+| `--scale <n>`                    | deviceScaleFactor, default 2                                                                     |
+| `--width <px>` / `--height <px>` | Viewport, default 1280×1000. Under 640 wide also switches the page to touch/no-hover             |
+| `--click <selector>`             | Press before shooting, to reach a state behind an interaction. Repeatable, applied in order      |
+| `--wait <ms>`                    | Delay after networkidle, default 1200 so webfonts have swapped                                   |
+| `--light`                        | Light colour scheme; default is dark                                                             |
 
 Read every image you write. An unopened screenshot is not evidence.
 

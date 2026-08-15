@@ -1,5 +1,6 @@
 import { RadioGroup, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'https://esm.sh/react'
+import { useEffect, useMemo, useRef, useState } from 'https://esm.sh/react'
+import type { ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -16,17 +17,20 @@ const BASE_CH = 400
 const HERO_FONT_SIZE = 120
 
 // ── Measurement (offscreen canvas — no rendering) ─────────────────────────────
-const _mx = document.createElement('canvas').getContext('2d')!
+const measureCtx = document.createElement('canvas').getContext('2d')!
+
 function px(size: number, font: string, weight = 400) {
 	return `${weight} ${size}px ${FONTS[font]}`
 }
+
 function measure(text: string, fs: string) {
-	_mx.font = fs
-	return _mx.measureText(text)
+	measureCtx.font = fs
+	return measureCtx.measureText(text)
 }
 
 // ── SVG primitives ─────────────────────────────────────────────────────────────
 type Color = string
+
 const lw = { strokeWidth: 1.5 }
 const mono = { fontSize: 10.5, fontFamily: MONO }
 
@@ -217,7 +221,7 @@ function Label({
 	x,
 	y,
 	color = ACCENT,
-	align = 'end' as CanvasTextAlign,
+	align = 'end',
 	alpha = 1,
 }: {
 	text: string
@@ -236,7 +240,7 @@ function Label({
 }
 
 // ── Layout ─────────────────────────────────────────────────────────────────────
-interface Layout {
+type Layout = {
 	cw: number
 	ch: number
 	fs: string
@@ -268,12 +272,13 @@ function computeLayout(
 	ch: number,
 ): Layout {
 	const fs = px(Math.round((fontSize * ch) / BASE_CH), font, fontWeight)
-	_mx.font = fs
-	const sm = _mx.measureText(sample)
-	const capHeight = _mx.measureText('H').actualBoundingBoxAscent
-	const xHeight = _mx.measureText('x').actualBoundingBoxAscent
-	const descDepth = _mx.measureText('p').actualBoundingBoxDescent
-	const ascHeight = _mx.measureText('hd').actualBoundingBoxAscent
+	// eslint-disable-next-line @eslint-react/globals -- module-level measuring canvas; setting font before measureText is how the canvas measurement API works
+	measureCtx.font = fs
+	const sm = measureCtx.measureText(sample)
+	const capHeight = measureCtx.measureText('H').actualBoundingBoxAscent
+	const xHeight = measureCtx.measureText('x').actualBoundingBoxAscent
+	const descDepth = measureCtx.measureText('p').actualBoundingBoxDescent
+	const ascHeight = measureCtx.measureText('hd').actualBoundingBoxAscent
 	const { fontBoundingBoxAscent: fontAscent, fontBoundingBoxDescent: fontDescent, width: advance } = sm
 	const charX = (cw - advance) / 2
 	const baselineY = (ch - fontAscent - fontDescent) / 2 + fontAscent
@@ -318,6 +323,7 @@ function multiLayout(
 	let L = computeLayout(sample, fontSize, font, fontWeight, cw, ch)
 	let lineH = calcLineH(L)
 	const totalH = lineH + L.fontAscent + L.fontDescent
+
 	if (totalH > ch - 32) {
 		L = computeLayout(sample, Math.round(fontSize * ((ch - 32) / totalH)), font, fontWeight, cw, ch)
 		lineH = calcLineH(L)
@@ -369,16 +375,17 @@ const LEADING_OPTIONS = [
 type LeadingSize = (typeof LEADING_OPTIONS)[number]['value']
 
 // ── Terms ──────────────────────────────────────────────────────────────────────
-interface Term {
+type Term = {
 	id: string
 	name: string
 	sample: string
 	fontSize: number
 	multiLine?: boolean
 	def: string
-	draw(L: Layout, L2?: Layout): ReactNode
+	draw: (L: Layout, L2?: Layout) => ReactNode
 }
-interface Group {
+
+type Group = {
 	name: string
 	terms: Term[]
 }
@@ -753,24 +760,23 @@ const GROUPS: Group[] = [
 				fontSize: 64,
 				def: 'Uniform horizontal spacing applied equally between all glyphs in a text run. Called letter-spacing in CSS. Unlike kerning, tracking is a constant additive value—not glyph-pair-specific.',
 				draw: (L) => {
-					const chars = 'HELLO'.split('')
-					_mx.font = L.fs
-					const widths = chars.map((c) => _mx.measureText(c).width)
+					measureCtx.font = L.fs
+					const glyphs = 'HELLO'.split('').map((char) => ({ char, width: measureCtx.measureText(char).width }))
 					const track = (L.trackingEm ?? 0.1) * L.fontSize
-					let x = (L.cw - widths.reduce((a, b) => a + b, 0) - track * (chars.length - 1)) / 2
+					let x = (L.cw - glyphs.reduce((sum, glyph) => sum + glyph.width, 0) - track * (glyphs.length - 1)) / 2
 					return (
 						<>
-							{chars.map((ch, i) => {
+							{glyphs.map(({ char, width }, i) => {
 								const cx = x
-								x += widths[i] + track
+								x += width + track
 								return (
-									<g key={`${ch}-${Math.round(cx)}`}>
+									<g key={`${char}-${Math.round(cx)}`}>
 										<text x={cx} y={L.baselineY} style={{ font: L.fs }} fill={FG} dominantBaseline='alphabetic'>
-											{ch}
+											{char}
 										</text>
-										{i < chars.length - 1 && track > 0 && (
+										{i < glyphs.length - 1 && track > 0 && (
 											<rect
-												x={cx + widths[i]}
+												x={cx + width}
 												y={L.baselineY - L.xHeight}
 												width={track}
 												height={L.xHeight}
@@ -884,14 +890,16 @@ const GROUPS: Group[] = [
 					const row = ox.getImageData(0, Math.round(300 - L.capHeight * 0.2), 400, 1).data
 					let start = -1
 					let stemSeg: [number, number] | null = null
+
 					for (let x = 0; x < 400; x++) {
-						const ink = row[x * 4 + 3] > 128
+						const ink = row[x * 4 + 3]! > 128
 						if (ink && start < 0) start = x
 						if (!ink && start >= 0) {
 							stemSeg = [start, x - 1]
 							break
 						}
 					}
+
 					if (!stemSeg) return null
 					const [sl, sw] = [L.charX + stemSeg[0], stemSeg[1] - stemSeg[0] + 1]
 					return (
@@ -923,8 +931,10 @@ const GROUPS: Group[] = [
 					const row = ox.getImageData(0, Math.round(300 - L.xHeight * 0.5), 400, 1).data
 					let phase = 0 // 0=before stem, 1=in stem, 2=in gap, 3=found bowl
 					let bowlStart = -1
+
 					for (let x = 0; x < 400 && phase < 3; x++) {
-						const ink = row[x * 4 + 3] > 128
+						const ink = row[x * 4 + 3]! > 128
+
 						if (phase === 0 && ink) phase = 1
 						else if (phase === 1 && !ink) phase = 2
 						else if (phase === 2 && ink) {
@@ -932,19 +942,22 @@ const GROUPS: Group[] = [
 							phase = 3
 						}
 					}
+
 					if (bowlStart < 0) return null
 
 					// Vertical scan at bowl midpoint to find top/bottom of bowl ink
 					const bowlRight = Math.round(L.inkRight - L.charX)
 					const col = ox.getImageData(Math.round((bowlStart + bowlRight) / 2), 0, 1, 400).data
-					let bowlTop = -1,
-						bowlBot = 300
+					let bowlBot = 300
+					let bowlTop = -1
+
 					for (let y = 0; y < 400; y++) {
-						if (col[y * 4 + 3] > 128) {
+						if (col[y * 4 + 3]! > 128) {
 							if (bowlTop < 0) bowlTop = y
 							bowlBot = y
 						}
 					}
+
 					if (bowlTop < 0) return null
 
 					// Convert offscreen canvas coords (baseline=300) to SVG coords
@@ -1109,7 +1122,9 @@ const SCAN_BASELINE = 300 // where the glyph sits inside that canvas
 const INK = 128 // alpha above which a pixel counts as ink
 
 type Point = { x: number; y: number }
+
 type Box = { x: number; y: number; width: number; height: number }
+
 type Span = [start: number, end: number]
 
 type Raster = {
@@ -1130,7 +1145,7 @@ function rasterize(char: string, fs: string): Raster {
 	ctx.fillText(char, 0, SCAN_BASELINE)
 	const { data } = ctx.getImageData(0, 0, SCAN, SCAN)
 	return {
-		ink: (x, y) => x >= 0 && x < SCAN && y >= 0 && y < SCAN && data[(y * SCAN + x) * 4 + 3] > INK,
+		ink: (x, y) => x >= 0 && x < SCAN && y >= 0 && y < SCAN && data[(y * SCAN + x) * 4 + 3]! > INK,
 		advance: ctx.measureText(char).width,
 	}
 }
@@ -1139,6 +1154,7 @@ function rasterize(char: string, fs: string): Raster {
 function rowSpans({ ink }: Raster, y: number, limit = SCAN): Span[] {
 	const spans: Span[] = []
 	let start = -1
+
 	for (let x = 0; x < limit; x++) {
 		if (ink(x, y)) {
 			if (start < 0) start = x
@@ -1147,6 +1163,7 @@ function rowSpans({ ink }: Raster, y: number, limit = SCAN): Span[] {
 			start = -1
 		}
 	}
+
 	if (start >= 0) spans.push([start, limit - 1])
 	return spans
 }
@@ -1155,6 +1172,7 @@ function rowSpans({ ink }: Raster, y: number, limit = SCAN): Span[] {
 function colSpans({ ink }: Raster, x: number): Span[] {
 	const spans: Span[] = []
 	let start = -1
+
 	for (let y = 0; y < SCAN; y++) {
 		if (ink(x, y)) {
 			if (start < 0) start = y
@@ -1163,6 +1181,7 @@ function colSpans({ ink }: Raster, x: number): Span[] {
 			start = -1
 		}
 	}
+
 	if (start >= 0) spans.push([start, SCAN - 1])
 	return spans
 }
@@ -1185,6 +1204,7 @@ function inkBounds(raster: Raster) {
 	let right = -1
 	let top = SCAN
 	let bottom = -1
+
 	for (let y = 0; y < SCAN; y++) {
 		for (let x = 0; x < SCAN; x++) {
 			if (!raster.ink(x, y)) continue
@@ -1194,6 +1214,7 @@ function inkBounds(raster: Raster) {
 			if (y > bottom) bottom = y
 		}
 	}
+
 	return right < 0 ? null : { left, right, top, bottom }
 }
 
@@ -1202,15 +1223,15 @@ function inkBounds(raster: Raster) {
 function enclosedVoid(raster: Raster, probeX: number) {
 	const vertical = colSpans(raster, probeX)
 	if (vertical.length < 2) return null
-	const top = vertical[0][1] + 1
-	const bottom = vertical[1][0] - 1
+	const top = vertical[0]![1] + 1
+	const bottom = vertical[1]![0] - 1
 	if (bottom < top) return null
 
 	const midY = Math.round((top + bottom) / 2)
 	const horizontal = rowSpans(raster, midY)
 	if (horizontal.length < 2) return null
-	const left = horizontal[0][1] + 1
-	const right = horizontal[horizontal.length - 1][0] - 1
+	const left = horizontal[0]![1] + 1
+	const right = horizontal.at(-1)![0] - 1
 	if (right < left) return null
 
 	return { top, bottom, left, right, midY }
@@ -1232,6 +1253,7 @@ function archApex(raster: Raster, index: number): Point | null {
 
 	const crests: Span[] = []
 	let start = -1
+
 	for (let x = 0; x < width; x++) {
 		if (isCrest(x)) {
 			if (start < 0) start = x
@@ -1240,6 +1262,7 @@ function archApex(raster: Raster, index: number): Point | null {
 			start = -1
 		}
 	}
+
 	if (start >= 0) crests.push([start, width - 1])
 
 	// A crest centred in the leftmost fifth of the advance is the stem, not an arch.
@@ -1258,16 +1281,19 @@ function yArms(raster: Raster) {
 	if (top < 0 || bottom < 0) return null
 
 	// Both inner edges of the split, so the seam can follow either arm.
-	const inner: Array<{ left: number; right: number; y: number }> = []
+	const inner: { left: number; right: number; y: number }[] = []
 	let merge = -1
+
 	for (let y = top; y < SCAN; y++) {
 		const spans = rowSpans(raster, y)
-		if (spans.length >= 2) inner.push({ left: spans[0][1], right: spans[1][0], y })
+
+		if (spans.length >= 2) inner.push({ left: spans[0]![1], right: spans[1]![0], y })
 		else if (inner.length) {
 			merge = y
 			break
 		}
 	}
+
 	if (inner.length < 4 || merge < 0) return null
 
 	// Which arm carries on into the descender? The dominant one. Measured in
@@ -1282,7 +1308,7 @@ function yArms(raster: Raster) {
 	const probe = rowSpans(raster, merge - Math.max(4, Math.round((merge - top) * 0.2)))
 	if (probe.length < 2) return null
 	const widthOf = (span: Span) => span[1] - span[0] + 1
-	const carries = widthOf(probe[0]) >= widthOf(probe[1]) ? 'left' : 'right'
+	const carries = widthOf(probe[0]!) >= widthOf(probe[1]!) ? 'left' : 'right'
 
 	// The seam runs along the *carrying* arm's inner edge. Always tracing the right
 	// arm's edge instead only works when the right arm is the carrier: that edge
@@ -1293,17 +1319,17 @@ function yArms(raster: Raster) {
 	// The carrying arm's own span, so a callout can sit on the stroke. Averaging
 	// the seam against an arm's outer edge lands short of it whenever the gap is
 	// wider than the stroke — which is most of the way down.
-	const sample = seam[Math.round(seam.length * 0.4)]
-	const arm = rowSpans(raster, sample.y)[carries === 'left' ? 0 : 1]
+	const sample = seam[Math.round(seam.length * 0.4)]! // round(0.4·n) < n
+	const arm = rowSpans(raster, sample.y)[carries === 'left' ? 0 : 1]! // seam rows all have ≥2 spans
 
 	// Below the junction no scan can separate the strokes. Carry the seam one
 	// stroke-width further on its own slope, enough to avoid a flat horizontal
 	// slice across the diagonal, then stop: projecting it all the way down
 	// instead follows a straight line while the tail curves away from it, and
 	// shears the terminal off the end of the stroke.
-	const recent = seam.slice(-8)
-	const slope = (recent[recent.length - 1].x - recent[0].x) / Math.max(1, recent.length - 1)
-	const last = seam[seam.length - 1]
+	const recent = seam.slice(-8) // nonempty: seam has ≥4 rows
+	const slope = (recent.at(-1)!.x - recent[0]!.x) / Math.max(1, recent.length - 1)
+	const last = seam.at(-1)!
 	const taper = Math.round(Math.min(22, Math.max(6, widthOf(arm))))
 	for (let i = 1; i <= taper; i++) seam.push({ x: last.x + slope * i, y: merge + i - 1 })
 
@@ -1316,6 +1342,7 @@ function yArms(raster: Raster) {
 function outsideMask({ ink }: Raster) {
 	const outside = new Uint8Array(SCAN * SCAN)
 	const stack: number[] = []
+
 	const visit = (x: number, y: number) => {
 		if (x < 0 || x >= SCAN || y < 0 || y >= SCAN) return
 		const i = y * SCAN + x
@@ -1323,14 +1350,17 @@ function outsideMask({ ink }: Raster) {
 		outside[i] = 1
 		stack.push(i)
 	}
+
 	for (let x = 0; x < SCAN; x++) {
 		visit(x, 0)
 		visit(x, SCAN - 1)
 	}
+
 	for (let y = 0; y < SCAN; y++) {
 		visit(0, y)
 		visit(SCAN - 1, y)
 	}
+
 	while (stack.length) {
 		const i = stack.pop()!
 		const x = i % SCAN
@@ -1340,6 +1370,7 @@ function outsideMask({ ink }: Raster) {
 		visit(x, y + 1)
 		visit(x, y - 1)
 	}
+
 	return outside
 }
 
@@ -1350,17 +1381,20 @@ function apertureGap(raster: Raster, xHeight: number): Point | null {
 	const outside = outsideMask(raster)
 	let best: Point | null = null
 	let widest = 0
+
 	for (let y = Math.round(SCAN_BASELINE - xHeight); y < SCAN_BASELINE; y++) {
 		const spans = rowSpans(raster, y)
+
 		for (let i = 1; i < spans.length; i++) {
-			const from = spans[i - 1][1] + 1
-			const to = spans[i][0] - 1
+			const from = spans[i - 1]![1] + 1
+			const to = spans[i]![0] - 1
 			const midX = Math.round((from + to) / 2)
 			if (to < from || to - from + 1 <= widest || !outside[y * SCAN + midX]) continue
 			widest = to - from + 1
 			best = { x: midX, y }
 		}
 	}
+
 	return best
 }
 
@@ -1372,12 +1406,14 @@ function crossbarTerminal(raster: Raster, xHeight: number): Point | null {
 	const floor = Math.round(SCAN_BASELINE - xHeight * 0.35)
 
 	let best: Point | null = null
+
 	for (let y = top; y <= floor; y++) {
-		const spans = rowSpans(raster, y)
-		if (!spans.length) continue
-		const right = spans[spans.length - 1][1]
+		const lastSpan = rowSpans(raster, y).at(-1)
+		if (!lastSpan) continue
+		const right = lastSpan[1]
 		if (!best || right > best.x) best = { x: right, y }
 	}
+
 	return best
 }
 
@@ -1401,10 +1437,12 @@ function heroGeometry(font: string) {
 			w: measurer.measureText(word.slice(0, i + 1)).width - measurer.measureText(word.slice(0, i)).width,
 		}))
 	}
+
 	const anatomy = charPos(LINE_1)
 	const ofType = charPos(LINE_2)
-	const anatomyX0 = anatomy[0].x
-	const ofTypeX0 = ofType[0].x
+	// LINE_1/LINE_2 are 7-char constants — indexes 0–6 always exist.
+	const anatomyX0 = anatomy[0]!.x
+	const ofTypeX0 = ofType[0]!.x
 
 	// Canvas rows sit `SCAN_BASELINE` above their own origin; shift onto a text baseline.
 	const onLine1 = (canvasY: number) => HERO_L1 + canvasY - SCAN_BASELINE
@@ -1427,16 +1465,17 @@ function heroGeometry(font: string) {
 	const centreSpans = colSpans(capital, centreX).filter(
 		([s]) => s > SCAN_BASELINE - capHeight * 0.75 && s < SCAN_BASELINE - capHeight * 0.1,
 	)
-	const barTop = centreSpans.length ? centreSpans[0][0] : Math.round(SCAN_BASELINE - capHeight * 0.44)
-	const barBottom = centreSpans.length ? centreSpans[0][1] : Math.round(SCAN_BASELINE - capHeight * 0.36)
+	const barTop = centreSpans.length ? centreSpans[0]![0] : Math.round(SCAN_BASELINE - capHeight * 0.44)
+	const barBottom = centreSpans.length ? centreSpans[0]![1] : Math.round(SCAN_BASELINE - capHeight * 0.36)
 
 	// Sample the inner edges of both diagonals above the crossbar, then
 	// extrapolate down their slope to get the trapezoid corners. Clipping the
 	// glyph to that trapezoid isolates the bar without touching the legs.
 	const legGap = (y: number): Span | null => {
 		const spans = rowSpans(capital, y, capWidth + 4)
-		return spans.length >= 2 ? [spans[0][1], spans[1][0]] : null
+		return spans.length >= 2 ? [spans[0]![1], spans[1]![0]] : null
 	}
+
 	const upper = legGap(barTop - 8)
 	const higher = legGap(barTop - 24)
 	const leftSlope = upper && higher ? (upper[0] - higher[0]) / 16 : -0.35
@@ -1467,13 +1506,13 @@ function heroGeometry(font: string) {
 	const ohVoid = enclosedVoid(oh, Math.round(oh.advance * 0.5))
 	const counterBox: Box = ohVoid
 		? {
-				x: anatomy[4].x + ohVoid.left,
+				x: anatomy[4]!.x + ohVoid.left,
 				y: onLine1(ohVoid.top),
 				width: ohVoid.right - ohVoid.left + 1,
 				height: ohVoid.bottom - ohVoid.top + 1,
 			}
 		: {
-				x: anatomy[4].x + oh.advance * 0.28,
+				x: anatomy[4]!.x + oh.advance * 0.28,
 				y: HERO_L1 - xHeight * 0.78,
 				width: oh.advance * 0.44,
 				height: xHeight * 0.56,
@@ -1486,45 +1525,47 @@ function heroGeometry(font: string) {
 	// and shoves the bowl's left edge halfway across the bowl.
 	const peeBounds = inkBounds(pee)
 	let peeStemSpan: Span | null = null
+
 	for (let y = Math.round(SCAN_BASELINE + descent * 0.15); y <= Math.round(SCAN_BASELINE + descent * 0.8); y++) {
 		const span = rowSpans(pee, y)[0]
 		if (span && (!peeStemSpan || span[1] - span[0] < peeStemSpan[1] - peeStemSpan[0])) peeStemSpan = span
 	}
+
 	const bowlLeft = peeStemSpan ? peeStemSpan[1] : Math.round(pee.advance * 0.3)
 	const bowlTop = topRow(pee)
 	const bowlBox: Box = peeBounds
 		? {
-				x: ofType[5].x + bowlLeft,
+				x: ofType[5]!.x + bowlLeft,
 				y: onLine2(bowlTop) - 2,
 				width: peeBounds.right - bowlLeft + 3,
 				height: HERO_L2 - onLine2(bowlTop) + 3,
 			}
-		: { x: ofType[5].x, y: HERO_L2 - xHeight, width: ofType[5].w, height: xHeight }
+		: { x: ofType[5]!.x, y: HERO_L2 - xHeight, width: ofType[5]!.w, height: xHeight }
 
 	// ── Ascender of 'f' and descender of 'y' ──────────────────────────────────
 	// Both are *parts* of a glyph, so each clip is a half-plane cut at the
 	// x-height or the baseline rather than the whole character.
 	const effBounds = inkBounds(eff)
 	const ascenderBox: Box = {
-		x: ofType[1].x + (effBounds ? effBounds.left - 3 : 0),
+		x: ofType[1]!.x + (effBounds ? effBounds.left - 3 : 0),
 		y: 0,
-		width: effBounds ? effBounds.right - effBounds.left + 7 : ofType[1].w,
+		width: effBounds ? effBounds.right - effBounds.left + 7 : ofType[1]!.w,
 		height: HERO_L2 - xHeight,
 	}
 	// Stopped at the next character's origin: 'y' overhangs its advance, and
 	// without the clamp the box reaches far enough right to tint the 'p' stem.
 	const whyBounds = inkBounds(why)
-	const descenderLeft = ofType[4].x + (whyBounds ? whyBounds.left - 3 : 0)
+	const descenderLeft = ofType[4]!.x + (whyBounds ? whyBounds.left - 3 : 0)
 	const descenderBox: Box = {
 		x: descenderLeft,
 		y: HERO_L2,
-		width: Math.min(ofType[5].x, ofType[4].x + (whyBounds ? whyBounds.right + 4 : ofType[4].w)) - descenderLeft,
+		width: Math.min(ofType[5]!.x, ofType[4]!.x + (whyBounds ? whyBounds.right + 4 : ofType[4]!.w)) - descenderLeft,
 		height: HERO_H - HERO_L2,
 	}
 	// The descender's own ink, so its callout lands on the 'y' and not the 'p'.
 	const whyTail = rowSpans(why, Math.round(SCAN_BASELINE + descent * 0.55))[0]
 	const descenderDot: Point = {
-		x: ofType[4].x + (whyTail ? (whyTail[0] + whyTail[1]) / 2 : why.advance * 0.4),
+		x: ofType[4]!.x + (whyTail ? (whyTail[0] + whyTail[1]) / 2 : why.advance * 0.4),
 		y: HERO_L2 + descent * 0.55,
 	}
 
@@ -1540,7 +1581,7 @@ function heroGeometry(font: string) {
 	const strokeClip =
 		arms && whyLine1Bounds
 			? (() => {
-					const glyphX = anatomy[6].x
+					const glyphX = anatomy[6]!.x
 					// Never left of the 'y' own advance origin. In a monospaced face its ink
 					// starts within a pixel or two of that origin, so a bare margin reaches
 					// back into the preceding 'm' and tints its serif.
@@ -1548,8 +1589,8 @@ function heroGeometry(font: string) {
 					const right = glyphX + whyLine1Bounds.right + 2
 					const topY = onLine1(arms.top) - 6
 					const bottomY = onLine1(whyLine1Bounds.bottom) + 4
-					const seamTopX = glyphX + arms.seam[0].x
-					const seamEndY = onLine1(arms.seam[arms.seam.length - 1].y)
+					const seamTopX = glyphX + arms.seam[0]!.x
+					const seamEndY = onLine1(arms.seam.at(-1)!.y)
 					const seam = arms.seam.map(
 						(point) => `${Math.min(Math.max(glyphX + point.x, left), right)},${onLine1(point.y)}`,
 					)
@@ -1563,35 +1604,35 @@ function heroGeometry(font: string) {
 				})()
 			: ''
 	const stroke: Point = arms
-		? { x: anatomy[6].x + (arms.arm[0] + arms.arm[1]) / 2, y: onLine1(arms.sample.y) }
-		: { x: anatomy[6].x + why.advance * 0.8, y: HERO_L1 - xHeight * 0.5 }
+		? { x: anatomy[6]!.x + (arms.arm[0] + arms.arm[1]) / 2, y: onLine1(arms.sample.y) }
+		: { x: anatomy[6]!.x + why.advance * 0.8, y: HERO_L1 - xHeight * 0.5 }
 
 	// ── Remaining callout anchors ─────────────────────────────────────────────
 	const capApex = topRow(capital, 0, capWidth)
 	const capApexSpans = rowSpans(capital, capApex, capWidth)
 	const uppercase: Point = capApexSpans.length
-		? { x: anatomyX0 + (capApexSpans[0][0] + capApexSpans[capApexSpans.length - 1][1]) / 2, y: onLine1(capApex) }
-		: { x: anatomy[0].x + anatomy[0].w * 0.5, y: HERO_L1 - capHeight }
+		? { x: anatomyX0 + (capApexSpans[0]![0] + capApexSpans.at(-1)![1]) / 2, y: onLine1(capApex) }
+		: { x: anatomy[0]!.x + anatomy[0]!.w * 0.5, y: HERO_L1 - capHeight }
 
 	const nArch = archApex(enn, 0)
 	const lowercase: Point = nArch
-		? { x: anatomy[1].x + nArch.x, y: onLine1(nArch.y) }
-		: { x: anatomy[1].x + anatomy[1].w * 0.6, y: HERO_L1 - xHeight }
+		? { x: anatomy[1]!.x + nArch.x, y: onLine1(nArch.y) }
+		: { x: anatomy[1]!.x + anatomy[1]!.w * 0.6, y: HERO_L1 - xHeight }
 
 	const mArch = archApex(emm, 0)
 	const shoulder: Point = mArch
-		? { x: anatomy[5].x + mArch.x, y: onLine1(mArch.y) }
-		: { x: anatomy[5].x + anatomy[5].w * 0.4, y: HERO_L1 - xHeight }
+		? { x: anatomy[5]!.x + mArch.x, y: onLine1(mArch.y) }
+		: { x: anatomy[5]!.x + anatomy[5]!.w * 0.4, y: HERO_L1 - xHeight }
 
 	const gap = apertureGap(ay, xHeight)
 	const aperture: Point = gap
-		? { x: anatomy[2].x + gap.x, y: onLine1(gap.y) }
-		: { x: anatomy[2].x + anatomy[2].w * 0.6, y: HERO_L1 - xHeight * 0.6 }
+		? { x: anatomy[2]!.x + gap.x, y: onLine1(gap.y) }
+		: { x: anatomy[2]!.x + anatomy[2]!.w * 0.6, y: HERO_L1 - xHeight * 0.6 }
 
 	const tip = crossbarTerminal(tee, xHeight)
 	const terminal: Point = tip
-		? { x: anatomy[3].x + tip.x, y: onLine1(tip.y) }
-		: { x: anatomy[3].x + anatomy[3].w, y: HERO_L1 - xHeight }
+		? { x: anatomy[3]!.x + tip.x, y: onLine1(tip.y) }
+		: { x: anatomy[3]!.x + anatomy[3]!.w, y: HERO_L1 - xHeight }
 	// A terminal is the free end of a stroke, so highlight a run of the crossbar
 	// roughly as long as it is thick. A bare dot gave no sense of what it named.
 	const crossbarColumn = tip
@@ -1599,7 +1640,7 @@ function heroGeometry(font: string) {
 		: undefined
 	const terminalBox: Box | null = tip
 		? {
-				x: anatomy[3].x + tip.x - (crossbarColumn ? (crossbarColumn[1] - crossbarColumn[0] + 1) * 1.8 : 16),
+				x: anatomy[3]!.x + tip.x - (crossbarColumn ? (crossbarColumn[1] - crossbarColumn[0] + 1) * 1.8 : 16),
 				y: onLine1(crossbarColumn ? crossbarColumn[0] - 2 : tip.y - 8),
 				width: (crossbarColumn ? (crossbarColumn[1] - crossbarColumn[0] + 1) * 1.8 : 16) + 4,
 				height: crossbarColumn ? crossbarColumn[1] - crossbarColumn[0] + 5 : 16,
@@ -1609,8 +1650,8 @@ function heroGeometry(font: string) {
 	const effTop = topRow(eff)
 	const effSpans = rowSpans(eff, effTop)
 	const ascender: Point = effSpans.length
-		? { x: ofType[1].x + (effSpans[0][0] + effSpans[effSpans.length - 1][1]) / 2, y: onLine2(effTop) }
-		: { x: ofType[1].x + ofType[1].w * 0.5, y: HERO_L2 - ascent }
+		? { x: ofType[1]!.x + (effSpans[0]![0] + effSpans.at(-1)![1]) / 2, y: onLine2(effTop) }
+		: { x: ofType[1]!.x + ofType[1]!.w * 0.5, y: HERO_L2 - ascent }
 
 	return {
 		fs,
@@ -1636,7 +1677,7 @@ function heroGeometry(font: string) {
 		aperture,
 		terminal,
 		ascender,
-		stem: { x: ofType[3].x + ofType[3].w * 0.5, y: HERO_L2 - capHeight * 0.48 },
+		stem: { x: ofType[3]!.x + ofType[3]!.w * 0.5, y: HERO_L2 - capHeight * 0.48 },
 		// Clear of whichever is wider — the default margin, or the second line
 		// itself, which in a monospaced face runs far enough right to reach it.
 		bracketX: Math.max(HERO_W - 160, ofTypeX0 + measurer.measureText(LINE_2).width + 14),
@@ -1646,12 +1687,12 @@ function heroGeometry(font: string) {
 		descenderDot,
 		guideYs: [
 			...new Set([
+				HERO_L1,
 				HERO_L1 - capHeight,
 				HERO_L1 - xHeight,
-				HERO_L1,
+				HERO_L2,
 				HERO_L2 - capHeight,
 				HERO_L2 - xHeight,
-				HERO_L2,
 				HERO_L2 + descent,
 			]),
 		],
@@ -1687,7 +1728,7 @@ function AnatomyHero({ font }: { font: string }) {
 		</text>
 	)
 
-	const callout = (text: string, dot: Point, lx: number, ly: number, anchor: 'start' | 'middle' | 'end' = 'middle') => (
+	const callout = (text: string, dot: Point, lx: number, ly: number, anchor: 'end' | 'middle' | 'start' = 'middle') => (
 		<g key={text}>
 			{/* Ringed in the page colour so a dot stays legible whether it lands on
 			    a plain letterform or inside one of the ACCENT highlights. */}
@@ -1719,8 +1760,7 @@ function AnatomyHero({ font }: { font: string }) {
 	const LABEL_GAP = 84
 	const counterX = G.counterBox.x + G.counterBox.width / 2
 	const topRowX = [G.uppercase.x, G.lowercase.x, counterX, G.shoulder.x]
-	for (let i = 1; i < topRowX.length; i++) topRowX[i] = Math.max(topRowX[i], topRowX[i - 1] + LABEL_GAP)
-	const edge = (chars: typeof anatomy, i: number) => chars[i].x + chars[i].w
+	for (let i = 1; i < topRowX.length; i++) topRowX[i] = Math.max(topRowX[i]!, topRowX[i - 1]! + LABEL_GAP)
 
 	return (
 		<svg
@@ -1754,7 +1794,7 @@ function AnatomyHero({ font }: { font: string }) {
 				    so filling the box through this mask paints only the enclosed void. */}
 				<mask id='hero-counter' maskUnits='userSpaceOnUse' x={0} y={0} width={HERO_W} height={HERO_H}>
 					<rect {...G.counterBox} fill='white' />
-					{glyph('o', G.anatomy[4].x, HERO_L1, 'black')}
+					{glyph('o', G.anatomy[4]!.x, HERO_L1, 'black')}
 				</mask>
 			</defs>
 
@@ -1776,25 +1816,25 @@ function AnatomyHero({ font }: { font: string }) {
 			{line1(FG)}
 			{line2(FG)}
 
-			<g clipPath='url(#hero-crossbar)'>{glyph('A', G.anatomy[0].x, HERO_L1, ACCENT)}</g>
-			{G.strokeClip && <g clipPath='url(#hero-stroke)'>{glyph('y', G.anatomy[6].x, HERO_L1, ACCENT)}</g>}
-			{G.terminalBox && <g clipPath='url(#hero-terminal)'>{glyph('t', G.anatomy[3].x, HERO_L1, ACCENT)}</g>}
-			<g clipPath='url(#hero-bowl)'>{glyph('p', G.ofType[5].x, HERO_L2, ACCENT)}</g>
-			<g clipPath='url(#hero-ascender)'>{glyph('f', G.ofType[1].x, HERO_L2, ACCENT)}</g>
-			<g clipPath='url(#hero-descender)'>{glyph('y', G.ofType[4].x, HERO_L2, ACCENT)}</g>
+			<g clipPath='url(#hero-crossbar)'>{glyph('A', G.anatomy[0]!.x, HERO_L1, ACCENT)}</g>
+			{G.strokeClip && <g clipPath='url(#hero-stroke)'>{glyph('y', G.anatomy[6]!.x, HERO_L1, ACCENT)}</g>}
+			{G.terminalBox && <g clipPath='url(#hero-terminal)'>{glyph('t', G.anatomy[3]!.x, HERO_L1, ACCENT)}</g>}
+			<g clipPath='url(#hero-bowl)'>{glyph('p', G.ofType[5]!.x, HERO_L2, ACCENT)}</g>
+			<g clipPath='url(#hero-ascender)'>{glyph('f', G.ofType[1]!.x, HERO_L2, ACCENT)}</g>
+			<g clipPath='url(#hero-descender)'>{glyph('y', G.ofType[4]!.x, HERO_L2, ACCENT)}</g>
 			<rect {...G.counterBox} fill={ACCENT} mask='url(#hero-counter)' />
 
 			{/* ── Labels — above line 1 ── */}
-			{callout('uppercase', G.uppercase, topRowX[0], ABOVE1)}
-			{callout('lowercase', G.lowercase, topRowX[1], ABOVE1)}
-			{callout('counter', { x: counterX, y: G.counterBox.y + G.counterBox.height / 2 }, topRowX[2], ABOVE1)}
-			{callout('shoulder', G.shoulder, topRowX[3], ABOVE1)}
+			{callout('uppercase', G.uppercase, topRowX[0]!, ABOVE1)}
+			{callout('lowercase', G.lowercase, topRowX[1]!, ABOVE1)}
+			{callout('counter', { x: counterX, y: G.counterBox.y + G.counterBox.height / 2 }, topRowX[2]!, ABOVE1)}
+			{callout('shoulder', G.shoulder, topRowX[3]!, ABOVE1)}
 
 			{/* ── Labels — below line 1 ── */}
 			{callout('cross bar', G.crossbar.dot, G.crossbar.dot.x - 14, BELOW1, 'end')}
-			{callout('aperture', G.aperture, anatomy[2].x + anatomy[2].w * 0.5 + 30, BELOW1, 'start')}
-			{callout('terminal', G.terminal, anatomy[3].x + anatomy[3].w * 0.5 + 44, BELOW1, 'start')}
-			{callout('stroke', G.stroke, edge(anatomy, 6) + 6, BELOW1, 'start')}
+			{callout('aperture', G.aperture, anatomy[2]!.x + anatomy[2]!.w * 0.5 + 30, BELOW1, 'start')}
+			{callout('terminal', G.terminal, anatomy[3]!.x + anatomy[3]!.w * 0.5 + 44, BELOW1, 'start')}
+			{callout('stroke', G.stroke, anatomy[6]!.x + anatomy[6]!.w + 6, BELOW1, 'start')}
 
 			{/* ── Labels — line 2 ── */}
 			{callout('ascender', G.ascender, G.ofTypeX0 - 8, HERO_L2 - ascent + 14, 'end')}
@@ -1849,6 +1889,7 @@ function renderTerm(
 		const [L1, L2] = multiLayout(term.sample, term.fontSize, font, fontWeight, cw, ch, lineHeightRatio)
 		return term.draw(L1, L2)
 	}
+
 	const L = computeLayout(term.sample, term.fontSize, font, fontWeight, cw, ch)
 	if (term.id === 'tracking') return term.draw({ ...L, trackingEm })
 	if (term.id === 'textboxtrim') return term.draw({ ...L, textBoxTrim })
@@ -1889,6 +1930,7 @@ function App() {
 			})
 		})
 		obs.observe(panel)
+
 		return () => {
 			obs.disconnect()
 			if (rafId !== null) cancelAnimationFrame(rafId)
@@ -1899,15 +1941,20 @@ function App() {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') setPinned(null)
 		}
+
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
 	}, [])
 
-	useEffect(() => {
+	// Reset the specimen controls whenever a new glossary term becomes active
+	const [prevActiveId, setPrevActiveId] = useState(activeId)
+
+	if (prevActiveId !== activeId) {
+		setPrevActiveId(activeId)
 		setLeadingSize('md')
 		setTrackingSize('widest')
 		setTextBoxTrim('both')
-	}, [activeId])
+	}
 
 	return (
 		<ThemeProvider>
@@ -1941,7 +1988,7 @@ function App() {
 													className={`join-item btn btn-xs${font === f ? ' btn-active' : ''}`}
 													onClick={() => setFont(f)}
 												>
-													{f[0].toUpperCase() + f.slice(1)}
+													{f.charAt(0).toUpperCase() + f.slice(1)}
 												</button>
 											))}
 										</div>

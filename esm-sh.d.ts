@@ -38,6 +38,10 @@ declare module 'https://esm.sh/@trenaryja/ui/utils' {
 	export * from '@trenaryja/ui/utils'
 }
 
+declare module 'https://esm.sh/advanced-cropper' {
+	export * from 'advanced-cropper'
+}
+
 declare module 'https://esm.sh/chroma-js' {
 	export * from 'chroma-js'
 	export { default } from 'chroma-js'
@@ -78,7 +82,9 @@ declare module 'https://esm.sh/qrcode' {
 }
 
 declare module 'https://esm.sh/react' {
+	// eslint-disable-next-line @typescript-eslint/no-require-imports -- import-assignment is the only way to alias a whole module for `export =` in a declare module
 	import React = require('react')
+
 	export = React
 }
 

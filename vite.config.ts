@@ -37,20 +37,20 @@ ${fragment}
 		transformIndexHtml: {
 			order: 'pre',
 			handler(html, ctx) {
-				const match = ctx.filename.match(/\/src\/(p|t)\/([^/]+)\/index\.html$/)
-				if (!match || !isPenDir(match[1])) return html
-				return buildWrapper(match[2], match[1])
+				const match = /\/src\/(p|t)\/([^/]+)\/index\.html$/.exec(ctx.filename)
+				if (!match || !isPenDir(match[1]!)) return html
+				return buildWrapper(match[2]!, match[1])
 			},
 		},
 
 		configureServer(server) {
 			server.middlewares.use(async (req, res, next) => {
 				const url = req.url ?? ''
-				const match = url.match(penUrlRe)
-				if (!match || !isPenDir(match[1])) return next()
+				const match = penUrlRe.exec(url)
+				if (!match || !isPenDir(match[1]!)) return next()
 
 				const dir = match[1]
-				const slug = match[2]
+				const slug = match[2]!
 				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return next()
 
 				const html = buildWrapper(slug, dir)
@@ -64,7 +64,7 @@ ${fragment}
 
 		configurePreviewServer(server) {
 			server.middlewares.use((req, _res, next) => {
-				const match = (req.url ?? '').match(penUrlRe)
+				const match = penUrlRe.exec(req.url ?? '')
 				if (match) req.url = `/src/${match[1]}/${match[2]}/${match[3] ?? ''}`
 				next()
 			})
@@ -76,17 +76,18 @@ function esmShToNpm(url: string): string {
 	const spec = url.slice('https://esm.sh/'.length).replace(/\?.*$/, '')
 
 	if (spec.startsWith('@')) {
+		// scoped esm.sh specs are always @scope/name[/subpath]
 		const [scope, nameAndVersion, ...rest] = spec.split('/')
-		return [scope, nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
+		return [scope, nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
 	}
 
 	const [nameAndVersion, ...rest] = spec.split('/')
-	return [nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
+	return [nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
 }
 
 function esmShToLocal(id: string): string | undefined {
 	const npmSpec = esmShToNpm(id)
-	const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
+	const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]!
 	return existsSync(resolve(import.meta.dirname, 'node_modules', pkgRoot)) ? npmSpec : undefined
 }
 

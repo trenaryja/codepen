@@ -96,16 +96,17 @@ function esmShToNpm(url: string): string {
 	const spec = url.slice('https://esm.sh/'.length).replace(/\?.*$/, '')
 
 	if (spec.startsWith('@')) {
+		// scoped esm.sh specs are always @scope/name[/subpath]
 		const [scope, nameAndVersion, ...rest] = spec.split('/')
-		return [scope, nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
+		return [scope, nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
 	}
 
 	const [nameAndVersion, ...rest] = spec.split('/')
-	return [nameAndVersion.replace(/@.*$/, ''), ...rest].join('/')
+	return [nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
 }
 
 const npmPkgRoot = (npmSpec: string) =>
-	npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]
+	npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]!
 
 // package.json is the source of truth for what a pen may import, never node_modules — an orphaned
 // install dir (dropped from package.json but never pruned) otherwise reads as a satisfied dependency,
@@ -118,7 +119,7 @@ function declaredPkgs(): Set<string> {
 function hasOwnTypes(pkgName: string): boolean {
 	try {
 		const pkg = JSON.parse(readFileSync(join(ROOT, 'node_modules', pkgName, 'package.json'), 'utf-8'))
-		return !!(pkg.types || pkg.typings)
+		return !!(pkg.types ?? pkg.typings)
 	} catch {
 		return false
 	}
@@ -145,7 +146,7 @@ function syncEsmDeclarations(importUrls: string[]): void {
 	for (const m of current.matchAll(
 		/declare module '(https:\/\/esm\.sh\/(?!\*)[^']+)'(?:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})?/g,
 	)) {
-		blocks.set(m[1], m[0])
+		blocks.set(m[1]!, m[0])
 	}
 
 	const imported = new Set(importUrls)
@@ -221,6 +222,7 @@ async function cmdNew(slug?: string, template?: string): Promise<void> {
 
 function cmdList(): void {
 	const pens = getPens()
+
 	if (pens.length === 0) {
 		note('No pens yet. Run: penx new', 'Pens')
 		return
@@ -244,7 +246,7 @@ async function cmdExport(slug?: string): Promise<void> {
 	const pens = getPens()
 	if (pens.length === 0) fail('No pens found.')
 
-	const resolvedSlug = slug ?? (pens.length === 1 ? pens[0] : await selectPen(pens, 'Which pen to export?'))
+	const resolvedSlug = slug ?? (pens.length === 1 ? pens[0]! : await selectPen(pens, 'Which pen to export?'))
 	const penDir = join(PENS_DIR, resolvedSlug)
 	if (!existsSync(penDir)) fail(`Pen "${resolvedSlug}" not found.`)
 
@@ -333,7 +335,7 @@ async function importUrl(slugFlag?: string, urlFlag?: string): Promise<void> {
 			v?.includes('codepen.io') ? undefined : 'Must be a CodePen URL',
 		))
 
-	const match = url.match(/codepen\.io\/([^/]+)\/pen\/([^#/?]+)/)
+	const match = /codepen\.io\/([^/]+)\/pen\/([^#/?]+)/.exec(url)
 	if (!match) fail('Could not parse CodePen URL.')
 
 	const [, user, penSlug] = match
@@ -564,7 +566,7 @@ async function main() {
 			}),
 		)
 
-		process.argv = [process.argv[0], process.argv[1], ...command.split(' ')]
+		process.argv = [process.argv[0]!, process.argv[1]!, ...command.split(' ')]
 	} else {
 		intro('penx')
 	}

@@ -1,14 +1,17 @@
 import { ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import heic2any from 'https://esm.sh/heic2any'
-import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import type { CropperRef, CropperState } from 'https://esm.sh/react-advanced-cropper'
 import { Cropper } from 'https://esm.sh/react-advanced-cropper'
 import { createRoot } from 'https://esm.sh/react-dom/client'
-import { ImageRestriction } from 'advanced-cropper'
+import { ImageRestriction } from 'https://esm.sh/advanced-cropper'
 
-type Stage = 'idle' | 'loading' | 'cropping' | 'processing' | 'done' | 'error'
-type Format = 'image/png' | 'image/webp' | 'image/jpeg' | 'image/avif'
-type ModelSize = 'small' | 'medium' | 'large'
+type Stage = 'cropping' | 'done' | 'error' | 'idle' | 'loading' | 'processing'
+
+type Format = 'image/avif' | 'image/jpeg' | 'image/png' | 'image/webp'
+
+type ModelSize = 'large' | 'medium' | 'small'
+
 type BrushMode = 'erase' | 'restore'
 
 const FORMAT_META: Record<Format, { ext: string; label: string; transparency: boolean }> = {
@@ -24,9 +27,13 @@ const MODEL_META: Record<ModelSize, { label: string; size: string }> = {
 	large: { label: 'Best quality', size: '~168 MB' },
 }
 
-const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+const nextFrame = () =>
+	new Promise<void>((resolve) => {
+		requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+	})
 
-const ESM_SH = 'https://esm' + '.sh/' // split to prevent Vite's esm.sh plugin from rewriting
+// eslint-disable-next-line no-useless-concat -- split to prevent Vite's esm.sh plugin from rewriting
+const ESM_SH = 'https://esm' + '.sh/'
 
 function createBgWorker(model: ModelSize): Worker {
 	const code = `
@@ -53,9 +60,10 @@ self.onmessage = async (e) => {
 async function normalizeFile(file: File): Promise<string> {
 	if (file.type === 'image/heic' || file.name.toLowerCase().endsWith('.heic')) {
 		const converted = await heic2any({ blob: file, toType: 'image/png' })
-		const blob = Array.isArray(converted) ? converted[0] : converted
+		const blob = Array.isArray(converted) ? converted[0]! : converted
 		return URL.createObjectURL(blob)
 	}
+
 	return URL.createObjectURL(file)
 }
 
@@ -70,7 +78,7 @@ const PHASE_LABELS: Record<string, string> = {
 const DETERMINISTIC_PHASES = new Set(['fetch:model'])
 
 function phaseLabel(key: string): string {
-	if (key in PHASE_LABELS) return PHASE_LABELS[key]
+	if (key in PHASE_LABELS) return PHASE_LABELS[key]!
 	if (key.startsWith('fetch:')) return 'Downloading resources…'
 	if (key.startsWith('compute:')) return 'Processing…'
 	return 'Working…'
@@ -79,8 +87,10 @@ function phaseLabel(key: string): string {
 function runBgRemoval(blob: Blob, model: ModelSize, onProgress: (info: ProgressInfo) => void): Promise<Blob> {
 	return new Promise((resolve, reject) => {
 		const worker = createBgWorker(model)
+
 		worker.onmessage = (e: MessageEvent) => {
 			const { type } = e.data
+
 			if (type === 'progress') {
 				const { key, current, total } = e.data
 				const pct = DETERMINISTIC_PHASES.has(key) && total > 0 ? Math.round((current / total) * 100) : null
@@ -93,10 +103,12 @@ function runBgRemoval(blob: Blob, model: ModelSize, onProgress: (info: ProgressI
 				worker.terminate()
 			}
 		}
+
 		worker.onerror = (err) => {
 			reject(err)
 			worker.terminate()
 		}
+
 		worker.postMessage(blob)
 	})
 }
@@ -104,6 +116,7 @@ function runBgRemoval(blob: Blob, model: ModelSize, onProgress: (info: ProgressI
 function imageToBlobUrl(src: string): Promise<Blob> {
 	return new Promise((resolve, reject) => {
 		const img = new Image()
+
 		img.onload = () => {
 			const c = document.createElement('canvas')
 			c.width = img.naturalWidth
@@ -111,6 +124,7 @@ function imageToBlobUrl(src: string): Promise<Blob> {
 			c.getContext('2d')!.drawImage(img, 0, 0)
 			c.toBlob((b) => (b ? resolve(b) : reject(new Error('Canvas export failed'))), 'image/png')
 		}
+
 		img.onerror = reject
 		img.src = src
 	})
@@ -150,12 +164,19 @@ function createBrushPattern(
 
 function Elapsed({ running }: { running: boolean }) {
 	const [seconds, setSeconds] = useState(0)
-	const startRef = useRef(Date.now())
+	const startRef = useRef(0)
+
+	// Reset the counter as soon as `running` flips, not a render later
+	const [prevRunning, setPrevRunning] = useState(running)
+
+	if (prevRunning !== running) {
+		setPrevRunning(running)
+		setSeconds(0)
+	}
 
 	useEffect(() => {
 		if (!running) return
 		startRef.current = Date.now()
-		setSeconds(0)
 		const id = setInterval(() => setSeconds(Math.floor((Date.now() - startRef.current) / 1000)), 1000)
 		return () => clearInterval(id)
 	}, [running])
@@ -222,6 +243,7 @@ function EraserCanvas({
 
 			setReady(true)
 		})
+
 		return () => {
 			cancelled = true
 		}
@@ -230,8 +252,8 @@ function EraserCanvas({
 	const getCanvasPos = (e: React.MouseEvent | React.TouchEvent): { x: number; y: number } => {
 		const canvas = canvasRef.current!
 		const rect = canvas.getBoundingClientRect()
-		const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
-		const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY
+		const clientX = 'touches' in e ? e.touches[0]!.clientX : e.clientX
+		const clientY = 'touches' in e ? e.touches[0]!.clientY : e.clientY
 		return {
 			x: ((clientX - rect.left) / rect.width) * canvas.width,
 			y: ((clientY - rect.top) / rect.height) * canvas.height,
@@ -253,6 +275,13 @@ function EraserCanvas({
 		const data = ctx.getImageData(0, 0, canvas.width, canvas.height)
 		undoStackRef.current.push(data)
 		if (undoStackRef.current.length > 30) undoStackRef.current.shift()
+	}
+
+	const emitUpdate = () => {
+		const canvas = canvasRef.current!
+		canvas.toBlob((blob) => {
+			if (blob) onUpdate(URL.createObjectURL(blob))
+		}, 'image/png')
 	}
 
 	const undo = () => {
@@ -279,6 +308,7 @@ function EraserCanvas({
 			if (mode === 'erase') {
 				ctx.save()
 				ctx.globalCompositeOperation = 'destination-out'
+
 				if (hardness >= 0.95) {
 					ctx.beginPath()
 					ctx.arc(x, y, radius, 0, Math.PI * 2)
@@ -287,6 +317,7 @@ function EraserCanvas({
 					ctx.fillStyle = createBrushPattern(ctx, x, y, radius, hardness)
 					ctx.fillRect(x - radius, y - radius, brushSize, brushSize)
 				}
+
 				ctx.restore()
 			} else {
 				// Restore from original cropped image with feathering
@@ -306,6 +337,7 @@ function EraserCanvas({
 				tmpCtx.restore()
 
 				tmpCtx.globalCompositeOperation = 'destination-in'
+
 				if (hardness >= 0.95) {
 					tmpCtx.beginPath()
 					tmpCtx.arc(x, y, radius, 0, Math.PI * 2)
@@ -314,6 +346,7 @@ function EraserCanvas({
 					tmpCtx.fillStyle = createBrushPattern(tmpCtx, x, y, radius, hardness)
 					tmpCtx.fillRect(x - radius, y - radius, brushSize, brushSize)
 				}
+
 				tmpCtx.globalCompositeOperation = 'source-over'
 
 				ctx.save()
@@ -322,13 +355,6 @@ function EraserCanvas({
 				ctx.restore()
 			}
 		}
-	}
-
-	const emitUpdate = () => {
-		const canvas = canvasRef.current!
-		canvas.toBlob((blob) => {
-			if (blob) onUpdate(URL.createObjectURL(blob))
-		}, 'image/png')
 	}
 
 	const handleWheel = (e: React.WheelEvent) => {
@@ -390,19 +416,20 @@ function EraserCanvas({
 		setPan({ x: 0, y: 0 })
 	}
 
-	useEffect(() => {
-		const handleKey = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-				e.preventDefault()
-				undo()
-			} else if (e.key === '0') {
-				resetView()
-			} else if (e.key === '[') {
-				setBrushSize((s) => Math.max(5, s - 5))
-			} else if (e.key === ']') {
-				setBrushSize((s) => Math.min(150, s + 5))
-			}
+	const handleKey = useEffectEvent((e: KeyboardEvent) => {
+		if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+			e.preventDefault()
+			undo()
+		} else if (e.key === '0') {
+			resetView()
+		} else if (e.key === '[') {
+			setBrushSize((s) => Math.max(5, s - 5))
+		} else if (e.key === ']') {
+			setBrushSize((s) => Math.min(150, s + 5))
 		}
+	})
+
+	useEffect(() => {
 		window.addEventListener('keydown', handleKey)
 		return () => window.removeEventListener('keydown', handleKey)
 	}, [])
@@ -582,9 +609,12 @@ const Root = () => {
 		setProgressInfo({ label: 'Preparing your crop…', pct: null })
 		await nextFrame()
 
-		const croppedBlob = await new Promise<Blob>((resolve, reject) =>
-			canvas.toBlob((b: Blob | null) => (b ? resolve(b) : reject(new Error('Canvas export failed'))), 'image/png'),
-		)
+		const croppedBlob = await new Promise<Blob>((resolve, reject) => {
+			canvas.toBlob((b: Blob | null) => {
+				if (b) resolve(b)
+				else reject(new Error('Canvas export failed'))
+			}, 'image/png')
+		})
 		const previewUrl = URL.createObjectURL(croppedBlob)
 		await processImage(croppedBlob, previewUrl)
 	}
@@ -641,10 +671,12 @@ const Root = () => {
 		c.width = img.naturalWidth
 		c.height = img.naturalHeight
 		const ctx = c.getContext('2d')!
+
 		if (!transparency) {
 			ctx.fillStyle = bgColor
 			ctx.fillRect(0, 0, c.width, c.height)
 		}
+
 		ctx.drawImage(img, 0, 0)
 		c.toBlob(
 			(blob) => {
@@ -666,13 +698,16 @@ const Root = () => {
 		setProgressInfo({ label: '', pct: null })
 		setError(null)
 		savedCropperStateRef.current = null
+
 		for (const url of [imageUrl, resultUrl, croppedUrl, editedUrl]) {
 			if (url) URL.revokeObjectURL(url)
 		}
+
 		if (downloadBlobUrlRef.current) {
 			URL.revokeObjectURL(downloadBlobUrlRef.current)
 			downloadBlobUrlRef.current = null
 		}
+
 		setImageUrl(null)
 		setResultUrl(null)
 		setCroppedUrl(null)
@@ -682,21 +717,22 @@ const Root = () => {
 		if (inputRef.current) inputRef.current.value = ''
 	}
 
-	useEffect(() => {
-		const handleKey = (e: KeyboardEvent) => {
-			if (stage === 'cropping') {
-				if (e.key === 'Enter') {
-					e.preventDefault()
-					handleCropAndRemove()
-				} else if (e.key === 'Escape') {
-					e.preventDefault()
-					reset()
-				}
+	const handleStageKey = useEffectEvent((e: KeyboardEvent) => {
+		if (stage === 'cropping') {
+			if (e.key === 'Enter') {
+				e.preventDefault()
+				handleCropAndRemove()
+			} else if (e.key === 'Escape') {
+				e.preventDefault()
+				reset()
 			}
 		}
-		window.addEventListener('keydown', handleKey)
-		return () => window.removeEventListener('keydown', handleKey)
-	}, [stage])
+	})
+
+	useEffect(() => {
+		window.addEventListener('keydown', handleStageKey)
+		return () => window.removeEventListener('keydown', handleStageKey)
+	}, [])
 
 	return (
 		<ThemeProvider>

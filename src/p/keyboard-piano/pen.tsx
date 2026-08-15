@@ -1,5 +1,5 @@
-import { ThemePicker, ThemeProvider, Toaster, toast } from 'https://esm.sh/@trenaryja/ui'
-import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
+import { ThemePicker, ThemeProvider, toast, Toaster } from 'https://esm.sh/@trenaryja/ui'
+import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import * as R from 'https://esm.sh/remeda'
 
@@ -211,7 +211,7 @@ function Piano({
 						n={n}
 						active={activeKeys.has(n.key)}
 						onPress={() => onTrigger(n.key, n.freq)}
-						style={{ left: `calc(${((blackPos[n.key] + 1) / white.length) * 100}% - 4%)` }}
+						style={{ left: `calc(${((blackPos[n.key]! + 1) / white.length) * 100}% - 4%)` }}
 					/>
 				))}
 		</div>
@@ -315,7 +315,7 @@ function SongGuide({
 				{song.phrases.map((phrase, pi) => (
 					<span key={`p${String(pi)}`} className='inline-flex items-center gap-x-1'>
 						{phrase.map((step, si) => {
-							const gi = offsets[pi] + si
+							const gi = offsets[pi]! + si // offsets has one entry per phrase
 							const state: 'current' | 'played' | 'upcoming' =
 								gi === songPos ? 'current' : gi < songPos ? 'played' : 'upcoming'
 
@@ -354,7 +354,7 @@ function useVisibleNotes(whiteCount: number) {
 
 	// Snap to nearest white key at or after offset
 	let start = offset
-	while (start < ALL_NOTES.length && ALL_NOTES[start].black) start += 1
+	while (start < ALL_NOTES.length && ALL_NOTES[start]!.black) start += 1
 
 	const visible: ChromaticNote[] = []
 	let wc = 0
@@ -362,26 +362,27 @@ function useVisibleNotes(whiteCount: number) {
 
 	// Collect exactly `count` white keys and all blacks between them
 	while (wc < count && vi < ALL_NOTES.length) {
-		visible.push(ALL_NOTES[vi])
-		if (!ALL_NOTES[vi].black) wc += 1
+		const note = ALL_NOTES[vi]! // while-guard: vi < ALL_NOTES.length
+		visible.push(note)
+		if (!note.black) wc += 1
 		vi += 1
 	}
 
 	// Include trailing black key (for the last slot)
-	if (vi < ALL_NOTES.length && ALL_NOTES[vi].black) {
-		visible.push(ALL_NOTES[vi])
+	if (vi < ALL_NOTES.length && ALL_NOTES[vi]!.black) {
+		visible.push(ALL_NOTES[vi]!)
 	}
 
 	// Assign keyboard keys based on spatial layout
 	let whiteIdx = 0
 	const notes: NoteConfig[] = visible.map((n) => {
 		if (!n.black) {
-			const key = HOME_KEYS[whiteIdx]
+			const key = HOME_KEYS[whiteIdx]! // count ≤ MAX_WHITE_COUNT = HOME_KEYS.length
 			whiteIdx += 1
 			return { ...n, key }
 		}
 
-		return { ...n, key: SLOT_KEYS[whiteIdx - 1] }
+		return { ...n, key: SLOT_KEYS[whiteIdx - 1]! } // blacks always follow a white, so whiteIdx ≥ 1
 	})
 
 	const white = notes.filter((n) => !n.black)
@@ -439,7 +440,8 @@ function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<
 			const toNote: Record<string, string> = {}
 
 			for (const n of uniqueSongNotes) {
-				const transposed = ALL_NOTES[NOTE_INDEX[n] + shift]
+				// allFit verified every note has an index and transposes onto a visible key
+				const transposed = ALL_NOTES[NOTE_INDEX[n]! + shift]!
 
 				toKey[n] = noteToKey[transposed.note] ?? '?'
 				toNote[n] = transposed.note
@@ -451,7 +453,7 @@ function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<
 
 	// No perfect fit — fall back to closest octave shift and show ? for missing notes
 	const minSong = Math.min(...songIndices)
-	const minVis = Math.min(...notes.map((n) => NOTE_INDEX[n.note]))
+	const minVis = Math.min(...notes.map((n) => NOTE_INDEX[n.note]!)) // every visible note is in NOTE_INDEX
 	const bestShift = Math.round((minVis - minSong) / 12) * 12
 
 	const toKey: Record<string, string> = {}
@@ -480,6 +482,7 @@ function usePianoWidth(ref: React.RefObject<HTMLDivElement | null>) {
 
 		const update = () => {
 			const count = Math.floor(el.clientWidth / (MIN_KEY_WIDTH_REM * REM_PX))
+			// eslint-disable-next-line @eslint-react/set-state-in-effect -- initial key count needs a DOM measurement, only possible after mount
 			setWidth(Math.max(1, Math.min(count, MAX_WHITE_COUNT)))
 		}
 
@@ -559,12 +562,12 @@ function Root() {
 	const { black, blackPos, firstNote, handleWheel, keyToNote, lastNote, noteToKey, notes, white } =
 		useVisibleNotes(whiteCount)
 
-	const songName = SONG_NAMES[songIdx]
-	const song = parseSong(SONGS[songName], keyToNote)
+	const songName = SONG_NAMES[songIdx]! // songIdx cycles within SONG_NAMES.length
+	const song = parseSong(SONGS[songName]!, keyToNote)
 	const songKeyMap = getSongKeyMap(song, notes, noteToKey)
 
 	const getAudioCtx = () => {
-		if (!audioCtxRef.current) audioCtxRef.current = new AudioContext()
+		audioCtxRef.current ??= new AudioContext()
 		audioCtxRef.current.resume()
 		return audioCtxRef.current
 	}
@@ -585,7 +588,7 @@ function Root() {
 
 		setSongPos((prev) => {
 			if (prev >= song.steps.length) return prev
-			const stepKeys = song.steps[prev].map((n: string) => songKeyMap.toKey[n] ?? '?')
+			const stepKeys = song.steps[prev]!.map((n: string) => songKeyMap.toKey[n] ?? '?') // guarded: prev < song.steps.length
 
 			if (stepKeys.length === 1) {
 				if (key !== stepKeys[0]) return prev
@@ -625,20 +628,20 @@ function Root() {
 		resetChord(chordRef, setChordProgress)
 	}
 
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.repeat) return
-			const found = notes.find((n) => n.key === e.key.toLowerCase())
+	const onKey = useEffectEvent((e: KeyboardEvent) => {
+		if (e.repeat) return
+		const found = notes.find((n) => n.key === e.key.toLowerCase())
 
-			if (found) {
-				e.preventDefault()
-				triggerNote(found.key, found.freq)
-			}
+		if (found) {
+			e.preventDefault()
+			triggerNote(found.key, found.freq)
 		}
+	})
 
+	useEffect(() => {
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	}, [triggerNote, notes])
+	}, [])
 
 	return (
 		<ThemeProvider>

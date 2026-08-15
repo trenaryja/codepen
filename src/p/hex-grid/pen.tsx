@@ -158,7 +158,7 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 		const stroke = { ...fill, l: Math.max(0, fill.l * strokeMultiplier) }
 
 		ctx.beginPath()
-		ctx.moveTo(x + corners[0].x, y + corners[0].y)
+		ctx.moveTo(x + corners[0]!.x, y + corners[0]!.y) // a hex always has 6 corners
 		for (const c of corners.values().drop(1)) ctx.lineTo(x + c.x, y + c.y)
 		ctx.closePath()
 		ctx.fillStyle = oklch(fill)

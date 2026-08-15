@@ -1,6 +1,7 @@
 import { Input, ThemePicker, ThemeProvider } from '@trenaryja/ui'
 import { useEffect, useRef, useState } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
+import { createRoot } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
 import { FiChevronRight } from 'react-icons/fi'
 
 const penModules = import.meta.glob('./p/*/index.html', { query: '?raw', import: 'default', eager: false })
@@ -24,7 +25,7 @@ const PenCard = ({ slug, href }: Item) => {
 	useEffect(() => {
 		const el = containerRef.current
 		if (!el) return
-		const obs = new ResizeObserver(([entry]) => setScale(entry.contentRect.width / IFRAME_W))
+		const obs = new ResizeObserver(([entry]) => setScale(entry!.contentRect.width / IFRAME_W))
 		obs.observe(el)
 		return () => obs.disconnect()
 	}, [])
@@ -36,6 +37,7 @@ const PenCard = ({ slug, href }: Item) => {
 		>
 			<div ref={containerRef} className='relative overflow-hidden' style={{ aspectRatio: `${IFRAME_W}/${IFRAME_H}` }}>
 				{scale > 0 && (
+					// eslint-disable-next-line @eslint-react/dom-no-missing-iframe-sandbox -- same-origin previews of this repo's own pens; any sandbox permitting them is a no-op
 					<iframe
 						src={href}
 						title={slug}

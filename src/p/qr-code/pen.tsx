@@ -59,7 +59,7 @@ const getQRInfo = (text: string, ecc: EccLevel) => {
 	try {
 		const qr = QRCode.create(text, { errorCorrectionLevel: ecc })
 		const modeIds = [...new Set((qr.segments as unknown as Seg[]).map((s) => s.mode.id))]
-		const mode = modeIds.length === 1 ? modeIds[0] : 'Mixed'
+		const mode = modeIds.length === 1 ? modeIds[0]! : 'Mixed'
 		const capacity = mode !== 'Mixed' ? probeCapacity(qr.version, ecc, mode) : null
 
 		return { version: qr.version, n: qr.modules.size, mode, capacity }
@@ -91,7 +91,6 @@ const DIRS: [number, number][] = [
 	[1, 1],
 ]
 
-// biome-ignore lint/suspicious/noExplicitAny: qrcode library lacks exported types
 const classifyCells = (qr: any): Cell[][] => {
 	const n = qr.modules.size
 	const { data } = qr.modules
@@ -113,8 +112,8 @@ const classifyCells = (qr: any): Cell[][] => {
 
 	for (let r = 0; r < n; r++) {
 		for (let c = 0; c < n; c++) {
-			grid[r][c].darkNeighbors = DIRS.filter(
-				([dr, dc]) => r + dr >= 0 && r + dr < n && c + dc >= 0 && c + dc < n && grid[r + dr][c + dc].dark,
+			grid[r]![c]!.darkNeighbors = DIRS.filter(
+				([dr, dc]) => r + dr >= 0 && r + dr < n && c + dc >= 0 && c + dc < n && grid[r + dr]![c + dc]!.dark,
 			).length
 		}
 	}
@@ -122,7 +121,6 @@ const classifyCells = (qr: any): Cell[][] => {
 	return grid
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: d3 selection type is complex and not worth narrowing here
 const finderEyes = (svg: any, n: number) => {
 	const g = svg.append('g')
 
@@ -130,7 +128,7 @@ const finderEyes = (svg: any, n: number) => {
 		[3.5, 3.5],
 		[3.5, n - 3.5],
 		[n - 3.5, 3.5],
-	]) {
+	] as const) {
 		const cx = col * CELL
 		const cy = row * CELL
 
@@ -160,7 +158,7 @@ type ParamSpec = {
 	step: number
 }
 
-type P = Record<string, number>
+type P = Record<string, number> // each style's keys are seeded in the params state init, so renderers assert with !
 
 const PARAM_SPECS: Partial<Record<StyleName, Record<string, ParamSpec>>> = {
 	blob: {
@@ -179,7 +177,6 @@ const PARAM_SPECS: Partial<Record<StyleName, Record<string, ParamSpec>>> = {
 	},
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: d3 selection type is complex and not worth narrowing here
 type RenderArgs = { cells: Cell[][]; n: number; p: P; svg: any }
 
 const renderClassic = ({ svg, cells }: RenderArgs) => {
@@ -206,12 +203,12 @@ const renderBlob = ({ svg, cells, n, p }: RenderArgs) => {
 
 	f.append('feGaussianBlur')
 		.attr('in', 'SourceGraphic')
-		.attr('stdDeviation', CELL * p.blur)
+		.attr('stdDeviation', CELL * p.blur!)
 		.attr('result', 'blur')
 	f.append('feColorMatrix')
 		.attr('in', 'blur')
 		.attr('mode', 'matrix')
-		.attr('values', `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${p.threshold} ${-p.threshold / 2}`)
+		.attr('values', `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${p.threshold} ${-p.threshold! / 2}`)
 
 	svg
 		.append('g')
@@ -237,16 +234,16 @@ const renderHalftone = ({ svg, cells, n, p }: RenderArgs) => {
 		.join('circle')
 		.attr('cx', (c: Cell) => (c.col + 0.5) * CELL)
 		.attr('cy', (c: Cell) => (c.row + 0.5) * CELL)
-		.attr('r', (c: Cell) => CELL * (p.minR + p.range * (c.darkNeighbors / 8)))
+		.attr('r', (c: Cell) => CELL * (p.minR! + p.range! * (c.darkNeighbors / 8)))
 		.attr('fill', 'currentColor')
 }
 
 const renderIsometric = ({ svg, cells, n, p }: RenderArgs) => {
-	const h = CELL * p.depth
+	const h = CELL * p.depth!
 	const dark = cells.flat().filter((c: Cell) => c.dark)
 	// Only draw a face when it's exposed — no dark neighbor occluding it
-	const bottomFaces = dark.filter((c: Cell) => c.row + 1 >= n || !cells[c.row + 1][c.col].dark)
-	const rightFaces = dark.filter((c: Cell) => c.col + 1 >= n || !cells[c.row][c.col + 1].dark)
+	const bottomFaces = dark.filter((c: Cell) => c.row + 1 >= n || !cells[c.row + 1]![c.col]!.dark)
+	const rightFaces = dark.filter((c: Cell) => c.col + 1 >= n || !cells[c.row]![c.col + 1]!.dark)
 	const pts = {
 		bottom: (c: Cell) => {
 			const x = c.col * CELL
@@ -296,7 +293,7 @@ const renderHex = ({ svg, cells, n, p }: RenderArgs) => {
 	// True honeycomb: lay a pointy-top hex grid over the QR area.
 	// Each hex samples the QR module at its center — dark hex if that module is dark.
 	// Scannable when r < CELL/2 (hex center guaranteed within the same module cell).
-	const r = CELL * p.radius
+	const r = CELL * p.radius!
 	const colPitch = Math.sqrt(3) * r
 	const rowPitch = 1.5 * r
 	const numCols = Math.ceil((n * CELL) / colPitch) + 2
@@ -319,7 +316,7 @@ const renderHex = ({ svg, cells, n, p }: RenderArgs) => {
 			const qc = Math.floor(cx / CELL)
 			const qr = Math.floor(cy / CELL)
 
-			if (qc >= 0 && qc < n && qr >= 0 && qr < n && cells[qr][qc].dark) dark.push([cx, cy])
+			if (qc >= 0 && qc < n && qr >= 0 && qr < n && cells[qr]![qc]!.dark) dark.push([cx, cy])
 		}
 	}
 
@@ -397,7 +394,7 @@ const Sliders = ({ styleParams, params, style, setParam }: SliderProps) => {
 						onChange={(e) => setParam(key, +e.target.value)}
 					/>
 					<span className='font-mono text-xs w-10 text-right tabular-nums'>
-						{params[style][key].toFixed(spec.step >= 1 ? 0 : 2)}
+						{params[style][key]!.toFixed(spec.step >= 1 ? 0 : 2)}
 					</span>
 				</label>
 			))}

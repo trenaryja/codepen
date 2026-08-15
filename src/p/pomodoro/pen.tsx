@@ -9,11 +9,11 @@ import {
 	Select,
 	ThemePicker,
 	ThemeProvider,
+	toast,
 	Toaster,
 	Toggle,
-	toast,
 } from 'https://esm.sh/@trenaryja/ui'
-import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuRefreshCw, LuSettings, LuSkipForward } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
@@ -73,7 +73,7 @@ const formatTime = (ms: number) => {
 }
 
 const playSound = (key: string, vol: number) => {
-	const a = new Audio((SOUNDS[key] ?? SOUNDS.completed).url)
+	const a = new Audio((SOUNDS[key] ?? SOUNDS.completed!).url)
 	a.volume = vol / 100
 	a.play()
 }
@@ -92,6 +92,7 @@ const playAlarm = ({ alarmSound, alarmVolume, alarmRepeat }: Settings) => {
 }
 
 const notify = (title: string, body: string) => {
+	// eslint-disable-next-line no-new -- constructing a Notification is how the Web Notifications API fires one
 	if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body })
 }
 
@@ -142,32 +143,39 @@ const useTimer = (settings: Settings) => {
 		return { auto }
 	}
 
-	const interval = useInterval(() => {
+	const { start: startTick, stop: stopTick } = useInterval(() => {
 		if (!state.isRunning || !state.targetEndTime) return
 		const r = state.targetEndTime - Date.now()
 		setDisplayMs(r > 0 ? r : 0)
 	}, 100)
 
 	useEffect(() => {
-		if (state.isRunning) interval.start()
-		else interval.stop()
-		return interval.stop
-	}, [state.isRunning])
+		if (state.isRunning) startTick()
+		else stopTick()
+		return stopTick
+	}, [state.isRunning, startTick, stopTick])
+	const completeTimer = useEffectEvent(() => {
+		transition(state.mode, state.pomodoroCount)
+		onCompleteRef.current?.()
+	})
 	useEffect(() => {
 		if (!state.isRunning || displayMs > 0 || completedRef.current) return
 		completedRef.current = true
-		transition(state.mode, state.pomodoroCount)
-		onCompleteRef.current?.()
+		completeTimer()
 		const t = setTimeout(() => {
 			completedRef.current = false
 		}, 500)
 		return () => clearTimeout(t)
 	}, [displayMs, state.isRunning])
-	useEffect(() => {
+	const syncDisplayFromClock = useEffectEvent(() => {
 		if (state.isRunning && state.targetEndTime) {
 			const r = state.targetEndTime - Date.now()
+			// eslint-disable-next-line @eslint-react/set-state-in-effect -- mount-only resync of the countdown from the persisted wall-clock target
 			setDisplayMs(r > 0 ? r : 0)
 		}
+	})
+	useEffect(() => {
+		syncDisplayFromClock()
 	}, [])
 
 	const start = () => {

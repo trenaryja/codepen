@@ -1,5 +1,5 @@
 import { useHotkeys } from 'https://esm.sh/@mantine/hooks'
-import { Button, Field, Range, ThemeProvider, tailwindColors } from 'https://esm.sh/@trenaryja/ui'
+import { Button, Field, Range, tailwindColors, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import chroma from 'https://esm.sh/chroma-js'
 import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -100,14 +100,14 @@ const SPECTRUM: NoiseEntry[] = [
 const SPECTRUM_ENTRIES = SPECTRUM.map((entry, i) => ({
 	...entry,
 	position: i / (SPECTRUM.length - 1),
-	label: entry.type[0].toUpperCase() + entry.type.slice(1),
+	label: entry.type.charAt(0).toUpperCase() + entry.type.slice(1),
 	colors: ([800, 600, 400] as const).map((shade) => tailwindColors[entry.color][shade]),
 }))
 
 function getSpectrumNeighbors(position: number) {
 	const scaled = position * (SPECTRUM_ENTRIES.length - 1)
 	const i = Math.min(Math.floor(scaled), SPECTRUM_ENTRIES.length - 2)
-	return { lower: SPECTRUM_ENTRIES[i], upper: SPECTRUM_ENTRIES[i + 1], t: scaled - i }
+	return { lower: SPECTRUM_ENTRIES[i]!, upper: SPECTRUM_ENTRIES[i + 1]!, t: scaled - i } // i clamped to length - 2
 }
 
 function fillBlendedBuffer(position: number, samples: Float32Array) {
@@ -118,7 +118,7 @@ function fillBlendedBuffer(position: number, samples: Float32Array) {
 
 	const temp = new Float32Array(samples.length)
 	upper.generate(temp)
-	for (let i = 0; i < samples.length; i++) samples[i] = samples[i] * (1 - t) + temp[i] * t
+	for (let i = 0; i < samples.length; i++) samples[i] = samples[i]! * (1 - t) + temp[i]! * t
 }
 
 const SVG_HEIGHT = 50
@@ -135,7 +135,7 @@ function buildBlendedColorArray(position: number) {
 	if (t === 0) return colorsA
 
 	const colorsB = chroma.scale([...upper.colors]).colors(256)
-	return colorsA.map((c: string, i: number) => chroma.mix(c, colorsB[i], t).hex())
+	return colorsA.map((c: string, i: number) => chroma.mix(c, colorsB[i]!, t).hex()) // both scales have 256 colors
 }
 
 function getSpectrumLabel(position: number) {
@@ -222,10 +222,10 @@ function Root() {
 				const bar = barsRef.current[i]
 				if (!bar) continue
 
-				const barHeight = scaleBarHeight(data[i])
+				const barHeight = scaleBarHeight(data[i]!)
 				bar.setAttribute('height', String(barHeight))
 				bar.setAttribute('y', String((SVG_HEIGHT - barHeight) / 2))
-				bar.setAttribute('fill', colors[data[i]])
+				bar.setAttribute('fill', colors[data[i]!]!) // byte values index the 256-color array
 			}
 
 			animRef.current = requestAnimationFrame(animate)

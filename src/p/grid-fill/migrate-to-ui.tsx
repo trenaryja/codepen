@@ -12,11 +12,12 @@ export const colorMix = (from: string, to: string, ratio: number) =>
 
 // TODO: import { interpolateColors } from '@trenaryja/ui/utils'
 export const interpolateColors = (t: number, stops: string[]) => {
-	if (stops.length === 1) return stops[0]
+	if (stops.length === 1) return stops[0]!
 	const lastIndex = stops.length - 1
 	const scaled = R.clamp(t, { min: 0, max: 1 }) * lastIndex
 	const segment = Math.min(Math.floor(scaled), lastIndex - 1)
-	return colorMix(stops[segment], stops[segment + 1], Math.round((1 - (scaled - segment)) * 100))
+	// segment ≤ lastIndex - 1, so segment + 1 is in range
+	return colorMix(stops[segment]!, stops[segment + 1]!, Math.round((1 - (scaled - segment)) * 100))
 }
 
 // TODO: import { EdgeBadges } from '@trenaryja/ui'

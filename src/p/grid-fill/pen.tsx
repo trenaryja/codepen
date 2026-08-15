@@ -1,7 +1,7 @@
 import {
 	autoUpdate,
-	FloatingPortal,
 	flip,
+	FloatingPortal,
 	offset,
 	shift,
 	useDismiss,
@@ -16,7 +16,8 @@ import { Button, Field, ThemePicker, ThemeProvider } from 'https://esm.sh/@trena
 import { strToU8, zipSync } from 'https://esm.sh/fflate'
 import { parseAsString, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
-import { type ReactNode, useEffect, useRef, useState } from 'https://esm.sh/react'
+import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import type { ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuDownload, LuHeart, LuSlidersHorizontal } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
@@ -24,11 +25,14 @@ import { BASE62, decodeIntegers, encodeIntegers, triIndex, triInverse } from './
 import { colorMix, EdgeBadges, interpolateColors, Stepper } from './migrate-to-ui'
 
 type Bin = { x: number; y: number; w: number; h: number; key: string }
+
 type Recipe = { key: string; counts: Record<string, number>; unique: number; layout: Bin[]; tags: TagId[] }
 
 const TAG_IDS = ['max-unique', 'monochrome', 'no-repeat', 'squares-only', 'uniform-count', 'all-multi'] as const
 type TagId = (typeof TAG_IDS)[number]
+
 type Constraint = { size: string; op: '=' | '>=' | 'exclude'; n: number }
+
 const OP_SYMBOL: Record<Constraint['op'], string> = { '=': '=', '>=': '≥', exclude: '✕' }
 export type Filters = { tags: Set<TagId>; favoriteOnly: boolean; constraints: Constraint[] }
 
@@ -49,7 +53,7 @@ const STOPS = [
 	'var(--color-error)',
 ]
 
-const TAGS: Record<TagId | 'favorite', { label: string; description: string }> = {
+const TAGS: Record<'favorite' | TagId, { label: string; description: string }> = {
 	favorite: { label: 'favorites', description: 'Recipes you have marked as favorites.' },
 	'max-unique': {
 		label: 'max unique',
@@ -77,18 +81,23 @@ const TAGS: Record<TagId | 'favorite', { label: string; description: string }> =
 	},
 }
 
+const parseSize = (size: string): [number, number] => {
+	const [w, h] = size.split('×')
+	return [Number(w), Number(h)]
+}
+
 const encodeRecipe = (counts: Record<string, number>, W: number, H: number) => {
 	const pieces = Object.entries(counts)
 		.map(([key, count]) => {
-			const [w, h] = key.split('×').map(Number)
+			const [w, h] = parseSize(key)
 			return { w, h, count }
 		})
 		.sort((a, b) => triIndex(a.w, a.h) - triIndex(b.w, b.h))
 
 	const values = [W, H, pieces.length]
 	let prevIndex = -1
-	for (let i = 0; i < pieces.length; i++) {
-		const { w, h, count } = pieces[i]
+
+	for (const [i, { w, h, count }] of pieces.entries()) {
 		const pairIndex = triIndex(w, h)
 		values.push(pairIndex - prevIndex)
 		if (i < pieces.length - 1) values.push(count)
@@ -101,7 +110,12 @@ const encodeRecipe = (counts: Record<string, number>, W: number, H: number) => {
 const decodeRecipe = (encoded: string) => {
 	const values = decodeIntegers(encoded, BASE62)
 	let pos = 0
-	const read = () => values[pos++]
+
+	const read = () => {
+		const value = values[pos++]
+		if (value === undefined) throw new Error('truncated recipe id')
+		return value
+	}
 
 	const W = read()
 	const H = read()
@@ -139,12 +153,14 @@ const computeTags = (recipe: Recipe, maxUnique: number) => {
 const matchesFilter = (recipe: Recipe, filters: Filters, favorites: Set<string>) => {
 	if (filters.favoriteOnly && !favorites.has(recipe.key)) return false
 	for (const tag of filters.tags) if (!recipe.tags.includes(tag)) return false
+
 	for (const c of filters.constraints) {
 		const count = recipe.counts[c.size] ?? 0
 		if (c.op === '=' && count !== c.n) return false
 		if (c.op === '>=' && count < c.n) return false
 		if (c.op === 'exclude' && count > 0) return false
 	}
+
 	return true
 }
 
@@ -171,14 +187,15 @@ const useFavorites = () => {
 }
 
 const byFamily = (a: string, b: string) => {
-	const [widthA, heightA] = a.split('×').map(Number)
-	const [widthB, heightB] = b.split('×').map(Number)
+	const [widthA, heightA] = parseSize(a)
+	const [widthB, heightB] = parseSize(b)
 	return Math.min(widthA, heightA) - Math.min(widthB, heightB) || Math.max(widthA, heightA) - Math.max(widthB, heightB)
 }
 
 const availableSizes = (W: number, H: number) => {
 	const seen = new Set<string>()
 	const sizes: string[] = []
+
 	for (let w = 1; w <= W; w++)
 		for (let h = 1; h <= H; h++) {
 			const size = w <= h ? `${w}×${h}` : `${h}×${w}`
@@ -186,6 +203,8 @@ const availableSizes = (W: number, H: number) => {
 			seen.add(size)
 			sizes.push(size)
 		}
+
+	// eslint-disable-next-line @eslint-react/globals -- R.sort is Remeda's immutable sort, not Array#sort on a global
 	return R.sort(sizes, byFamily)
 }
 
@@ -196,17 +215,18 @@ const solve = ({ W, H }: { W: number; H: number }) => {
 	const sizeKeys = availableSizes(W, H)
 		.slice()
 		.sort((a, b) => {
-			const [wa, ha] = a.split('×').map(Number)
-			const [wb, hb] = b.split('×').map(Number)
+			const [wa, ha] = parseSize(a)
+			const [wb, hb] = parseSize(b)
 			return wb * hb - wa * ha
 		})
 	const K = sizeKeys.length
 	const keyArea = new Int32Array(K)
-	const keyDimensions: number[][][] = []
-	for (let keyIndex = 0; keyIndex < K; keyIndex++) {
-		const [w, h] = sizeKeys[keyIndex].split('×').map(Number)
+	const keyDimensions: [number, number][][] = []
+
+	for (const [keyIndex, sizeKey] of sizeKeys.entries()) {
+		const [w, h] = parseSize(sizeKey)
 		keyArea[keyIndex] = w * h
-		const dims: number[][] = [[w, h]]
+		const dims: [number, number][] = [[w, h]]
 		if (w !== h) dims.push([h, w])
 		keyDimensions.push(dims.filter(([width, height]) => width <= W && height <= H))
 	}
@@ -216,50 +236,59 @@ const solve = ({ W, H }: { W: number; H: number }) => {
 		const counts = Int8Array.from(targetCounts)
 		const layout: Bin[] = []
 
-		const firstEmpty = () => {
+		const firstEmpty = (): [number, number] | null => {
 			for (let y = 0; y < H; y++) {
-				const emptyMask = ~rows[y] & FULL
+				const emptyMask = ~rows[y]! & FULL
 				if (emptyMask) return [31 - Math.clz32(emptyMask & -emptyMask), y]
 			}
+
 			return null
 		}
+
 		const recurse = (): boolean => {
 			const cell = firstEmpty()
+
 			if (!cell) {
 				for (let keyIndex = 0; keyIndex < K; keyIndex++) if (counts[keyIndex] !== 0) return false
 				return true
 			}
+
 			const [x, y] = cell
+
 			for (let keyIndex = 0; keyIndex < K; keyIndex++) {
-				if (counts[keyIndex] <= 0) continue
-				const dimensions = keyDimensions[keyIndex]
-				for (let i = 0; i < dimensions.length; i++) {
-					const [w, h] = dimensions[i]
+				if (counts[keyIndex]! <= 0) continue
+
+				for (const [w, h] of keyDimensions[keyIndex]!) {
 					if (x + w > W || y + h > H) continue
 					const mask = ((1 << w) - 1) << x
 					let fits = true
+
 					for (let dy = 0; dy < h; dy++)
-						if (rows[y + dy] & mask) {
+						if (rows[y + dy]! & mask) {
 							fits = false
 							break
 						}
+
 					if (!fits) continue
-					for (let dy = 0; dy < h; dy++) rows[y + dy] |= mask
-					counts[keyIndex]--
-					layout.push({ x, y, w, h, key: sizeKeys[keyIndex] })
+					for (let dy = 0; dy < h; dy++) rows[y + dy]! |= mask
+					counts[keyIndex]!--
+					layout.push({ x, y, w, h, key: sizeKeys[keyIndex]! })
 					if (recurse()) return true
 					layout.pop()
-					counts[keyIndex]++
-					for (let dy = 0; dy < h; dy++) rows[y + dy] &= ~mask
+					counts[keyIndex]!++
+					for (let dy = 0; dy < h; dy++) rows[y + dy]! &= ~mask
 				}
 			}
+
 			return false
 		}
+
 		return recurse() ? layout.slice() : null
 	}
 
 	function* enumerateMultisets(uniqueTarget: number): Generator<Int8Array> {
 		const counts = new Int8Array(K)
+
 		function* emit(keyIndex: number, remainingArea: number, remainingUnique: number): Generator<Int8Array> {
 			if (remainingUnique === 0) {
 				if (remainingArea === 0) yield Int8Array.from(counts)
@@ -268,36 +297,41 @@ const solve = ({ W, H }: { W: number; H: number }) => {
 			if (keyIndex >= K) return
 			if (K - keyIndex < remainingUnique) return
 			yield* emit(keyIndex + 1, remainingArea, remainingUnique)
-			const area = keyArea[keyIndex]
+			const area = keyArea[keyIndex]!
 			const maxCount = Math.floor(remainingArea / area)
+
 			for (let count = 1; count <= maxCount; count++) {
 				counts[keyIndex] = count
 				yield* emit(keyIndex + 1, remainingArea - count * area, remainingUnique - 1)
 			}
+
 			counts[keyIndex] = 0
 		}
+
 		yield* emit(0, AREA, uniqueTarget)
 	}
 
 	const recipeKeyOf = (counts: Int8Array) => {
 		const parts: string[] = []
 		for (let keyIndex = 0; keyIndex < K; keyIndex++)
-			if (counts[keyIndex] > 0) parts.push(`${sizeKeys[keyIndex]}:${counts[keyIndex]}`)
+			if (counts[keyIndex]! > 0) parts.push(`${sizeKeys[keyIndex]}:${counts[keyIndex]}`)
 		parts.sort()
 		return parts.join('|')
 	}
 
 	const found: Recipe[] = []
+
 	for (let uniqueCount = 1; uniqueCount <= K; uniqueCount++) {
 		for (const counts of enumerateMultisets(uniqueCount)) {
 			const layout = tryPack(counts)
 			if (!layout) continue
 			const countsObj: Record<string, number> = {}
 			for (let keyIndex = 0; keyIndex < K; keyIndex++)
-				if (counts[keyIndex] > 0) countsObj[sizeKeys[keyIndex]] = counts[keyIndex]
+				if (counts[keyIndex]! > 0) countsObj[sizeKeys[keyIndex]!] = counts[keyIndex]!
 			found.push({ key: recipeKeyOf(counts), counts: countsObj, unique: uniqueCount, layout, tags: [] })
 		}
 	}
+
 	const maxUnique = Math.max(0, ...found.map((r) => r.unique))
 	for (const recipe of found) recipe.tags = computeTags(recipe, maxUnique)
 	return found
@@ -309,24 +343,30 @@ const parseSTL = (buf: ArrayBuffer) => {
 	const vertMap = new Map<string, number>()
 	const verts: number[] = []
 	const tris: number[] = []
+
 	for (let i = 0; i < count; i++) {
 		const base = 84 + i * 50 + 12
 		const tri: number[] = []
+
 		for (let j = 0; j < 3; j++) {
 			const x = view.getFloat32(base + j * 12, true)
 			const y = view.getFloat32(base + j * 12 + 4, true)
 			const z = view.getFloat32(base + j * 12 + 8, true)
 			const k = `${x},${y},${z}`
 			let idx = vertMap.get(k)
+
 			if (idx === undefined) {
 				idx = verts.length / 3
 				vertMap.set(k, idx)
 				verts.push(x, y, z)
 			}
+
 			tri.push(idx)
 		}
+
 		tris.push(...tri)
 	}
+
 	return { verts, tris }
 }
 
@@ -345,10 +385,12 @@ const build3mf = async (recipe: Recipe): Promise<Blob> => {
  <resources>\n`
 
 	const sizeId = new Map(uniqueSizes.map((k, i) => [k, i + 1]))
+
 	for (const [key, { verts, tris }] of geoms) {
 		xml += `  <object id="${sizeId.get(key)}" type="model">\n   <mesh>\n    <vertices>\n`
+		// verts holds x,y,z triples, so i + 2 stays in bounds
 		for (let i = 0; i < verts.length; i += 3)
-			xml += `     <vertex x="${verts[i].toFixed(4)}" y="${verts[i + 1].toFixed(4)}" z="${verts[i + 2].toFixed(4)}"/>\n`
+			xml += `     <vertex x="${verts[i]!.toFixed(4)}" y="${verts[i + 1]!.toFixed(4)}" z="${verts[i + 2]!.toFixed(4)}"/>\n`
 		xml += `    </vertices>\n    <triangles>\n`
 		for (let i = 0; i < tris.length; i += 3)
 			xml += `     <triangle v1="${tris[i]}" v2="${tris[i + 1]}" v3="${tris[i + 2]}"/>\n`
@@ -356,20 +398,21 @@ const build3mf = async (recipe: Recipe): Promise<Blob> => {
 	}
 
 	const N = uniqueSizes.length
-	for (let i = 0; i < recipe.layout.length; i++) {
-		const bin = recipe.layout[i]
+
+	for (const [i, bin] of recipe.layout.entries()) {
 		// STL stores the larger dimension along X; portrait bins (w<h) need 90° CW so STL-X→bed-Y.
 		const rotation = bin.w < bin.h ? '0 1 0 -1 0 0 0 0 1 0 0 0' : '1 0 0 0 1 0 0 0 1 0 0 0'
 		xml += `  <object id="${N + i + 1}" type="model">\n   <components>\n    <component objectid="${sizeId.get(bin.key)}" transform="${rotation}"/>\n   </components>\n  </object>\n`
 	}
 
 	xml += ` </resources>\n <build>\n`
-	for (let i = 0; i < recipe.layout.length; i++) {
-		const bin = recipe.layout[i]
+
+	for (const [i, bin] of recipe.layout.entries()) {
 		const tx = PRINT_BED_MARGIN + bin.x * GF_PITCH + (bin.w * GF_PITCH) / 2
 		const ty = PRINT_BED_H - PRINT_BED_MARGIN - bin.y * GF_PITCH - (bin.h * GF_PITCH) / 2
 		xml += `  <item objectid="${N + i + 1}" transform="1 0 0 0 1 0 0 0 1 ${tx.toFixed(4)} ${ty.toFixed(4)} 0" printable="1"/>\n`
 	}
+
 	xml += ` </build>\n</model>`
 
 	const zip = zipSync({
@@ -381,11 +424,11 @@ const build3mf = async (recipe: Recipe): Promise<Blob> => {
 		),
 		'3D/3dmodel.model': strToU8(xml),
 	})
-	return new Blob([new Uint8Array(zip.buffer as ArrayBuffer)], { type: 'model/3mf' })
+	return new Blob([new Uint8Array(zip.buffer)], { type: 'model/3mf' })
 }
 
 type TagChipProps = {
-	id: TagId | 'favorite'
+	id: 'favorite' | TagId
 	icon?: ReactNode
 	active?: boolean
 	onToggle?: () => void
@@ -434,6 +477,7 @@ const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 					{inner}
 				</button>
 			) : (
+				// eslint-disable-next-line react-hooks/refs -- floating-ui's refs.setReference is a stable callback ref; this is its documented usage
 				<span ref={refs.setReference} {...getReferenceProps()} className={className}>
 					{inner}
 				</span>
@@ -441,6 +485,7 @@ const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 			{open && (
 				<FloatingPortal>
 					<div
+						// eslint-disable-next-line react-hooks/refs -- floating-ui's refs.setFloating is a stable callback ref; this is its documented usage
 						ref={refs.setFloating}
 						style={floatingStyles}
 						{...getFloatingProps()}
@@ -465,7 +510,7 @@ type SizeCellProps = {
 }
 
 const SizeCell = ({ size, constraint, filteredCount, onSetOp, onUpdateN, W, H }: SizeCellProps) => {
-	const [w, h] = size.split('×').map(Number)
+	const [w, h] = parseSize(size)
 	const impossible = filteredCount === 0 && !constraint
 	return (
 		<div
@@ -509,6 +554,7 @@ const ExportButton = ({ recipe, W, H }: { recipe: Recipe | null; W: number; H: n
 		if (!recipe) return
 		setBusy(true)
 		await Promise.resolve() // yield to event loop so React can flush busy state before build3mf blocks
+
 		try {
 			const blob = await build3mf(recipe)
 			const url = URL.createObjectURL(blob)
@@ -605,7 +651,8 @@ const RecipeList = ({
 					<div ref={scrollerRef} className='size-full scroll-fade-y'>
 						<ul className='relative' style={{ height: rowVirtualizer.getTotalSize() }}>
 							{rowVirtualizer.getVirtualItems().map((virtualItem) => {
-								const recipe = filteredRecipes[virtualItem.index]
+								// virtualizer count === filteredRecipes.length, so index is in range
+								const recipe = filteredRecipes[virtualItem.index]!
 								const isSelected = recipe.key === selectedKey
 								const encoded = encodeRecipe(recipe.counts, W, H)
 								return (
@@ -684,24 +731,32 @@ const Root = () => {
 		const solved = solve({ W, H })
 		const allKeys = R.sort(R.unique(solved.flatMap((x) => R.keys(x.counts))), byFamily)
 		const familyOrder = R.fromEntries(allKeys.map((k, i) => [k, i] as const))
-		const sortedEntries = (recipe: Recipe) => R.sortBy(R.entries(recipe.counts), ([s]) => familyOrder[s])
+		// familyOrder covers every size key that appears in any recipe
+		const sortedEntries = (recipe: Recipe) => R.sortBy(R.entries(recipe.counts), ([s]) => familyOrder[s]!)
 		const sorted = R.sort(solved, (a, b) => {
 			if (a.unique !== b.unique) return a.unique - b.unique
-			const sortedA = sortedEntries(a),
-				sortedB = sortedEntries(b)
+			const sortedA = sortedEntries(a)
+			const sortedB = sortedEntries(b)
+
 			for (let i = 0; i < sortedA.length && i < sortedB.length; i++) {
-				const diff = familyOrder[sortedA[i][0]] - familyOrder[sortedB[i][0]]
+				const [sizeA, countA] = sortedA[i]!
+				const [sizeB, countB] = sortedB[i]!
+				const diff = familyOrder[sizeA]! - familyOrder[sizeB]!
 				if (diff) return diff
-				if (sortedA[i][1] !== sortedB[i][1]) return sortedA[i][1] - sortedB[i][1]
+				if (countA !== countB) return countA - countB
 			}
+
 			return sortedA.length - sortedB.length
 		})
+
+		// eslint-disable-next-line @eslint-react/set-state-in-effect -- the solver enumerates every recipe for the new grid size; results land in state once per W/H change
 		setRecipes(sorted)
 
 		const restoreId = restoreIdRef.current
 		restoreIdRef.current = null
 
 		let keyToSelect: string | null = null
+
 		if (restoreId) {
 			try {
 				const { counts } = decodeRecipe(restoreId)
@@ -709,11 +764,15 @@ const Root = () => {
 				pairs.sort()
 				const targetKey = pairs.join('|')
 				keyToSelect = sorted.find((r) => r.key === targetKey)?.key ?? null
-			} catch {}
+			} catch {
+				// malformed hash — fall through to default selection
+			}
 		}
 
+		// eslint-disable-next-line @eslint-react/set-state-in-effect -- selection resets alongside the freshly solved recipe list
 		setSelectedKey(keyToSelect ?? sorted[0]?.key ?? null)
 		const valid = new Set(availableSizes(W, H))
+		// eslint-disable-next-line @eslint-react/set-state-in-effect -- constraints for sizes that no longer exist on the new grid are dropped with the same solve
 		setFilters((f) => ({
 			tags: f.tags,
 			favoriteOnly: f.favoriteOnly,
@@ -724,7 +783,7 @@ const Root = () => {
 	const plateSizes = availableSizes(W, H)
 	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters, favorites))
 	const filteredIndex = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
-	const selectedRecipe = filteredIndex >= 0 ? filteredRecipes[filteredIndex] : null
+	const selectedRecipe = filteredIndex >= 0 ? filteredRecipes[filteredIndex]! : null
 	const layout = selectedRecipe?.layout ?? []
 	const gridW = SVG_CELL * W
 	const gridH = SVG_CELL * H
@@ -732,6 +791,7 @@ const Root = () => {
 	const viewBoxHeight = gridH + 2 * SVG_PADDING
 	const originX = SVG_PADDING
 	const originY = SVG_PADDING
+	// eslint-disable-next-line @eslint-react/globals -- R.sort is Remeda's immutable sort, not Array#sort on a global
 	const keys = R.sort(R.unique(layout.map((bin) => bin.key)), byFamily)
 	const baseOf = (size: string) =>
 		interpolateColors(keys.length > 1 ? keys.indexOf(size) / (keys.length - 1) : 0, STOPS)
@@ -744,9 +804,8 @@ const Root = () => {
 	for (const recipe of filteredRecipes)
 		for (const size of R.keys(recipe.counts)) filteredSizeCounts.set(size, (filteredSizeCounts.get(size) ?? 0) + 1)
 
-	useEffect(() => {
-		if (selectedKey && filteredIndex === -1) setSelectedKey(null)
-	}, [selectedKey, filteredIndex])
+	// Deselect during render when filtering removes the selected recipe
+	if (selectedKey && filteredIndex === -1) setSelectedKey(null)
 
 	const toggleTag = (id: TagId) =>
 		setFilters((f) => {

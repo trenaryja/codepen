@@ -1,48 +1,43 @@
 import {
-	type Active,
-	type CollisionDetection,
 	closestCenter,
 	DndContext,
-	type DragEndEvent,
-	type DragOverEvent,
 	DragOverlay,
-	type DragStartEvent,
 	getFirstCollision,
 	MeasuringStrategy,
-	type Over,
 	PointerSensor,
 	pointerWithin,
 	rectIntersection,
 	TouchSensor,
-	type UniqueIdentifier,
 	useDroppable,
 	useSensor,
 	useSensors,
+} from 'https://esm.sh/@dnd-kit/core'
+import type {
+	Active,
+	CollisionDetection,
+	DragEndEvent,
+	DragOverEvent,
+	DragStartEvent,
+	Over,
+	UniqueIdentifier,
 } from 'https://esm.sh/@dnd-kit/core'
 import { arrayMove, rectSortingStrategy, SortableContext, useSortable } from 'https://esm.sh/@dnd-kit/sortable'
 import { CSS } from 'https://esm.sh/@dnd-kit/utilities'
 import { useLocalStorage } from 'https://esm.sh/@mantine/hooks'
 import {
+	cn,
 	ColorPicker,
 	ConfirmButton,
-	cn,
 	isDark,
 	Modal,
 	TextArea,
 	ThemePicker,
 	ThemeProvider,
-	Toaster,
 	toast,
+	Toaster,
 } from 'https://esm.sh/@trenaryja/ui'
-import React, {
-	type CSSProperties,
-	createContext,
-	type ReactElement,
-	type ReactNode,
-	useContext,
-	useRef,
-	useState,
-} from 'https://esm.sh/react'
+import React, { createContext, use, useRef, useState } from 'https://esm.sh/react'
+import type { CSSProperties, ReactElement, ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	LuCircle,
@@ -209,7 +204,7 @@ type TierListContextValue = {
 const TierListContext = createContext<TierListContextValue | undefined>(undefined)
 
 const useTierList = () => {
-	const ctx = useContext(TierListContext)
+	const ctx = use(TierListContext)
 	if (!ctx) throw new Error('useTierList must be used within a TierListProvider')
 	return ctx
 }
@@ -293,6 +288,7 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 				if (fromIndex === -1 || toIndex === -1) return prev
 				return { ...prev, items: arrayMove(prev.items, fromIndex, toIndex) }
 			}
+
 			const tiers = prev.tiers.map((t) => {
 				if (t.id !== containerId) return t
 				const fromIndex = t.itemIds.indexOf(itemId)
@@ -338,7 +334,8 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 	}
 
 	return (
-		<TierListContext.Provider
+		<TierListContext
+			// eslint-disable-next-line @eslint-react/no-unstable-context-value -- React Compiler memoizes this value; manual useMemo is banned here
 			value={{
 				tierList,
 				settings: tierList.settings,
@@ -361,7 +358,7 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 			}}
 		>
 			{children}
-		</TierListContext.Provider>
+		</TierListContext>
 	)
 }
 
@@ -601,9 +598,9 @@ const TierItem = ({ item, isOverlay }: TierItemProps) => {
 	)
 }
 
-type AddTierRowButtonProps = {
-	position: 'top' | 'bottom'
-} & React.ComponentProps<'button'>
+type AddTierRowButtonProps = React.ComponentProps<'button'> & {
+	position: 'bottom' | 'top'
+}
 
 const AddTierRowButton = ({ position, ...props }: AddTierRowButtonProps) => (
 	<div
@@ -812,7 +809,6 @@ const ImportDialog = () => {
 			<p className='py-2 text-sm opacity-70'>Paste your tier list JSON below or drag and drop a JSON file.</p>
 
 			<div className='space-y-4 mt-2'>
-				{/* biome-ignore lint/a11y/noStaticElementInteractions: drag-drop file target wrapping the focusable textarea; keyboard users paste instead */}
 				<div
 					className={cn('relative', isDraggingFile && 'ring-2 ring-primary')}
 					onDragOver={(e) => {
@@ -882,7 +878,7 @@ const ImportDialog = () => {
 
 // Whether the dragged item sits past the over item (next wrap line, or right of its midpoint)
 const isAfterOverItem = (active: Active, over: Over) => {
-	const translated = active.rect.current.translated
+	const { translated } = active.rect.current
 	if (!translated) return false
 	const centerX = translated.left + translated.width / 2
 	const centerY = translated.top + translated.height / 2
@@ -906,8 +902,8 @@ const Index = () => {
 	const [activeItem, setActiveItem] = useState<Item | null>(null)
 	const [activeTier, setActiveTier] = useState<Tier | null>(null)
 	const { setNodeRef } = useDroppable({ id: BANK_ID })
-	const lastOverId = useRef<UniqueIdentifier | null>(null)
-	const recentlyMovedToNewContainer = useRef(false)
+	const lastOverIdRef = useRef<UniqueIdentifier | null>(null)
+	const recentlyMovedToNewContainerRef = useRef(false)
 	const unassignedItems = getUnassignedItems()
 
 	const sensors = useSensors(
@@ -944,12 +940,13 @@ const Index = () => {
 		if (overId == null) {
 			// When an item just moved containers, layouts are mid-shuffle; reuse the last
 			// known target instead of flickering to "no target"
-			if (recentlyMovedToNewContainer.current) lastOverId.current = args.active.id
-			return lastOverId.current ? [{ id: lastOverId.current }] : []
+			if (recentlyMovedToNewContainerRef.current) lastOverIdRef.current = args.active.id
+			return lastOverIdRef.current ? [{ id: lastOverIdRef.current }] : []
 		}
 
 		if (isContainerId(overId)) {
 			const containerItemIds = getContainerItemIds(String(overId))
+
 			if (containerItemIds.length > 0) {
 				const closestItem = closestCenter({
 					...args,
@@ -961,13 +958,14 @@ const Index = () => {
 			}
 		}
 
-		lastOverId.current = overId
+		lastOverIdRef.current = overId
 		return [{ id: overId }]
 	}
 
 	const handleDragStart = (event: DragStartEvent) => {
 		const activeId = event.active.id
 		const item = tierList.items.find((i) => i.id === activeId)
+
 		if (item) {
 			setActiveItem(item)
 			setActiveTier(null)
@@ -975,6 +973,7 @@ const Index = () => {
 		}
 
 		const tier = tierList.tiers.find((t) => t.id === activeId)
+
 		if (tier) {
 			setActiveTier(tier)
 			setActiveItem(null)
@@ -994,12 +993,12 @@ const Index = () => {
 		const overIndex = overItemIds.indexOf(String(over.id))
 		const newIndex = overIndex === -1 ? overItemIds.length : overIndex + (isAfterOverItem(active, over) ? 1 : 0)
 
-		recentlyMovedToNewContainer.current = true
+		recentlyMovedToNewContainerRef.current = true
 		handleItemMove(String(active.id), overContainer, newIndex)
 		// Hold the flag through the post-move re-render so collision detection can
 		// fall back to the last target while layouts are mid-shuffle
 		requestAnimationFrame(() => {
-			recentlyMovedToNewContainer.current = false
+			recentlyMovedToNewContainerRef.current = false
 		})
 	}
 

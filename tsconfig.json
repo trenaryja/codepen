@@ -1,12 +1,7 @@
 {
+	"extends": "@trenaryja/config/tsconfig/vite",
 	"compilerOptions": {
-		"lib": ["ESNext", "DOM"],
-		"moduleResolution": "bundler",
-		"jsx": "react-jsx",
-		"noFallthroughCasesInSwitch": true,
-		"skipLibCheck": true,
-		"noEmit": true,
-		"types": ["node", "bun-types", "vite/client"]
+		"types": ["vite/client", "bun"] // penx.ts is a Bun CLI living next to the browser code
 	},
 	"include": ["src", "penx.ts", "vite.config.ts", "esm-sh.d.ts"]
 }
