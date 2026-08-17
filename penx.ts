@@ -7,17 +7,17 @@
  * interactive prompt when flags are omitted.
  */
 
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cancel, intro, isCancel, multiselect, note, outro, select, spinner, text } from '@clack/prompts'
 import { Command } from 'commander'
+import { version as VERSION } from './package.json'
 
 const ROOT = import.meta.dir
 const SRC = join(ROOT, 'src')
 const PENS_DIR = join(SRC, 'p')
 const TEMPLATES_DIR = join(SRC, 't')
-const VERSION = '0.2.0'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI Helpers
@@ -236,10 +236,12 @@ function cmdList(): void {
 	note(`${header}\n${divider}\n${body}`, 'Pens')
 }
 
+// `spawn`, not `spawnSync` — a blocking call would starve the timer below, so the
+// browser could only open after the dev server had already exited.
 function cmdDev(slug?: string): void {
-	const vite = spawnSync('bun', ['run', 'dev'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env } })
+	const vite = spawn('bun', ['run', 'dev'], { cwd: ROOT, stdio: 'inherit' })
 	if (slug) setTimeout(() => openInBrowser(`http://localhost:5173/p/${slug}/`), 1500)
-	if (vite.status !== 0) process.exit(vite.status ?? 1)
+	vite.on('exit', (code) => process.exit(code ?? 1))
 }
 
 async function cmdExport(slug?: string): Promise<void> {
