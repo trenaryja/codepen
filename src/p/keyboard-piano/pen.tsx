@@ -1,24 +1,27 @@
-import { ThemePicker, ThemeProvider, toast, Toaster } from 'https://esm.sh/@trenaryja/ui'
+import { css, ThemePicker, ThemeProvider, toast, Toaster } from 'https://esm.sh/@trenaryja/ui'
 import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import * as R from 'https://esm.sh/remeda'
 
-type NoteConfig = { black?: boolean; freq: number; key: string; note: string }
+type NoteConfig = { black?: boolean; frequency: number; key: string; note: string }
 
-type ChromaticNote = { black: boolean; freq: number; note: string }
+type ChromaticNote = { black: boolean; frequency: number; note: string }
+
+type StepState = 'current' | 'played' | 'upcoming'
 
 const CHROMATIC = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 const ALL_NOTES: ChromaticNote[] = []
 
-for (let oct = 1; oct <= 8; oct++) {
+for (let octave = 1; octave <= 8; octave++) {
 	for (const name of CHROMATIC) {
-		if (oct === 8 && name !== 'C') break
-		const semitones = (oct - 4) * 12 + (CHROMATIC.indexOf(name) - 9)
+		if (octave === 8 && name !== 'C') break
+		// Equal temperament off A4 = 440 Hz; index 9 of CHROMATIC is 'A'
+		const semitones = (octave - 4) * 12 + (CHROMATIC.indexOf(name) - 9)
 
 		ALL_NOTES.push({
-			note: `${name}${String(oct)}`,
-			freq: 440 * 2 ** (semitones / 12),
+			note: `${name}${String(octave)}`,
+			frequency: 440 * 2 ** (semitones / 12),
 			black: name.includes('#'),
 		})
 	}
@@ -34,7 +37,7 @@ const REM_PX = typeof document !== 'undefined' ? parseFloat(getComputedStyle(doc
 
 function maxOffset(whiteCount: number) {
 	for (let i = ALL_NOTES.length - 1; i >= 0; i--) {
-		const whites = ALL_NOTES.slice(i).filter((n) => !n.black).length
+		const whites = ALL_NOTES.slice(i).filter((note) => !note.black).length
 
 		if (whites >= whiteCount) return i
 	}
@@ -42,16 +45,14 @@ function maxOffset(whiteCount: number) {
 	return 0
 }
 
-const NOTE_INDEX: Record<string, number> = Object.fromEntries(ALL_NOTES.map((n, i) => [n.note, i]))
-const DEFAULT_OFFSET = ALL_NOTES.findIndex((n) => n.note === 'C4')
+const NOTE_INDEX: Record<string, number> = Object.fromEntries(ALL_NOTES.map((note, i) => [note.note, i]))
+const DEFAULT_OFFSET = ALL_NOTES.findIndex((note) => note.note === 'C4')
 
-// Song step = note name array. Single: ["C4"], chord: ["C4","E4","G4"]
-// Encoding: "C4 D4 [C4 E4 G4]|F4" — brackets=chords, pipes=phrases
+// Song encoding: "C4 D4 [C4 E4 G4]|F4" — brackets group a chord, pipes split phrases.
+// A step is one array of note names: ['C4'] for a single note, ['C4','E4','G4'] for a chord.
 type ParsedSong = { phrases: string[][][]; steps: string[][] }
 
-type SongDef = { data: string; format: 'keys' | 'notes' }
-
-function parsePhraseStr(phrase: string, resolve: (t: string) => string): string[][] {
+function parsePhrase(phrase: string) {
 	const steps: string[][] = []
 	let i = 0
 
@@ -68,15 +69,14 @@ function parsePhraseStr(phrase: string, resolve: (t: string) => string): string[
 				phrase
 					.slice(i + 1, end)
 					.trim()
-					.split(/\s+/)
-					.map(resolve),
+					.split(/\s+/),
 			)
 			i = end + 1
 		} else {
 			let end = i
 
 			while (end < phrase.length && phrase[end] !== ' ' && phrase[end] !== '[') end += 1
-			steps.push([resolve(phrase.slice(i, end))])
+			steps.push([phrase.slice(i, end)])
 			i = end
 		}
 	}
@@ -84,68 +84,51 @@ function parsePhraseStr(phrase: string, resolve: (t: string) => string): string[
 	return steps
 }
 
-function parseSong(def: SongDef, keyToNote: Record<string, string>): ParsedSong {
-	const resolve = def.format === 'keys' ? (t: string) => keyToNote[t] ?? t : (t: string) => t
-	const phrases = def.data.split('|').map((p) => parsePhraseStr(p.trim(), resolve))
+function parseSong(data: string) {
+	const phrases = data.split('|').map((phrase) => parsePhrase(phrase.trim()))
 
 	return { phrases, steps: phrases.flat() }
 }
 
-const SONGS: Record<string, SongDef> = {
-	'Mary Had a Little Lamb': {
-		format: 'notes',
-		data: 'E4 D4 C4 D4 E4 E4 E4|D4 D4 D4|E4 G4 G4|E4 D4 C4 D4 E4 E4 E4|E4 D4 D4 E4 D4 C4',
-	},
-	'Twinkle Twinkle Little Star': {
-		format: 'notes',
-		data: 'C4 C4 G4 G4 A4 A4 G4|F4 F4 E4 E4 D4 D4 C4|G4 G4 F4 F4 E4 E4 D4|G4 G4 F4 F4 E4 E4 D4|C4 C4 G4 G4 A4 A4 G4|F4 F4 E4 E4 D4 D4 C4',
-	},
-	'Hot Cross Buns': {
-		format: 'notes',
-		data: 'E4 D4 C4|E4 D4 C4|C4 C4 D4 D4 E4 D4 C4',
-	},
-	'Ode to Joy': {
-		format: 'notes',
-		data: 'E4 E4 F4 G4 G4 F4 E4 D4|C4 C4 D4 E4 E4 D4 D4|E4 E4 F4 G4 G4 F4 E4 D4|C4 C4 D4 E4 D4 C4 C4',
-	},
-	'Jingle Bells (Chorus)': {
-		format: 'notes',
-		data: 'E4 E4 E4|E4 E4 E4|E4 G4 C4 D4 E4|F4 F4 F4 F4 F4 E4 E4 E4|E4 D4 D4 E4 D4 G4',
-	},
-	'Chord Progression (I–IV–V–I)': {
-		format: 'notes',
-		data: '[C4 E4 G4] [C4 E4 G4]|[C4 F4 A4] [C4 F4 A4]|[D4 G4 B4] [D4 G4 B4]|[C4 E4 G4]',
-	},
+const SONGS: Record<string, string> = {
+	'Mary Had a Little Lamb': 'E4 D4 C4 D4 E4 E4 E4|D4 D4 D4|E4 G4 G4|E4 D4 C4 D4 E4 E4 E4|E4 D4 D4 E4 D4 C4',
+	'Twinkle Twinkle Little Star':
+		'C4 C4 G4 G4 A4 A4 G4|F4 F4 E4 E4 D4 D4 C4|G4 G4 F4 F4 E4 E4 D4|G4 G4 F4 F4 E4 E4 D4|C4 C4 G4 G4 A4 A4 G4|F4 F4 E4 E4 D4 D4 C4',
+	'Hot Cross Buns': 'E4 D4 C4|E4 D4 C4|C4 C4 D4 D4 E4 D4 C4',
+	'Ode to Joy': 'E4 E4 F4 G4 G4 F4 E4 D4|C4 C4 D4 E4 E4 D4 D4|E4 E4 F4 G4 G4 F4 E4 D4|C4 C4 D4 E4 D4 C4 C4',
+	'Jingle Bells (Chorus)': 'E4 E4 E4|E4 E4 E4|E4 G4 C4 D4 E4|F4 F4 F4 F4 F4 E4 E4 E4|E4 D4 D4 E4 D4 G4',
+	'Chord Progression (I–IV–V–I)': '[C4 E4 G4] [C4 E4 G4]|[C4 F4 A4] [C4 F4 A4]|[D4 G4 B4] [D4 G4 B4]|[C4 E4 G4]',
 }
 
 const SONG_NAMES = Object.keys(SONGS)
 
-function playNote(ctx: AudioContext, freq: number) {
-	const osc = ctx.createOscillator()
-	const gain = ctx.createGain()
+function playNote(audioContext: AudioContext, frequency: number) {
+	const oscillator = audioContext.createOscillator()
+	const gain = audioContext.createGain()
 
-	osc.connect(gain)
-	gain.connect(ctx.destination)
-	osc.frequency.value = freq
-	osc.type = 'sine'
-	gain.gain.setValueAtTime(0.3, ctx.currentTime)
-	gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8)
-	osc.start(ctx.currentTime)
-	osc.stop(ctx.currentTime + 0.8)
+	oscillator.connect(gain)
+	gain.connect(audioContext.destination)
+	oscillator.frequency.value = frequency
+	oscillator.type = 'sine'
+	gain.gain.setValueAtTime(0.3, audioContext.currentTime)
+	// exponentialRampToValueAtTime cannot target 0, so decay to a near-silent floor instead
+	gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.8)
+	oscillator.start(audioContext.currentTime)
+	oscillator.stop(audioContext.currentTime + 0.8)
 }
 
 function PianoKey({
-	n,
 	active,
+	note,
 	onPress,
 	style,
 }: {
 	active: boolean
-	n: NoteConfig
+	note: NoteConfig
 	onPress: () => void
 	style?: React.CSSProperties
 }) {
-	const inactiveClass = n.black ? 'surface-base-content text-base-300' : 'surface-base-300 text-base-content'
+	const inactiveClass = note.black ? 'surface-base-content text-base-300' : 'surface-base-300 text-base-content'
 
 	return (
 		<button
@@ -153,11 +136,11 @@ function PianoKey({
 			onPointerDown={onPress}
 			style={style}
 			className={`surface select-none cursor-pointer transition-all duration-100 flex flex-col items-end justify-end ${
-				n.black ? 'absolute z-10 w-(--black-key-w) h-[60%] top-0' : 'relative size-full'
+				note.black ? 'absolute z-10 w-(--black-key-width) h-[60%] top-0' : 'relative size-full'
 			} ${active ? 'surface-primary' : inactiveClass}`}
 		>
-			<kbd className={`kbd uppercase ${n.black ? 'kbd-xs' : 'kbd-sm'}`}>{n.key}</kbd>
-			<span className={`opacity-50 ${n.black ? 'text-3xs px-1' : 'text-xs px-2 pb-1'}`}>{n.note}</span>
+			<kbd className={`kbd uppercase ${note.black ? 'kbd-xs' : 'kbd-sm'}`}>{note.key}</kbd>
+			<span className={`opacity-50 ${note.black ? 'text-3xs px-1' : 'text-xs px-2 pb-1'}`}>{note.note}</span>
 		</button>
 	)
 }
@@ -165,53 +148,59 @@ function PianoKey({
 function Piano({
 	activeKeys,
 	black,
-	blackPos,
+	blackPositions,
 	onTrigger,
 	onWheel,
 	white,
 }: {
 	activeKeys: Set<string>
 	black: NoteConfig[]
-	blackPos: Record<string, number>
-	onTrigger: (key: string, freq: number) => void
+	blackPositions: Record<string, number>
+	onTrigger: (key: string, frequency: number) => void
 	onWheel: (e: WheelEvent) => void
 	white: NoteConfig[]
 }) {
 	const pianoRef = useRef<HTMLDivElement>(null)
 
 	useEffect(() => {
-		const el = pianoRef.current
-		if (!el) return
+		const element = pianoRef.current
+		if (!element) return
 
 		const handler = (e: WheelEvent) => {
 			e.preventDefault()
 			onWheel(e)
 		}
 
-		el.addEventListener('wheel', handler, { passive: false })
-		return () => el.removeEventListener('wheel', handler)
+		// React's onWheel is registered passively, so preventDefault needs a manual listener
+		element.addEventListener('wheel', handler, { passive: false })
+		return () => element.removeEventListener('wheel', handler)
 	}, [onWheel])
 
 	return (
 		<div
 			ref={pianoRef}
 			className='relative w-full max-w-2xl h-[clamp(8rem,25vw,20rem)]'
-			style={{ '--black-key-w': `${(70 / white.length).toFixed(1)}%` } as React.CSSProperties}
+			style={css({ '--black-key-width': `${(70 / white.length).toFixed(1)}%` })}
 		>
 			<div className='grid h-full' style={{ gridTemplateColumns: `repeat(${white.length}, 1fr)`, gap: '2px' }}>
-				{white.map((n) => (
-					<PianoKey key={n.note} n={n} active={activeKeys.has(n.key)} onPress={() => onTrigger(n.key, n.freq)} />
+				{white.map((note) => (
+					<PianoKey
+						key={note.note}
+						note={note}
+						active={activeKeys.has(note.key)}
+						onPress={() => onTrigger(note.key, note.frequency)}
+					/>
 				))}
 			</div>
 			{black
-				.filter((n) => n.key in blackPos)
-				.map((n) => (
+				.filter((note) => note.key in blackPositions)
+				.map((note) => (
 					<PianoKey
-						key={n.note}
-						n={n}
-						active={activeKeys.has(n.key)}
-						onPress={() => onTrigger(n.key, n.freq)}
-						style={{ left: `calc(${((blackPos[n.key]! + 1) / white.length) * 100}% - 4%)` }}
+						key={note.note}
+						note={note}
+						active={activeKeys.has(note.key)}
+						onPress={() => onTrigger(note.key, note.frequency)}
+						style={{ left: `calc(${((blackPositions[note.key]! + 1) / white.length) * 100}% - 4%)` }}
 					/>
 				))}
 		</div>
@@ -228,11 +217,11 @@ function StepDisplay({
 	chordProgress: Set<string>
 	songNoteToKey: Record<string, string>
 	songNoteToNote: Record<string, string>
-	state: 'current' | 'played' | 'upcoming'
+	state: StepState
 	step: string[]
 }) {
-	const keys = step.map((n) => songNoteToKey[n] ?? '?')
-	const noteNames = step.map((n) => songNoteToNote[n] ?? n)
+	const keys = step.map((note) => songNoteToKey[note] ?? '?')
+	const noteNames = step.map((note) => songNoteToNote[note] ?? note)
 	const fade = state === 'played' ? 'opacity-30' : state === 'upcoming' ? 'opacity-70' : ''
 
 	if (keys.length === 1) {
@@ -246,6 +235,9 @@ function StepDisplay({
 		)
 	}
 
+	// Chords stack bottom-up, so the lowest note renders last
+	const reversedNoteNames = [...noteNames].reverse()
+
 	return (
 		<span
 			className={`inline-flex flex-col items-center rounded px-0.5 leading-tight transition-all duration-100 ${fade} ${
@@ -256,15 +248,15 @@ function StepDisplay({
 						: ''
 			}`}
 		>
-			{[...keys].reverse().map((k, i) => (
+			{[...keys].reverse().map((key, i) => (
 				<span
-					key={k}
+					key={key}
 					className={`uppercase text-sm font-mono ${
-						state === 'current' ? (chordProgress.has(k) ? 'text-success font-bold' : 'text-primary font-bold') : ''
+						state === 'current' ? (chordProgress.has(key) ? 'text-success font-bold' : 'text-primary font-bold') : ''
 					}`}
 				>
-					{k}
-					<span className='text-3xs opacity-50 normal-case ml-0.5'>{[...noteNames].reverse()[i]}</span>
+					{key}
+					<span className='text-3xs opacity-50 normal-case ml-0.5'>{reversedNoteNames[i]}</span>
 				</span>
 			))}
 		</span>
@@ -280,7 +272,7 @@ function SongGuide({
 	song,
 	songNoteToKey,
 	songNoteToNote,
-	songPos,
+	songPosition,
 }: {
 	chordProgress: Set<string>
 	name: string
@@ -290,9 +282,9 @@ function SongGuide({
 	song: ParsedSong
 	songNoteToKey: Record<string, string>
 	songNoteToNote: Record<string, string>
-	songPos: number
+	songPosition: number
 }) {
-	const offsets = song.phrases.map((_, i) => song.phrases.slice(0, i).reduce((sum, p) => sum + p.length, 0))
+	const offsets = song.phrases.map((_, i) => song.phrases.slice(0, i).reduce((sum, phrase) => sum + phrase.length, 0))
 
 	return (
 		<div className='surface surface-base-200 p-4 w-full max-w-2xl space-y-3'>
@@ -312,16 +304,16 @@ function SongGuide({
 			</div>
 
 			<div className='font-mono text-lg flex flex-wrap items-center gap-x-1 gap-y-2 leading-relaxed'>
-				{song.phrases.map((phrase, pi) => (
-					<span key={`p${String(pi)}`} className='inline-flex items-center gap-x-1'>
-						{phrase.map((step, si) => {
-							const gi = offsets[pi]! + si // offsets has one entry per phrase
-							const state: 'current' | 'played' | 'upcoming' =
-								gi === songPos ? 'current' : gi < songPos ? 'played' : 'upcoming'
+				{song.phrases.map((phrase, phraseIndex) => (
+					<span key={`p${String(phraseIndex)}`} className='inline-flex items-center gap-x-1'>
+						{phrase.map((step, stepIndex) => {
+							const absoluteIndex = offsets[phraseIndex]! + stepIndex // offsets has one entry per phrase
+							const state =
+								absoluteIndex === songPosition ? 'current' : absoluteIndex < songPosition ? 'played' : 'upcoming'
 
 							return (
 								<StepDisplay
-									key={`${String(pi)}-${String(si)}`}
+									key={`${String(phraseIndex)}-${String(stepIndex)}`}
 									step={step}
 									state={state}
 									chordProgress={chordProgress}
@@ -330,19 +322,19 @@ function SongGuide({
 								/>
 							)
 						})}
-						{pi < song.phrases.length - 1 && <span className='opacity-20 mx-1'>·</span>}
+						{phraseIndex < song.phrases.length - 1 && <span className='opacity-20 mx-1'>·</span>}
 					</span>
 				))}
 			</div>
 
 			<p className='text-xs opacity-40'>
-				{songPos} / {song.steps.length} steps
+				{songPosition} / {song.steps.length} steps
 			</p>
 		</div>
 	)
 }
 
-function resetChord(ref: React.RefObject<Set<string>>, setter: (s: Set<string>) => void) {
+function resetChord(ref: React.RefObject<Set<string>>, setter: (chord: Set<string>) => void) {
 	ref.current = new Set()
 	setter(new Set())
 }
@@ -352,61 +344,60 @@ function useVisibleNotes(whiteCount: number) {
 
 	const count = Math.max(1, Math.min(whiteCount, MAX_WHITE_COUNT))
 
-	// Snap to nearest white key at or after offset
+	// Key assignment starts from a white key, so skip any black key sitting at the offset
 	let start = offset
 	while (start < ALL_NOTES.length && ALL_NOTES[start]!.black) start += 1
 
 	const visible: ChromaticNote[] = []
-	let wc = 0
-	let vi = start
+	let whitesFound = 0
+	let index = start
 
-	// Collect exactly `count` white keys and all blacks between them
-	while (wc < count && vi < ALL_NOTES.length) {
-		const note = ALL_NOTES[vi]! // while-guard: vi < ALL_NOTES.length
+	while (whitesFound < count && index < ALL_NOTES.length) {
+		const note = ALL_NOTES[index]! // while-guard: index < ALL_NOTES.length
 		visible.push(note)
-		if (!note.black) wc += 1
-		vi += 1
+		if (!note.black) whitesFound += 1
+		index += 1
 	}
 
-	// Include trailing black key (for the last slot)
-	if (vi < ALL_NOTES.length && ALL_NOTES[vi]!.black) {
-		visible.push(ALL_NOTES[vi]!)
-	}
+	// Trailing black key fills the top-row slot past the last white key
+	if (index < ALL_NOTES.length && ALL_NOTES[index]!.black) visible.push(ALL_NOTES[index]!)
 
-	// Assign keyboard keys based on spatial layout
-	let whiteIdx = 0
-	const notes: NoteConfig[] = visible.map((n) => {
-		if (!n.black) {
-			const key = HOME_KEYS[whiteIdx]! // count ≤ MAX_WHITE_COUNT = HOME_KEYS.length
-			whiteIdx += 1
-			return { ...n, key }
+	let whiteIndex = 0
+	const notes: NoteConfig[] = visible.map((note) => {
+		if (!note.black) {
+			const key = HOME_KEYS[whiteIndex]! // count ≤ MAX_WHITE_COUNT = HOME_KEYS.length
+			whiteIndex += 1
+			return { ...note, key }
 		}
 
-		return { ...n, key: SLOT_KEYS[whiteIdx - 1]! } // blacks always follow a white, so whiteIdx ≥ 1
+		return { ...note, key: SLOT_KEYS[whiteIndex - 1]! } // blacks always follow a white, so whiteIndex ≥ 1
 	})
 
-	const white = notes.filter((n) => !n.black)
-	const black = notes.filter((n) => n.black)
-	const noteToKey = R.fromEntries(notes.map((n) => [n.note, n.key] as const))
-	const keyToNote = R.fromEntries(notes.map((n) => [n.key, n.note] as const))
+	const white = notes.filter((note) => !note.black)
+	const black = notes.filter((note) => note.black)
+	const noteToKey = R.fromEntries(notes.map((note) => [note.note, note.key] as const))
 
-	const blackPos: Record<string, number> = {}
+	const blackPositions: Record<string, number> = {}
 
-	for (const bn of black) {
-		const idx = notes.indexOf(bn)
-		const prev = [...notes.slice(0, idx)].reverse().find((n) => !n.black)
-		if (prev) blackPos[bn.key] = white.indexOf(prev)
+	for (const blackNote of black) {
+		const blackIndex = notes.indexOf(blackNote)
+		const previousWhite = notes
+			.slice(0, blackIndex)
+			.reverse()
+			.find((note) => !note.black)
+
+		if (previousWhite) blackPositions[blackNote.key] = white.indexOf(previousWhite)
 	}
 
 	const handleWheel = (e: WheelEvent) => {
-		const dir = e.deltaY > 0 ? -1 : 1
-		setOffset((prev) => Math.max(0, Math.min(maxOffset(count), prev + dir)))
+		const direction = e.deltaY > 0 ? -1 : 1
+		setOffset((prev) => Math.max(0, Math.min(maxOffset(count), prev + direction)))
 	}
 
 	const firstNote = notes[0]?.note ?? ''
 	const lastNote = notes[notes.length - 1]?.note ?? ''
 
-	return { black, blackPos, firstNote, handleWheel, keyToNote, lastNote, noteToKey, notes, white }
+	return { black, blackPositions, firstNote, handleWheel, lastNote, noteToKey, notes, white }
 }
 
 function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<string, string>) {
@@ -416,21 +407,23 @@ function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<
 	if (allSongNotes.length === 0) return empty
 
 	const uniqueSongNotes = new Set(allSongNotes).values().toArray()
-	const songIndices = uniqueSongNotes.map((n) => NOTE_INDEX[n]).filter((i): i is number => i !== undefined)
+	const songIndices = uniqueSongNotes
+		.map((note) => NOTE_INDEX[note])
+		.filter((index): index is number => index !== undefined)
 
 	if (songIndices.length === 0) return empty
 
-	const visibleNoteSet = new Set(notes.map((n) => n.note))
+	const visibleNoteSet = new Set(notes.map((note) => note.note))
 
 	// Try every octave shift (-8 to +8) and pick the first where ALL song notes land on visible keys
-	for (let octShift = -8; octShift <= 8; octShift += 1) {
-		const shift = octShift * 12
-		const allFit = uniqueSongNotes.every((n) => {
-			const idx = NOTE_INDEX[n]
+	for (let octaveShift = -8; octaveShift <= 8; octaveShift += 1) {
+		const shift = octaveShift * 12
+		const allFit = uniqueSongNotes.every((note) => {
+			const index = NOTE_INDEX[note]
 
-			if (idx === undefined) return false
+			if (index === undefined) return false
 
-			const transposed = ALL_NOTES[idx + shift]
+			const transposed = ALL_NOTES[index + shift]
 
 			return transposed && visibleNoteSet.has(transposed.note)
 		})
@@ -439,12 +432,12 @@ function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<
 			const toKey: Record<string, string> = {}
 			const toNote: Record<string, string> = {}
 
-			for (const n of uniqueSongNotes) {
+			for (const note of uniqueSongNotes) {
 				// allFit verified every note has an index and transposes onto a visible key
-				const transposed = ALL_NOTES[NOTE_INDEX[n]! + shift]!
+				const transposed = ALL_NOTES[NOTE_INDEX[note]! + shift]!
 
-				toKey[n] = noteToKey[transposed.note] ?? '?'
-				toNote[n] = transposed.note
+				toKey[note] = noteToKey[transposed.note] ?? '?'
+				toNote[note] = transposed.note
 			}
 
 			return { toKey, toNote }
@@ -452,22 +445,22 @@ function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<
 	}
 
 	// No perfect fit — fall back to closest octave shift and show ? for missing notes
-	const minSong = Math.min(...songIndices)
-	const minVis = Math.min(...notes.map((n) => NOTE_INDEX[n.note]!)) // every visible note is in NOTE_INDEX
-	const bestShift = Math.round((minVis - minSong) / 12) * 12
+	const lowestSongIndex = Math.min(...songIndices)
+	const lowestVisibleIndex = Math.min(...notes.map((note) => NOTE_INDEX[note.note]!)) // every visible note is in NOTE_INDEX
+	const bestShift = Math.round((lowestVisibleIndex - lowestSongIndex) / 12) * 12
 
 	const toKey: Record<string, string> = {}
 	const toNote: Record<string, string> = {}
 
-	for (const n of uniqueSongNotes) {
-		const idx = NOTE_INDEX[n]
+	for (const note of uniqueSongNotes) {
+		const index = NOTE_INDEX[note]
 
-		if (idx === undefined) continue
+		if (index === undefined) continue
 
-		const transposed = ALL_NOTES[idx + bestShift]
+		const transposed = ALL_NOTES[index + bestShift]
 
-		toKey[n] = transposed ? (noteToKey[transposed.note] ?? '?') : '?'
-		toNote[n] = transposed ? transposed.note : n
+		toKey[note] = transposed ? (noteToKey[transposed.note] ?? '?') : '?'
+		toNote[note] = transposed ? transposed.note : note
 	}
 
 	return { toKey, toNote }
@@ -477,103 +470,50 @@ function usePianoWidth(ref: React.RefObject<HTMLDivElement | null>) {
 	const [width, setWidth] = useState(MAX_WHITE_COUNT)
 
 	useEffect(() => {
-		const el = ref.current
-		if (!el) return
+		const element = ref.current
+		if (!element) return
 
 		const update = () => {
-			const count = Math.floor(el.clientWidth / (MIN_KEY_WIDTH_REM * REM_PX))
+			const count = Math.floor(element.clientWidth / (MIN_KEY_WIDTH_REM * REM_PX))
 			// eslint-disable-next-line @eslint-react/set-state-in-effect -- initial key count needs a DOM measurement, only possible after mount
 			setWidth(Math.max(1, Math.min(count, MAX_WHITE_COUNT)))
 		}
 
 		update()
-		const ro = new ResizeObserver(update)
-		ro.observe(el)
-		return () => ro.disconnect()
+		const resizeObserver = new ResizeObserver(update)
+		resizeObserver.observe(element)
+		return () => resizeObserver.disconnect()
 	}, [ref])
 
 	return width
 }
 
-function PianoBar({
-	activeKeys,
-	black,
-	blackPos,
-	containerRef,
-	firstNote,
-	handleWheel,
-	lastNote,
-	onTrigger,
-	white,
-}: {
-	activeKeys: Set<string>
-	black: NoteConfig[]
-	blackPos: Record<string, number>
-	containerRef: React.RefObject<HTMLDivElement | null>
-	firstNote: string
-	handleWheel: (e: WheelEvent) => void
-	lastNote: string
-	onTrigger: (key: string, freq: number) => void
-	white: NoteConfig[]
-}) {
-	return (
-		<div className='sticky bottom-0 w-full flex flex-col items-center gap-1 p-6 pt-4 bg-base-100/80 backdrop-blur-sm'>
-			<p className='opacity-60 text-sm text-center flex flex-wrap items-center justify-center gap-1'>
-				<span>White:</span>
-				{white.map((n) => (
-					<kbd key={n.note} className='kbd kbd-sm'>
-						{n.key.toUpperCase()}
-					</kbd>
-				))}
-				<span>· Black:</span>
-				{black.map((n) => (
-					<kbd key={n.note} className='kbd kbd-sm'>
-						{n.key.toUpperCase()}
-					</kbd>
-				))}
-			</p>
-			<p className='text-xs opacity-40 text-center'>
-				{firstNote} — {lastNote} · scroll to transpose
-			</p>
-			<div ref={containerRef} className='w-full max-w-2xl'>
-				<Piano
-					white={white}
-					black={black}
-					blackPos={blackPos}
-					activeKeys={activeKeys}
-					onTrigger={onTrigger}
-					onWheel={handleWheel}
-				/>
-			</div>
-		</div>
-	)
-}
-
 function Root() {
-	const audioCtxRef = useRef<AudioContext | null>(null)
+	const audioContextRef = useRef<AudioContext | null>(null)
 	const pianoContainerRef = useRef<HTMLDivElement | null>(null)
 	const [activeKeys, setActiveKeys] = useState<Set<string>>(() => new Set())
-	const [songIdx, setSongIdx] = useState(0)
-	const [songPos, setSongPos] = useState(0)
+	const [songIndex, setSongIndex] = useState(0)
+	const [songPosition, setSongPosition] = useState(0)
 	const [chordProgress, setChordProgress] = useState<Set<string>>(() => new Set())
 	const chordRef = useRef<Set<string>>(new Set())
 
 	const whiteCount = usePianoWidth(pianoContainerRef)
-	const { black, blackPos, firstNote, handleWheel, keyToNote, lastNote, noteToKey, notes, white } =
+	const { black, blackPositions, firstNote, handleWheel, lastNote, noteToKey, notes, white } =
 		useVisibleNotes(whiteCount)
 
-	const songName = SONG_NAMES[songIdx]! // songIdx cycles within SONG_NAMES.length
-	const song = parseSong(SONGS[songName]!, keyToNote)
+	const songName = SONG_NAMES[songIndex]! // songIndex cycles within SONG_NAMES.length
+	const song = parseSong(SONGS[songName]!)
 	const songKeyMap = getSongKeyMap(song, notes, noteToKey)
 
-	const getAudioCtx = () => {
-		audioCtxRef.current ??= new AudioContext()
-		audioCtxRef.current.resume()
-		return audioCtxRef.current
+	// Browsers only let an AudioContext start from a user gesture, so create it lazily on first note
+	const getAudioContext = () => {
+		audioContextRef.current ??= new AudioContext()
+		audioContextRef.current.resume()
+		return audioContextRef.current
 	}
 
-	const triggerNote = (key: string, freq: number) => {
-		playNote(getAudioCtx(), freq)
+	const triggerNote = (key: string, frequency: number) => {
+		playNote(getAudioContext(), frequency)
 		setActiveKeys((prev) => new Set(prev).add(key))
 		setTimeout(
 			() =>
@@ -586,9 +526,9 @@ function Root() {
 			150,
 		)
 
-		setSongPos((prev) => {
+		setSongPosition((prev) => {
 			if (prev >= song.steps.length) return prev
-			const stepKeys = song.steps[prev]!.map((n: string) => songKeyMap.toKey[n] ?? '?') // guarded: prev < song.steps.length
+			const stepKeys = song.steps[prev]!.map((note) => songKeyMap.toKey[note] ?? '?') // guarded: prev < song.steps.length
 
 			if (stepKeys.length === 1) {
 				if (key !== stepKeys[0]) return prev
@@ -600,41 +540,38 @@ function Root() {
 
 				setChordProgress(updated)
 
-				if (stepKeys.every((k: string) => updated.has(k))) {
-					resetChord(chordRef, setChordProgress)
-				} else {
-					return prev
-				}
+				// Hold the position until every note of the chord has been struck
+				if (!stepKeys.every((stepKey) => updated.has(stepKey))) return prev
+				resetChord(chordRef, setChordProgress)
 			}
 
 			const next = prev + 1
 
 			if (next >= song.steps.length) {
 				toast.success(`Nice! You played ${songName}`)
-				const resetTimer = setTimeout(() => {
-					setSongPos(0)
+				setTimeout(() => {
+					setSongPosition(0)
 					resetChord(chordRef, setChordProgress)
 				}, 2000)
-				void resetTimer
 			}
 
 			return next
 		})
 	}
 
-	const cycleSong = (dir: number) => {
-		setSongIdx((prev) => (prev + dir + SONG_NAMES.length) % SONG_NAMES.length)
-		setSongPos(0)
+	const cycleSong = (direction: number) => {
+		setSongIndex((prev) => (prev + direction + SONG_NAMES.length) % SONG_NAMES.length)
+		setSongPosition(0)
 		resetChord(chordRef, setChordProgress)
 	}
 
 	const onKey = useEffectEvent((e: KeyboardEvent) => {
 		if (e.repeat) return
-		const found = notes.find((n) => n.key === e.key.toLowerCase())
+		const found = notes.find((note) => note.key === e.key.toLowerCase())
 
 		if (found) {
 			e.preventDefault()
-			triggerNote(found.key, found.freq)
+			triggerNote(found.key, found.frequency)
 		}
 	})
 
@@ -647,7 +584,6 @@ function Root() {
 		<ThemeProvider>
 			<Toaster />
 			<main className='min-h-screen flex flex-col items-center'>
-				{/* Centered content area */}
 				<div className='flex-1 flex flex-col items-center justify-center gap-8 p-6 pb-0'>
 					<div className='flex items-center gap-2'>
 						<h1 className='text-3xl font-bold tracking-tight'>Keyboard Piano</h1>
@@ -657,12 +593,12 @@ function Root() {
 					<SongGuide
 						name={songName}
 						song={song}
-						songPos={songPos}
+						songPosition={songPosition}
 						chordProgress={chordProgress}
 						songNoteToKey={songKeyMap.toKey}
 						songNoteToNote={songKeyMap.toNote}
 						onReset={() => {
-							setSongPos(0)
+							setSongPosition(0)
 							resetChord(chordRef, setChordProgress)
 						}}
 						onPrev={() => cycleSong(-1)}
@@ -670,17 +606,35 @@ function Root() {
 					/>
 				</div>
 
-				<PianoBar
-					containerRef={pianoContainerRef}
-					white={white}
-					black={black}
-					blackPos={blackPos}
-					activeKeys={activeKeys}
-					onTrigger={triggerNote}
-					firstNote={firstNote}
-					lastNote={lastNote}
-					handleWheel={handleWheel}
-				/>
+				<div className='sticky bottom-0 w-full flex flex-col items-center gap-1 p-6 pt-4 bg-base-100/80 backdrop-blur-sm'>
+					<p className='opacity-60 text-sm text-center flex flex-wrap items-center justify-center gap-1'>
+						<span>White:</span>
+						{white.map((note) => (
+							<kbd key={note.note} className='kbd kbd-sm'>
+								{note.key.toUpperCase()}
+							</kbd>
+						))}
+						<span>· Black:</span>
+						{black.map((note) => (
+							<kbd key={note.note} className='kbd kbd-sm'>
+								{note.key.toUpperCase()}
+							</kbd>
+						))}
+					</p>
+					<p className='text-xs opacity-40 text-center'>
+						{firstNote} — {lastNote} · scroll to transpose
+					</p>
+					<div ref={pianoContainerRef} className='w-full max-w-2xl'>
+						<Piano
+							white={white}
+							black={black}
+							blackPositions={blackPositions}
+							activeKeys={activeKeys}
+							onTrigger={triggerNote}
+							onWheel={handleWheel}
+						/>
+					</div>
+				</div>
 			</main>
 		</ThemeProvider>
 	)

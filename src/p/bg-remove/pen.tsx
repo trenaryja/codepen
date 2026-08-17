@@ -35,7 +35,7 @@ const nextFrame = () =>
 // eslint-disable-next-line no-useless-concat -- split to prevent Vite's esm.sh plugin from rewriting
 const ESM_SH = 'https://esm' + '.sh/'
 
-function createBgWorker(model: ModelSize): Worker {
+function createBgWorker(model: ModelSize) {
 	const code = `
 self.onmessage = async (e) => {
 	try {
@@ -57,7 +57,7 @@ self.onmessage = async (e) => {
 	return new Worker(URL.createObjectURL(blob))
 }
 
-async function normalizeFile(file: File): Promise<string> {
+async function normalizeFile(file: File) {
 	if (file.type === 'image/heic' || file.name.toLowerCase().endsWith('.heic')) {
 		const converted = await heic2any({ blob: file, toType: 'image/png' })
 		const blob = Array.isArray(converted) ? converted[0]! : converted
@@ -67,7 +67,7 @@ async function normalizeFile(file: File): Promise<string> {
 	return URL.createObjectURL(file)
 }
 
-type ProgressInfo = { label: string; pct: number | null }
+type ProgressInfo = { label: string; percent: number | null }
 
 const PHASE_LABELS: Record<string, string> = {
 	'fetch:model': 'Preparing the AI (first time takes a moment)…',
@@ -77,7 +77,7 @@ const PHASE_LABELS: Record<string, string> = {
 
 const DETERMINISTIC_PHASES = new Set(['fetch:model'])
 
-function phaseLabel(key: string): string {
+function phaseLabel(key: string) {
 	if (key in PHASE_LABELS) return PHASE_LABELS[key]!
 	if (key.startsWith('fetch:')) return 'Downloading resources…'
 	if (key.startsWith('compute:')) return 'Processing…'
@@ -93,8 +93,8 @@ function runBgRemoval(blob: Blob, model: ModelSize, onProgress: (info: ProgressI
 
 			if (type === 'progress') {
 				const { key, current, total } = e.data
-				const pct = DETERMINISTIC_PHASES.has(key) && total > 0 ? Math.round((current / total) * 100) : null
-				onProgress({ label: phaseLabel(key), pct })
+				const percent = DETERMINISTIC_PHASES.has(key) && total > 0 ? Math.round((current / total) * 100) : null
+				onProgress({ label: phaseLabel(key), percent })
 			} else if (type === 'done') {
 				resolve(e.data.blob)
 				worker.terminate()
@@ -118,11 +118,11 @@ function imageToBlobUrl(src: string): Promise<Blob> {
 		const img = new Image()
 
 		img.onload = () => {
-			const c = document.createElement('canvas')
-			c.width = img.naturalWidth
-			c.height = img.naturalHeight
-			c.getContext('2d')!.drawImage(img, 0, 0)
-			c.toBlob((b) => (b ? resolve(b) : reject(new Error('Canvas export failed'))), 'image/png')
+			const canvas = document.createElement('canvas')
+			canvas.width = img.naturalWidth
+			canvas.height = img.naturalHeight
+			canvas.getContext('2d')!.drawImage(img, 0, 0)
+			canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Canvas export failed'))), 'image/png')
 		}
 
 		img.onerror = reject
@@ -145,21 +145,21 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  * At low hardness, the opaque core shrinks to nearly nothing and the falloff is curved.
  */
 function createBrushPattern(
-	ctx: CanvasRenderingContext2D,
+	context: CanvasRenderingContext2D,
 	x: number,
 	y: number,
 	radius: number,
 	hardness: number,
 ): CanvasGradient {
 	const coreRadius = radius * hardness * hardness // quadratic curve for more dramatic softness range
-	const grad = ctx.createRadialGradient(x, y, coreRadius, x, y, radius)
+	const gradient = context.createRadialGradient(x, y, coreRadius, x, y, radius)
 	// Gaussian-ish falloff with intermediate stops
-	grad.addColorStop(0, 'rgba(0,0,0,1)')
-	grad.addColorStop(0.3, `rgba(0,0,0,${(0.7 + hardness * 0.3).toFixed(2)})`)
-	grad.addColorStop(0.6, `rgba(0,0,0,${(0.3 + hardness * 0.4).toFixed(2)})`)
-	grad.addColorStop(0.85, `rgba(0,0,0,${(0.08 + hardness * 0.2).toFixed(2)})`)
-	grad.addColorStop(1, 'rgba(0,0,0,0)')
-	return grad
+	gradient.addColorStop(0, 'rgba(0,0,0,1)')
+	gradient.addColorStop(0.3, `rgba(0,0,0,${(0.7 + hardness * 0.3).toFixed(2)})`)
+	gradient.addColorStop(0.6, `rgba(0,0,0,${(0.3 + hardness * 0.4).toFixed(2)})`)
+	gradient.addColorStop(0.85, `rgba(0,0,0,${(0.08 + hardness * 0.2).toFixed(2)})`)
+	gradient.addColorStop(1, 'rgba(0,0,0,0)')
+	return gradient
 }
 
 function Elapsed({ running }: { running: boolean }) {
@@ -185,8 +185,6 @@ function Elapsed({ running }: { running: boolean }) {
 	return <span className='text-xs opacity-40'>{seconds}s</span>
 }
 
-// ── Eraser/Restore canvas component ──
-
 function EraserCanvas({
 	resultUrl,
 	croppedUrl,
@@ -198,7 +196,6 @@ function EraserCanvas({
 }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const cursorRef = useRef<HTMLDivElement>(null)
-	const containerRef = useRef<HTMLDivElement>(null)
 	const croppedImgRef = useRef<HTMLImageElement | null>(null)
 	const [brushSize, setBrushSize] = useState(20)
 	const [hardness, setHardness] = useState(0.7)
@@ -216,7 +213,7 @@ function EraserCanvas({
 	// Reusable temp canvas for restore brush (avoids creating one per stroke step)
 	const tmpCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
-	const getDisplayBrushSize = (): number => {
+	const getDisplayBrushSize = () => {
 		const canvas = canvasRef.current
 		if (!canvas) return brushSize
 		const rect = canvas.getBoundingClientRect()
@@ -232,14 +229,14 @@ function EraserCanvas({
 			const canvas = canvasRef.current!
 			canvas.width = resultImg.naturalWidth
 			canvas.height = resultImg.naturalHeight
-			const ctx = canvas.getContext('2d')!
-			ctx.drawImage(resultImg, 0, 0)
+			const context = canvas.getContext('2d')!
+			context.drawImage(resultImg, 0, 0)
 
 			// Pre-create temp canvas at image size for restore brush
-			const tmp = document.createElement('canvas')
-			tmp.width = canvas.width
-			tmp.height = canvas.height
-			tmpCanvasRef.current = tmp
+			const scratchCanvas = document.createElement('canvas')
+			scratchCanvas.width = canvas.width
+			scratchCanvas.height = canvas.height
+			tmpCanvasRef.current = scratchCanvas
 
 			setReady(true)
 		})
@@ -271,8 +268,8 @@ function EraserCanvas({
 
 	const saveUndo = () => {
 		const canvas = canvasRef.current!
-		const ctx = canvas.getContext('2d')!
-		const data = ctx.getImageData(0, 0, canvas.width, canvas.height)
+		const context = canvas.getContext('2d')!
+		const data = context.getImageData(0, 0, canvas.width, canvas.height)
 		undoStackRef.current.push(data)
 		if (undoStackRef.current.length > 30) undoStackRef.current.shift()
 	}
@@ -294,7 +291,7 @@ function EraserCanvas({
 
 	const paintStroke = (from: { x: number; y: number }, to: { x: number; y: number }) => {
 		const canvas = canvasRef.current!
-		const ctx = canvas.getContext('2d')!
+		const context = canvas.getContext('2d')!
 		const radius = brushSize / 2
 
 		const dist = Math.hypot(to.x - from.x, to.y - from.y)
@@ -306,23 +303,23 @@ function EraserCanvas({
 			const y = from.y + (to.y - from.y) * t
 
 			if (mode === 'erase') {
-				ctx.save()
-				ctx.globalCompositeOperation = 'destination-out'
+				context.save()
+				context.globalCompositeOperation = 'destination-out'
 
 				if (hardness >= 0.95) {
-					ctx.beginPath()
-					ctx.arc(x, y, radius, 0, Math.PI * 2)
-					ctx.fill()
+					context.beginPath()
+					context.arc(x, y, radius, 0, Math.PI * 2)
+					context.fill()
 				} else {
-					ctx.fillStyle = createBrushPattern(ctx, x, y, radius, hardness)
-					ctx.fillRect(x - radius, y - radius, brushSize, brushSize)
+					context.fillStyle = createBrushPattern(context, x, y, radius, hardness)
+					context.fillRect(x - radius, y - radius, brushSize, brushSize)
 				}
 
-				ctx.restore()
+				context.restore()
 			} else {
 				// Restore from original cropped image with feathering
-				const tmp = tmpCanvasRef.current!
-				const tmpCtx = tmp.getContext('2d')!
+				const scratchCanvas = tmpCanvasRef.current!
+				const tmpCtx = scratchCanvas.getContext('2d')!
 				const bx = Math.max(0, Math.floor(x - radius))
 				const by = Math.max(0, Math.floor(y - radius))
 				const bw = Math.min(canvas.width - bx, Math.ceil(brushSize + 2))
@@ -349,10 +346,10 @@ function EraserCanvas({
 
 				tmpCtx.globalCompositeOperation = 'source-over'
 
-				ctx.save()
-				ctx.globalCompositeOperation = 'source-over'
-				ctx.drawImage(tmp, bx, by, bw, bh, bx, by, bw, bh)
-				ctx.restore()
+				context.save()
+				context.globalCompositeOperation = 'source-over'
+				context.drawImage(scratchCanvas, bx, by, bw, bh, bx, by, bw, bh)
+				context.restore()
 			}
 		}
 	}
@@ -447,11 +444,7 @@ function EraserCanvas({
 					boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.3)',
 				}}
 			/>
-			<div
-				ref={containerRef}
-				className='flex-1 min-h-0 flex items-center justify-center overflow-hidden'
-				onWheel={handleWheel}
-			>
+			<div className='flex-1 min-h-0 flex items-center justify-center overflow-hidden' onWheel={handleWheel}>
 				<canvas
 					ref={canvasRef}
 					className='max-w-full max-h-full rounded-lg checkerboard'
@@ -535,11 +528,9 @@ function EraserCanvas({
 	)
 }
 
-// ── Main app ──
-
 const Root = () => {
 	const [stage, setStage] = useState<Stage>('idle')
-	const [progressInfo, setProgressInfo] = useState<ProgressInfo>({ label: '', pct: null })
+	const [progressInfo, setProgressInfo] = useState<ProgressInfo>({ label: '', percent: null })
 	const [error, setError] = useState<string | null>(null)
 	const [imageUrl, setImageUrl] = useState<string | null>(null)
 	const [croppedUrl, setCroppedUrl] = useState<string | null>(null)
@@ -562,7 +553,7 @@ const Root = () => {
 			const isHeic = file.type === 'image/heic' || file.name.toLowerCase().endsWith('.heic')
 			setStage('loading')
 			setError(null)
-			setProgressInfo({ label: isHeic ? 'Converting your photo…' : 'Opening your image…', pct: null })
+			setProgressInfo({ label: isHeic ? 'Converting your photo…' : 'Opening your image…', percent: null })
 			await nextFrame()
 
 			const url = await normalizeFile(file)
@@ -586,7 +577,7 @@ const Root = () => {
 			setStage('processing')
 			setError(null)
 			setCroppedUrl(previewUrl)
-			setProgressInfo({ label: 'Getting ready…', pct: null })
+			setProgressInfo({ label: 'Getting ready…', percent: null })
 			await nextFrame()
 
 			const resultBlob = await runBgRemoval(inputBlob, model, setProgressInfo)
@@ -606,7 +597,7 @@ const Root = () => {
 
 		savedCropperStateRef.current = cropperRef.current?.getState() ?? null
 		setStage('processing')
-		setProgressInfo({ label: 'Preparing your crop…', pct: null })
+		setProgressInfo({ label: 'Preparing your crop…', percent: null })
 		await nextFrame()
 
 		const croppedBlob = await new Promise<Blob>((resolve, reject) => {
@@ -622,7 +613,7 @@ const Root = () => {
 	const handleSkipCrop = async () => {
 		if (!imageUrl) return
 		setStage('processing')
-		setProgressInfo({ label: 'Getting ready…', pct: null })
+		setProgressInfo({ label: 'Getting ready…', percent: null })
 		await nextFrame()
 
 		const blob = await imageToBlobUrl(imageUrl)
@@ -670,14 +661,14 @@ const Root = () => {
 		const c = document.createElement('canvas')
 		c.width = img.naturalWidth
 		c.height = img.naturalHeight
-		const ctx = c.getContext('2d')!
+		const context = c.getContext('2d')!
 
 		if (!transparency) {
-			ctx.fillStyle = bgColor
-			ctx.fillRect(0, 0, c.width, c.height)
+			context.fillStyle = bgColor
+			context.fillRect(0, 0, c.width, c.height)
 		}
 
-		ctx.drawImage(img, 0, 0)
+		context.drawImage(img, 0, 0)
 		c.toBlob(
 			(blob) => {
 				if (!blob) return
@@ -695,7 +686,7 @@ const Root = () => {
 
 	const reset = () => {
 		setStage('idle')
-		setProgressInfo({ label: '', pct: null })
+		setProgressInfo({ label: '', percent: null })
 		setError(null)
 		savedCropperStateRef.current = null
 
@@ -854,11 +845,11 @@ const Root = () => {
 							<img src={croppedUrl} alt='Cropped' className='max-w-lg max-h-[40vh] rounded-lg opacity-30' />
 						)}
 						<div className='flex flex-col items-center gap-3 w-full max-w-xs'>
-							{progressInfo.pct != null ? (
+							{progressInfo.percent != null ? (
 								<div className='w-full bg-base-300 rounded-full h-2 overflow-hidden'>
 									<div
 										className='bg-primary h-full rounded-full transition-all duration-300'
-										style={{ width: `${progressInfo.pct}%` }}
+										style={{ width: `${progressInfo.percent}%` }}
 									/>
 								</div>
 							) : (
@@ -867,7 +858,7 @@ const Root = () => {
 							<div className='flex items-center gap-2'>
 								<p className='text-sm opacity-70'>
 									{progressInfo.label}
-									{progressInfo.pct != null ? ` — ${progressInfo.pct}%` : ''}
+									{progressInfo.percent != null ? ` — ${progressInfo.percent}%` : ''}
 								</p>
 								<Elapsed running={stage === 'processing'} />
 							</div>

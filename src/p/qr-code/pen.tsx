@@ -19,35 +19,36 @@ const capacityCache = new Map<string, number>()
  * exported as a static nested object (ecc → mode → version[]) for O(1) lookups with no runtime
  * cost — preferable if this moves to a library.
  */
-const probeCapacity = (version: number, ecc: EccLevel, modeId: string): number =>
+const probeCapacity = (version: number, ecc: EccLevel, modeId: string) =>
 	capacityCache.getOrInsertComputed(`${version}:${ecc}:${modeId}`, () => {
-		const ch = modeId === 'Numeric' ? '1' : modeId === 'Alphanumeric' ? 'A' : 'x'
-		let hi = 7090
-		let lo = 1
+		const sampleChar = modeId === 'Numeric' ? '1' : modeId === 'Alphanumeric' ? 'A' : 'x'
+		let high = 7090
+		let low = 1
 
-		while (lo < hi) {
-			const mid = Math.floor((lo + hi + 1) / 2)
+		while (low < high) {
+			const middle = Math.floor((low + high + 1) / 2)
 
 			try {
-				if (QRCode.create(ch.repeat(mid), { errorCorrectionLevel: ecc }).version <= version) lo = mid
-				else hi = mid - 1
+				if (QRCode.create(sampleChar.repeat(middle), { errorCorrectionLevel: ecc }).version <= version) low = middle
+				else high = middle - 1
 			} catch {
-				hi = mid - 1
+				high = middle - 1
 			}
 		}
 
-		return lo
+		return low
 	})
 
-const optimizeForQR = (raw: string): string => {
+const optimizeForQR = (raw: string) => {
 	try {
 		const url = new URL(raw)
-		const ux = (s: string) => s.replace(/%[0-9a-f]{2}/gi, (m) => m.toUpperCase())
+		// Uppercasing percent-escapes lets more of the URL encode in QR's alphanumeric mode.
+		const upperEscapes = (text: string) => text.replace(/%[0-9a-f]{2}/gi, (escape) => escape.toUpperCase())
 		const scheme = url.protocol.slice(0, -1).toUpperCase()
 		const host = url.hostname.toUpperCase()
 		const port = url.port ? `:${url.port}` : ''
 
-		return `${scheme}://${host}${port}${ux(url.pathname)}${ux(url.search)}${ux(url.hash)}`
+		return `${scheme}://${host}${port}${upperEscapes(url.pathname)}${upperEscapes(url.search)}${upperEscapes(url.hash)}`
 	} catch {
 		return raw
 	}
@@ -62,7 +63,7 @@ const getQRInfo = (text: string, ecc: EccLevel) => {
 		const mode = modeIds.length === 1 ? modeIds[0]! : 'Mixed'
 		const capacity = mode !== 'Mixed' ? probeCapacity(qr.version, ecc, mode) : null
 
-		return { version: qr.version, n: qr.modules.size, mode, capacity }
+		return { version: qr.version, moduleCount: qr.modules.size, mode, capacity }
 	} catch {
 		return null
 	}
@@ -92,16 +93,17 @@ const DIRS: [number, number][] = [
 ]
 
 const classifyCells = (qr: any): Cell[][] => {
-	const n = qr.modules.size
+	const moduleCount = qr.modules.size
 	const { data } = qr.modules
 	const reserved: Uint8Array = qr.modules.reservedBit
-	const grid: Cell[][] = Array.from({ length: n }, (_r, row) =>
-		Array.from({ length: n }, (_c, col) => {
-			const dark = !!data[row * n + col]
+	const grid: Cell[][] = Array.from({ length: moduleCount }, (_r, row) =>
+		Array.from({ length: moduleCount }, (_c, col) => {
+			const dark = !!data[row * moduleCount + col]
 			let type: ModuleType = 'data'
 
-			if (reserved[row * n + col]) {
-				const inFinder = (row < 8 && col < 8) || (row < 8 && col >= n - 8) || (row >= n - 8 && col < 8)
+			if (reserved[row * moduleCount + col]) {
+				const inFinder =
+					(row < 8 && col < 8) || (row < 8 && col >= moduleCount - 8) || (row >= moduleCount - 8 && col < 8)
 
 				type = inFinder ? 'finder' : row === 6 || col === 6 ? 'timing' : 'alignment'
 			}
@@ -110,10 +112,15 @@ const classifyCells = (qr: any): Cell[][] => {
 		}),
 	)
 
-	for (let r = 0; r < n; r++) {
-		for (let c = 0; c < n; c++) {
-			grid[r]![c]!.darkNeighbors = DIRS.filter(
-				([dr, dc]) => r + dr >= 0 && r + dr < n && c + dc >= 0 && c + dc < n && grid[r + dr]![c + dc]!.dark,
+	for (let row = 0; row < moduleCount; row++) {
+		for (let col = 0; col < moduleCount; col++) {
+			grid[row]![col]!.darkNeighbors = DIRS.filter(
+				([dy, dx]) =>
+					row + dy >= 0 &&
+					row + dy < moduleCount &&
+					col + dx >= 0 &&
+					col + dx < moduleCount &&
+					grid[row + dy]![col + dx]!.dark,
 			).length
 		}
 	}
@@ -121,13 +128,13 @@ const classifyCells = (qr: any): Cell[][] => {
 	return grid
 }
 
-const finderEyes = (svg: any, n: number) => {
+const finderEyes = (svg: any, moduleCount: number) => {
 	const g = svg.append('g')
 
 	for (const [row, col] of [
 		[3.5, 3.5],
-		[3.5, n - 3.5],
-		[n - 3.5, 3.5],
+		[3.5, moduleCount - 3.5],
+		[moduleCount - 3.5, 3.5],
 	] as const) {
 		const cx = col * CELL
 		const cy = row * CELL
@@ -177,21 +184,21 @@ const PARAM_SPECS: Partial<Record<StyleName, Record<string, ParamSpec>>> = {
 	},
 }
 
-type RenderArgs = { cells: Cell[][]; n: number; p: P; svg: any }
+type RenderArgs = { cells: Cell[][]; moduleCount: number; p: P; svg: any }
 
 const renderClassic = ({ svg, cells }: RenderArgs) => {
 	svg
 		.selectAll('rect')
-		.data(cells.flat().filter((c: Cell) => c.dark))
+		.data(cells.flat().filter((cell: Cell) => cell.dark))
 		.join('rect')
-		.attr('x', (c: Cell) => c.col * CELL)
-		.attr('y', (c: Cell) => c.row * CELL)
+		.attr('x', (cell: Cell) => cell.col * CELL)
+		.attr('y', (cell: Cell) => cell.row * CELL)
 		.attr('width', CELL)
 		.attr('height', CELL)
 		.attr('fill', 'currentColor')
 }
 
-const renderBlob = ({ svg, cells, n, p }: RenderArgs) => {
+const renderBlob = ({ svg, cells, moduleCount, p }: RenderArgs) => {
 	const f = svg
 		.append('defs')
 		.append('filter')
@@ -214,46 +221,46 @@ const renderBlob = ({ svg, cells, n, p }: RenderArgs) => {
 		.append('g')
 		.attr('filter', 'url(#mb)')
 		.selectAll('circle')
-		.data(cells.flat().filter((c: Cell) => c.dark && c.type !== 'finder'))
+		.data(cells.flat().filter((cell: Cell) => cell.dark && cell.type !== 'finder'))
 		.join('circle')
-		.attr('cx', (c: Cell) => (c.col + 0.5) * CELL)
-		.attr('cy', (c: Cell) => (c.row + 0.5) * CELL)
+		.attr('cx', (cell: Cell) => (cell.col + 0.5) * CELL)
+		.attr('cy', (cell: Cell) => (cell.row + 0.5) * CELL)
 		.attr('r', CELL * 0.56)
 		.attr('fill', 'currentColor')
 
-	finderEyes(svg, n)
+	finderEyes(svg, moduleCount)
 }
 
-const renderHalftone = ({ svg, cells, n, p }: RenderArgs) => {
-	finderEyes(svg, n)
+const renderHalftone = ({ svg, cells, moduleCount, p }: RenderArgs) => {
+	finderEyes(svg, moduleCount)
 
 	svg
 		.append('g')
 		.selectAll('circle')
-		.data(cells.flat().filter((c: Cell) => c.dark && c.type !== 'finder'))
+		.data(cells.flat().filter((cell: Cell) => cell.dark && cell.type !== 'finder'))
 		.join('circle')
-		.attr('cx', (c: Cell) => (c.col + 0.5) * CELL)
-		.attr('cy', (c: Cell) => (c.row + 0.5) * CELL)
-		.attr('r', (c: Cell) => CELL * (p.minR! + p.range! * (c.darkNeighbors / 8)))
+		.attr('cx', (cell: Cell) => (cell.col + 0.5) * CELL)
+		.attr('cy', (cell: Cell) => (cell.row + 0.5) * CELL)
+		.attr('r', (cell: Cell) => CELL * (p.minR! + p.range! * (cell.darkNeighbors / 8)))
 		.attr('fill', 'currentColor')
 }
 
-const renderIsometric = ({ svg, cells, n, p }: RenderArgs) => {
+const renderIsometric = ({ svg, cells, moduleCount, p }: RenderArgs) => {
 	const h = CELL * p.depth!
-	const dark = cells.flat().filter((c: Cell) => c.dark)
+	const dark = cells.flat().filter((cell: Cell) => cell.dark)
 	// Only draw a face when it's exposed — no dark neighbor occluding it
-	const bottomFaces = dark.filter((c: Cell) => c.row + 1 >= n || !cells[c.row + 1]![c.col]!.dark)
-	const rightFaces = dark.filter((c: Cell) => c.col + 1 >= n || !cells[c.row]![c.col + 1]!.dark)
+	const bottomFaces = dark.filter((cell: Cell) => cell.row + 1 >= moduleCount || !cells[cell.row + 1]![cell.col]!.dark)
+	const rightFaces = dark.filter((cell: Cell) => cell.col + 1 >= moduleCount || !cells[cell.row]![cell.col + 1]!.dark)
 	const pts = {
-		bottom: (c: Cell) => {
-			const x = c.col * CELL
-			const y = c.row * CELL
+		bottom: (cell: Cell) => {
+			const x = cell.col * CELL
+			const y = cell.row * CELL
 
 			return `${x},${y + CELL} ${x + h},${y + CELL + h} ${x + CELL + h},${y + CELL + h} ${x + CELL},${y + CELL}`
 		},
-		right: (c: Cell) => {
-			const x = c.col * CELL
-			const y = c.row * CELL
+		right: (cell: Cell) => {
+			const x = cell.col * CELL
+			const y = cell.row * CELL
 
 			return `${x + CELL},${y} ${x + CELL + h},${y + h} ${x + CELL + h},${y + CELL + h} ${x + CELL},${y + CELL}`
 		},
@@ -282,24 +289,24 @@ const renderIsometric = ({ svg, cells, n, p }: RenderArgs) => {
 		.selectAll('rect')
 		.data(dark)
 		.join('rect')
-		.attr('x', (c: Cell) => c.col * CELL)
-		.attr('y', (c: Cell) => c.row * CELL)
+		.attr('x', (cell: Cell) => cell.col * CELL)
+		.attr('y', (cell: Cell) => cell.row * CELL)
 		.attr('width', CELL)
 		.attr('height', CELL)
 		.attr('fill', 'currentColor')
 }
 
-const renderHex = ({ svg, cells, n, p }: RenderArgs) => {
+const renderHex = ({ svg, cells, moduleCount, p }: RenderArgs) => {
 	// True honeycomb: lay a pointy-top hex grid over the QR area.
 	// Each hex samples the QR module at its center — dark hex if that module is dark.
 	// Scannable when r < CELL/2 (hex center guaranteed within the same module cell).
 	const r = CELL * p.radius!
 	const colPitch = Math.sqrt(3) * r
 	const rowPitch = 1.5 * r
-	const numCols = Math.ceil((n * CELL) / colPitch) + 2
-	const numRows = Math.ceil((n * CELL) / rowPitch) + 2
+	const numCols = Math.ceil((moduleCount * CELL) / colPitch) + 2
+	const numRows = Math.ceil((moduleCount * CELL) / rowPitch) + 2
 	const dark: [number, number][] = []
-	const W = n * CELL
+	const W = moduleCount * CELL
 
 	for (let hr = 0; hr < numRows; hr++) {
 		const cy = r + hr * rowPitch
@@ -316,7 +323,7 @@ const renderHex = ({ svg, cells, n, p }: RenderArgs) => {
 			const qc = Math.floor(cx / CELL)
 			const qr = Math.floor(cy / CELL)
 
-			if (qc >= 0 && qc < n && qr >= 0 && qr < n && cells[qr]![qc]!.dark) dark.push([cx, cy])
+			if (qc >= 0 && qc < moduleCount && qr >= 0 && qr < moduleCount && cells[qr]![qc]!.dark) dark.push([cx, cy])
 		}
 	}
 
@@ -353,20 +360,20 @@ type RenderConfig = { ecc: EccLevel; params: Record<StyleName, P>; style: StyleN
 const renderQR = (el: SVGSVGElement, src: string, config: RenderConfig) => {
 	const { ecc, style, params } = config
 	const qr = QRCode.create(src, { errorCorrectionLevel: ecc })
-	const n = qr.modules.size
+	const moduleCount = qr.modules.size
 	const p = params[style]
 	const pad = style === 'isometric' ? CELL * (p.depth ?? 0.5) : 0
 	const svg = select(el)
-		.attr('width', n * CELL + pad)
-		.attr('height', n * CELL + pad)
+		.attr('width', moduleCount * CELL + pad)
+		.attr('height', moduleCount * CELL + pad)
 
 	svg.selectAll('*').remove()
 	svg
 		.append('rect')
-		.attr('width', n * CELL + pad)
-		.attr('height', n * CELL + pad)
+		.attr('width', moduleCount * CELL + pad)
+		.attr('height', moduleCount * CELL + pad)
 		.attr('fill', 'var(--color-base-100, white)')
-	RENDERERS[style]({ svg, cells: classifyCells(qr), n, p })
+	RENDERERS[style]({ svg, cells: classifyCells(qr), moduleCount, p })
 }
 
 type SliderProps = {
@@ -402,15 +409,15 @@ const Sliders = ({ styleParams, params, style, setParam }: SliderProps) => {
 	)
 }
 
-type StatsPanelProps = { capacity: number | null; charCount: number; n: number; version: number }
+type StatsPanelProps = { capacity: number | null; charCount: number; moduleCount: number; version: number }
 
-const StatsPanel = ({ version, n, charCount, capacity }: StatsPanelProps) => (
+const StatsPanel = ({ version, moduleCount, charCount, capacity }: StatsPanelProps) => (
 	<div className='stats stats-vertical sm:stats-horizontal shadow'>
 		<div className='stat'>
 			<div className='stat-title'>Version</div>
 			<div className='stat-value'>{version}</div>
 			<div className='stat-desc'>
-				{n} × {n} modules
+				{moduleCount} × {moduleCount} modules
 			</div>
 		</div>
 		<div className='stat'>
@@ -533,7 +540,7 @@ const Root = () => {
 						</div>
 						<StatsPanel
 							version={textInfo.version}
-							n={textInfo.n}
+							moduleCount={textInfo.moduleCount}
 							charCount={debouncedText.length}
 							capacity={textInfo.capacity}
 						/>

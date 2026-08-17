@@ -130,12 +130,12 @@ const BAR_OFFSET = CELL_WIDTH * (GAP_RATIO / 2)
 
 function buildBlendedColorArray(position: number) {
 	const { lower, upper, t } = getSpectrumNeighbors(position)
-	const colorsA = chroma.scale([...lower.colors]).colors(256)
+	const lowerColors = chroma.scale([...lower.colors]).colors(256)
 
-	if (t === 0) return colorsA
+	if (t === 0) return lowerColors
 
-	const colorsB = chroma.scale([...upper.colors]).colors(256)
-	return colorsA.map((c: string, i: number) => chroma.mix(c, colorsB[i]!, t).hex()) // both scales have 256 colors
+	const upperColors = chroma.scale([...upper.colors]).colors(256)
+	return lowerColors.map((color, i) => chroma.mix(color, upperColors[i]!, t).hex()) // both scales have 256 colors
 }
 
 function getSpectrumLabel(position: number) {
@@ -144,8 +144,8 @@ function getSpectrumLabel(position: number) {
 	if (t < 0.02) return lower.description
 	if (t > 0.98) return upper.description
 
-	const pctUpper = Math.round(t * 100)
-	return `${100 - pctUpper}% ${lower.label} / ${pctUpper}% ${upper.label}`
+	const upperPercent = Math.round(t * 100)
+	return `${100 - upperPercent}% ${lower.label} / ${upperPercent}% ${upper.label}`
 }
 
 // Maps a frequency bin value (0–255) to a bar height with bezier easing.
@@ -155,16 +155,16 @@ function scaleBarHeight(value: number) {
 }
 
 function createNoiseEngine() {
-	const ctx = new AudioContext()
-	ctx.suspend()
+	const audioContext = new AudioContext()
+	audioContext.suspend()
 
-	const gain = ctx.createGain()
+	const gain = audioContext.createGain()
 	gain.gain.value = 0.5
 
-	const analyser = ctx.createAnalyser()
+	const analyser = audioContext.createAnalyser()
 	analyser.fftSize = 256
 
-	gain.connect(analyser).connect(ctx.destination)
+	gain.connect(analyser).connect(audioContext.destination)
 
 	let source: AudioBufferSourceNode | null = null
 
@@ -175,16 +175,16 @@ function createNoiseEngine() {
 				source.stop()
 			}
 
-			const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate)
+			const buffer = audioContext.createBuffer(1, audioContext.sampleRate * 2, audioContext.sampleRate)
 			fillBlendedBuffer(position, buffer.getChannelData(0))
 
-			source = ctx.createBufferSource()
+			source = audioContext.createBufferSource()
 			source.buffer = buffer
 			source.loop = true
 			source.connect(gain)
 			source.start()
 		},
-		setPaused: (paused: boolean) => (paused ? ctx.suspend() : ctx.resume()),
+		setPaused: (paused: boolean) => (paused ? audioContext.suspend() : audioContext.resume()),
 		setGain: (val: number) => {
 			gain.gain.value = val
 		},
@@ -193,7 +193,7 @@ function createNoiseEngine() {
 			analyser.getByteFrequencyData(arr)
 			return arr
 		},
-		close: () => ctx.state !== 'closed' && ctx.close(),
+		close: () => audioContext.state !== 'closed' && audioContext.close(),
 	}
 }
 

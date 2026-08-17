@@ -37,11 +37,9 @@ import {
 } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
 
-// ─── Augmentation ─────────────────────────────────────────────
 // PokéAPI has `color` and the legendary/mythical flags; the Purukitto dump doesn't.
 // Rather than ship a data file (pens are 3 files, copy-pasteable to CodePen) these are
 // baked in: one char per Pokédex id indexing COLORS, plus two sparse id lists. ~1.2KB.
-
 const COLORS = ['black', 'blue', 'brown', 'gray', 'green', 'pink', 'purple', 'red', 'white', 'yellow'] as const
 
 const COLOR_CODES =
@@ -68,8 +66,6 @@ const MYTHICAL = new Set(
 const GENERATION_ENDS = [151, 251, 386, 493, 649, 721, 809, 898]
 
 const DATA_URL = 'https://cdn.jsdelivr.net/gh/Purukitto/pokemon-data.json@master/pokedex.json'
-
-// ─── Domain ───────────────────────────────────────────────────
 
 type Mon = {
 	id: number
@@ -199,8 +195,6 @@ const DEFAULT_COLUMNS = new Set(
 	'name type color generation total hp attack defense spAttack spDefense speed legendary'.split(' '),
 )
 
-// ─── Loading & derivation ─────────────────────────────────────
-
 type RawMon = {
 	id: number
 	name: { english: string }
@@ -276,8 +270,6 @@ const computeRangeStats = (rows: Mon[]) => {
 	}
 }
 
-// ─── Executor ─────────────────────────────────────────────────
-
 const resolveRange = (fieldId: string, value: RangeValue): [number | null, number | null] => {
 	if ('level' in value) return RANGE_STATS[fieldId]?.levels[value.level] ?? [null, null]
 	return [value.min ?? null, value.max ?? null]
@@ -329,8 +321,7 @@ const sanitizeFilters = (raw: unknown): Filters => {
 	return out
 }
 
-// ─── JSON schema handed to the model ──────────────────────────
-
+// The JSON schema handed to the model.
 const fieldValueSchema = (field: Field) => {
 	if (field.kind === 'enum') return { type: 'array', items: { enum: field.values }, minItems: 1 }
 	if (field.kind === 'bool') return { type: 'boolean' }
@@ -389,8 +380,6 @@ const rejectSchema = {
 	required: ['thinking', 'ok', 'reason', 'message'],
 	additionalProperties: false,
 }
-
-// ─── Prompt ───────────────────────────────────────────────────
 
 const describeField = (field: Field) => {
 	if (field.kind === 'enum') return `- ${field.id} (${field.hint}) → array of: ${field.values.join(', ')}`
@@ -537,8 +526,6 @@ const buildMessages = (prompt: string) => [
 	{ role: 'user', content: prompt },
 ]
 
-// ─── Partial JSON ─────────────────────────────────────────────
-
 /**
  * Grammar-constrained output is only ever truncated, never malformed, so "repair" just means
  * closing what's open. When a value is mid-token the close still fails to parse, so we walk
@@ -578,8 +565,6 @@ const repairJson = (text: string): unknown => {
 
 	return null
 }
-
-// ─── Model ────────────────────────────────────────────────────
 
 /**
  * Every model here was checked against the real grammar — "small instruct model" is no guarantee it
@@ -668,8 +653,6 @@ type StreamChunk = {
 	usage?: { completion_tokens?: number; extra?: { decode_tokens_per_s?: number } }
 }
 
-// ─── Small pieces ─────────────────────────────────────────────
-
 const TypeChip = ({ type }: { type: string }) => (
 	<span
 		className='badge badge-xs border-none font-semibold text-white/95'
@@ -693,8 +676,6 @@ const StatBar = ({ value, fieldId }: { value: number; fieldId: string }) => {
 
 const BoolCell = ({ value }: { value: boolean }) =>
 	value ? <span className='badge badge-xs badge-warning'>yes</span> : <span className='opacity-25'>—</span>
-
-// ─── Filter controls ──────────────────────────────────────────
 
 type ControlProps = {
 	field: Field
@@ -815,8 +796,6 @@ const summarize = (field: Field, value: FilterValue): string => {
 	return `“${value}”`
 }
 
-// ─── Filter panel ─────────────────────────────────────────────
-
 const FilterPanel = ({
 	filters,
 	setFilter,
@@ -864,8 +843,6 @@ const FilterPanel = ({
 		</div>
 	</aside>
 )
-
-// ─── Table ────────────────────────────────────────────────────
 
 /** TanStack hands cells a whole context object; every cell here only ever wants the row's `Mon`. */
 const cell =
@@ -971,8 +948,6 @@ const LoadOverlay = ({ label, size }: { label: string; size: string }) => {
 	)
 }
 
-// ─── Root ─────────────────────────────────────────────────────
-
 type ModelState = 'error' | 'idle' | 'loading' | 'ready'
 
 type Rejection = { reason: string; message: string }
@@ -981,7 +956,6 @@ type Rejection = { reason: string; message: string }
 // compile the component. It does not yet support dynamic `import()`, `for await`, or `try/finally`, and
 // a single unsupported construct disqualifies the whole component — including unrelated derived values,
 // which then lose their memoization. Keeping the async work at module scope keeps `Root` compilable.
-
 const loadEngine = async (
 	id: string,
 	previous: Engine | null,

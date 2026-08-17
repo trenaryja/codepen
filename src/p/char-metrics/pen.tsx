@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'https://esm.sh/react'
 import type { ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
-// ── Constants ──────────────────────────────────────────────────────────────────
 const FONTS: Record<string, string> = {
 	serif: 'Georgia, "Times New Roman", serif',
 	sans: 'system-ui, "Helvetica Neue", Arial, sans-serif',
@@ -13,30 +12,92 @@ const ACCENT = 'var(--color-primary)'
 const FG = 'var(--color-base-content)'
 const BG = 'var(--color-base-100)'
 const MONO = `'DM Mono', monospace`
-const BASE_CH = 400
+const BASE_HEIGHT = 400
 const HERO_FONT_SIZE = 120
 
-// ── Measurement (offscreen canvas — no rendering) ─────────────────────────────
+// Shared offscreen context: measurement only, never rendered.
 const measureCtx = document.createElement('canvas').getContext('2d')!
 
-function px(size: number, font: string, weight = 400) {
-	return `${weight} ${size}px ${FONTS[font]}`
+function cssFont(size: number, family: string, weight = 400) {
+	return `${weight} ${size}px ${FONTS[family]}`
 }
 
-function measure(text: string, fs: string) {
-	measureCtx.font = fs
+function measure(text: string, font: string) {
+	measureCtx.font = font
 	return measureCtx.measureText(text)
 }
 
-// ── SVG primitives ─────────────────────────────────────────────────────────────
+const SCAN = 400 // offscreen scan canvas, px square
+const SCAN_BASELINE = 300 // where the glyph sits inside that canvas
+const INK = 128 // alpha above which a pixel counts as ink
+
+type Span = [start: number, end: number]
+
+type Raster = {
+	ink: (x: number, y: number) => boolean
+	advance: number
+}
+
+// Draw one glyph in isolation and expose an ink predicate over its pixels; a single
+// getImageData readback backs every scan below.
+function rasterize(char: string, font: string): Raster {
+	const canvas = document.createElement('canvas')
+	canvas.width = SCAN
+	canvas.height = SCAN
+	const ctx = canvas.getContext('2d')!
+	ctx.font = font
+	ctx.fillStyle = '#fff'
+	ctx.textBaseline = 'alphabetic'
+	ctx.fillText(char, 0, SCAN_BASELINE)
+	const { data } = ctx.getImageData(0, 0, SCAN, SCAN)
+	return {
+		ink: (x, y) => x >= 0 && x < SCAN && y >= 0 && y < SCAN && data[(y * SCAN + x) * 4 + 3]! > INK,
+		advance: ctx.measureText(char).width,
+	}
+}
+
+function rowSpans({ ink }: Raster, y: number, limit = SCAN) {
+	const spans: Span[] = []
+	let start = -1
+
+	for (let x = 0; x < limit; x++) {
+		if (ink(x, y)) {
+			if (start < 0) start = x
+		} else if (start >= 0) {
+			spans.push([start, x - 1])
+			start = -1
+		}
+	}
+
+	if (start >= 0) spans.push([start, limit - 1])
+	return spans
+}
+
+function columnSpans({ ink }: Raster, x: number) {
+	const spans: Span[] = []
+	let start = -1
+
+	for (let y = 0; y < SCAN; y++) {
+		if (ink(x, y)) {
+			if (start < 0) start = y
+		} else if (start >= 0) {
+			spans.push([start, y - 1])
+			start = -1
+		}
+	}
+
+	if (start >= 0) spans.push([start, SCAN - 1])
+	return spans
+}
+
 type Color = string
 
-const lw = { strokeWidth: 1.5 }
-const mono = { fontSize: 10.5, fontFamily: MONO }
+const lineWidth = { strokeWidth: 1.5 }
+const monoLabel = { fontSize: 10.5, fontFamily: MONO }
 
 function HLine({
 	y,
-	cw,
+	width,
 	color = ACCENT,
 	label,
 	dashed,
@@ -44,7 +105,7 @@ function HLine({
 	alpha = 1,
 }: {
 	y: number
-	cw: number
+	width: number
 	color?: Color
 	label?: string | null
 	dashed?: boolean
@@ -53,12 +114,12 @@ function HLine({
 }) {
 	return (
 		<g opacity={alpha} stroke={color} fill={color}>
-			<line x1={0} y1={y} x2={cw} y2={y} {...lw} strokeDasharray={dashed ? '4 5' : undefined} />
+			<line x1={0} y1={y} x2={width} y2={y} {...lineWidth} strokeDasharray={dashed ? '4 5' : undefined} />
 			{label && (
 				<text
-					x={side === 'right' ? cw - 8 : 8}
+					x={side === 'right' ? width - 8 : 8}
 					y={y - 4}
-					{...mono}
+					{...monoLabel}
 					textAnchor={side === 'right' ? 'end' : 'start'}
 					stroke='none'
 				>
@@ -71,14 +132,14 @@ function HLine({
 
 function VLine({
 	x,
-	ch,
+	height,
 	color = ACCENT,
 	label,
 	dashed,
 	alpha = 1,
 }: {
 	x: number
-	ch: number
+	height: number
 	color?: Color
 	label?: string | null
 	dashed?: boolean
@@ -86,7 +147,7 @@ function VLine({
 }) {
 	return (
 		<g opacity={alpha} stroke={color} fill={color}>
-			<line x1={x} y1={0} x2={x} y2={ch} {...lw} strokeDasharray={dashed ? '4 5' : undefined} />
+			<line x1={x} y1={0} x2={x} y2={height} {...lineWidth} strokeDasharray={dashed ? '4 5' : undefined} />
 			{label && (
 				<text x={x} y={12} fontSize={10} fontFamily={MONO} textAnchor='middle' stroke='none'>
 					{label}
@@ -113,16 +174,17 @@ function HBracket({
 	above?: boolean
 	tick?: number
 }) {
-	const d = above ? -1 : 1
+	const direction = above ? -1 : 1
+	const signedTick = direction * tick
 	return (
 		<g stroke={color} fill={color}>
 			<path
-				d={`M${x1},${y - d * tick}V${y + d * tick}M${x1},${y}H${x2}M${x2},${y - d * tick}V${y + d * tick}`}
-				{...lw}
+				d={`M${x1},${y - signedTick}V${y + signedTick}M${x1},${y}H${x2}M${x2},${y - signedTick}V${y + signedTick}`}
+				{...lineWidth}
 				fill='none'
 			/>
 			{label && (
-				<text x={(x1 + x2) / 2} y={y + d * (tick + 14)} {...mono} textAnchor='middle' stroke='none'>
+				<text x={(x1 + x2) / 2} y={y + direction * (tick + 14)} {...monoLabel} textAnchor='middle' stroke='none'>
 					{label}
 				</text>
 			)}
@@ -147,16 +209,23 @@ function VBracket({
 	right?: boolean
 	tick?: number
 }) {
-	const d = right ? 1 : -1
+	const direction = right ? 1 : -1
+	const signedTick = direction * tick
 	return (
 		<g stroke={color} fill={color}>
 			<path
-				d={`M${x - d * tick},${y1}H${x + d * tick}M${x},${y1}V${y2}M${x - d * tick},${y2}H${x + d * tick}`}
-				{...lw}
+				d={`M${x - signedTick},${y1}H${x + signedTick}M${x},${y1}V${y2}M${x - signedTick},${y2}H${x + signedTick}`}
+				{...lineWidth}
 				fill='none'
 			/>
 			{label && (
-				<text x={x + d * (tick + 4)} y={(y1 + y2) / 2 + 4} {...mono} textAnchor={right ? 'start' : 'end'} stroke='none'>
+				<text
+					x={x + direction * (tick + 4)}
+					y={(y1 + y2) / 2 + 4}
+					{...monoLabel}
+					textAnchor={right ? 'start' : 'end'}
+					stroke='none'
+				>
 					{label}
 				</text>
 			)}
@@ -185,32 +254,38 @@ function Rect({
 	strokeWidth?: number
 	dashed?: boolean
 }) {
-	const r = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
+	const box = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
 	return (
 		<>
-			{fill && <rect {...r} fill={color} opacity={fillOpacity} />}
-			<rect {...r} stroke={color} strokeWidth={strokeWidth} fill='none' strokeDasharray={dashed ? '3 4' : undefined} />
+			{fill && <rect {...box} fill={color} opacity={fillOpacity} />}
+			<rect
+				{...box}
+				stroke={color}
+				strokeWidth={strokeWidth}
+				fill='none'
+				strokeDasharray={dashed ? '3 4' : undefined}
+			/>
 		</>
 	)
 }
 
 function Char({
 	text,
-	fs,
+	font,
 	x,
 	baseline,
 	alpha = 1,
 	color = FG,
 }: {
 	text: string
-	fs: string
+	font: string
 	x: number
 	baseline: number
 	alpha?: number
 	color?: Color
 }) {
 	return (
-		<text x={x} y={baseline} style={{ font: fs }} fill={color} opacity={alpha} dominantBaseline='alphabetic'>
+		<text x={x} y={baseline} style={{ font }} fill={color} opacity={alpha} dominantBaseline='alphabetic'>
 			{text}
 		</text>
 	)
@@ -231,26 +306,25 @@ function Label({
 	align?: string
 	alpha?: number
 }) {
-	const ta = align === 'left' ? 'start' : align === 'center' ? 'middle' : 'end'
+	const anchor = align === 'left' ? 'start' : align === 'center' ? 'middle' : 'end'
 	return (
-		<text x={x} y={y} fill={color} opacity={alpha} {...mono} textAnchor={ta} stroke='none'>
+		<text x={x} y={y} fill={color} opacity={alpha} {...monoLabel} textAnchor={anchor} stroke='none'>
 			{text}
 		</text>
 	)
 }
 
-// ── Layout ─────────────────────────────────────────────────────────────────────
 type Layout = {
-	cw: number
-	ch: number
-	fs: string
+	width: number
+	height: number
+	font: string
 	fontSize: number
 	fontAscent: number
 	fontDescent: number
 	capHeight: number
 	xHeight: number
-	descDepth: number
-	ascHeight: number
+	descenderDepth: number
+	ascenderHeight: number
 	advance: number
 	charX: number
 	inkLeft: number
@@ -266,73 +340,80 @@ type Layout = {
 function computeLayout(
 	sample: string,
 	fontSize: number,
-	font: string,
+	family: string,
 	fontWeight: number,
-	cw: number,
-	ch: number,
+	width: number,
+	height: number,
 ): Layout {
-	const fs = px(Math.round((fontSize * ch) / BASE_CH), font, fontWeight)
+	const font = cssFont(Math.round((fontSize * height) / BASE_HEIGHT), family, fontWeight)
 	// eslint-disable-next-line @eslint-react/globals -- module-level measuring canvas; setting font before measureText is how the canvas measurement API works
-	measureCtx.font = fs
-	const sm = measureCtx.measureText(sample)
+	measureCtx.font = font
+	const metrics = measureCtx.measureText(sample)
 	const capHeight = measureCtx.measureText('H').actualBoundingBoxAscent
 	const xHeight = measureCtx.measureText('x').actualBoundingBoxAscent
-	const descDepth = measureCtx.measureText('p').actualBoundingBoxDescent
-	const ascHeight = measureCtx.measureText('hd').actualBoundingBoxAscent
-	const { fontBoundingBoxAscent: fontAscent, fontBoundingBoxDescent: fontDescent, width: advance } = sm
-	const charX = (cw - advance) / 2
-	const baselineY = (ch - fontAscent - fontDescent) / 2 + fontAscent
+	const descenderDepth = measureCtx.measureText('p').actualBoundingBoxDescent
+	const ascenderHeight = measureCtx.measureText('hd').actualBoundingBoxAscent
+	const { fontBoundingBoxAscent: fontAscent, fontBoundingBoxDescent: fontDescent, width: advance } = metrics
+	const charX = (width - advance) / 2
+	const baselineY = (height - fontAscent - fontDescent) / 2 + fontAscent
 	return {
-		cw,
-		ch,
-		fs,
-		fontSize: Math.round((fontSize * ch) / BASE_CH),
+		width,
+		height,
+		font,
+		fontSize: Math.round((fontSize * height) / BASE_HEIGHT),
 		fontAscent,
 		fontDescent,
 		capHeight,
 		xHeight,
-		descDepth,
-		ascHeight,
+		descenderDepth,
+		ascenderHeight,
 		advance,
 		charX,
 		baselineY,
 		sample,
-		inkLeft: charX - sm.actualBoundingBoxLeft,
-		inkRight: charX + sm.actualBoundingBoxRight,
-		inkTop: baselineY - sm.actualBoundingBoxAscent,
-		inkBottom: baselineY + sm.actualBoundingBoxDescent,
+		inkLeft: charX - metrics.actualBoundingBoxLeft,
+		inkRight: charX + metrics.actualBoundingBoxRight,
+		inkTop: baselineY - metrics.actualBoundingBoxAscent,
+		inkBottom: baselineY + metrics.actualBoundingBoxDescent,
 	}
 }
 
 function multiLayout(
 	sample: string,
 	fontSize: number,
-	font: string,
+	family: string,
 	fontWeight: number,
-	cw: number,
-	ch: number,
+	width: number,
+	height: number,
 	lineHeightRatio?: number,
 ): [Layout, Layout] {
-	const calcLineH = (L: Layout) =>
+	const lineHeightFor = (layout: Layout) =>
 		lineHeightRatio === 0
-			? L.fontAscent + L.fontDescent
+			? layout.fontAscent + layout.fontDescent
 			: lineHeightRatio != null
-				? lineHeightRatio * L.fontSize
-				: L.fontAscent + L.fontDescent + L.fontSize * 0.22
+				? lineHeightRatio * layout.fontSize
+				: layout.fontAscent + layout.fontDescent + layout.fontSize * 0.22
 
-	let L = computeLayout(sample, fontSize, font, fontWeight, cw, ch)
-	let lineH = calcLineH(L)
-	const totalH = lineH + L.fontAscent + L.fontDescent
+	let layout = computeLayout(sample, fontSize, family, fontWeight, width, height)
+	let lineHeight = lineHeightFor(layout)
+	const totalHeight = lineHeight + layout.fontAscent + layout.fontDescent
 
-	if (totalH > ch - 32) {
-		L = computeLayout(sample, Math.round(fontSize * ((ch - 32) / totalH)), font, fontWeight, cw, ch)
-		lineH = calcLineH(L)
+	if (totalHeight > height - 32) {
+		layout = computeLayout(
+			sample,
+			Math.round(fontSize * ((height - 32) / totalHeight)),
+			family,
+			fontWeight,
+			width,
+			height,
+		)
+		lineHeight = lineHeightFor(layout)
 	}
 
-	const by1 = (ch - lineH - L.fontAscent - L.fontDescent) / 2 + L.fontAscent
+	const firstBaselineY = (height - lineHeight - layout.fontAscent - layout.fontDescent) / 2 + layout.fontAscent
 	return [
-		{ ...L, baselineY: by1 },
-		{ ...L, baselineY: by1 + lineH },
+		{ ...layout, baselineY: firstBaselineY },
+		{ ...layout, baselineY: firstBaselineY + lineHeight },
 	]
 }
 
@@ -363,7 +444,7 @@ const TEXT_BOX_OPTIONS = [
 ] as const
 type TextBoxTrim = (typeof TEXT_BOX_OPTIONS)[number]['value']
 
-// ratio: 0 is a sentinel meaning lineH = fontAscent + fontDescent (zero extra leading, lines touch)
+// ratio: 0 is a sentinel meaning lineHeight = fontAscent + fontDescent (zero extra leading, lines touch)
 const LEADING_OPTIONS = [
 	{ value: 'none', label: 'none', ratio: 0 },
 	{ value: 'xs', label: 'xs', ratio: 1.25 },
@@ -374,15 +455,14 @@ const LEADING_OPTIONS = [
 ] as const
 type LeadingSize = (typeof LEADING_OPTIONS)[number]['value']
 
-// ── Terms ──────────────────────────────────────────────────────────────────────
 type Term = {
 	id: string
 	name: string
 	sample: string
 	fontSize: number
 	multiLine?: boolean
-	def: string
-	draw: (L: Layout, L2?: Layout) => ReactNode
+	definition: string
+	draw: (layout: Layout, secondLine?: Layout) => ReactNode
 }
 
 type Group = {
@@ -399,11 +479,12 @@ const GROUPS: Group[] = [
 				name: 'baseline',
 				sample: 'Ag',
 				fontSize: 140,
-				def: 'The invisible horizontal line on which glyphs sit. Every other vertical metric is measured relative to the baseline. In CSS, vertical-align and line-height are both anchored here.',
-				draw: (L) => (
+				definition:
+					'The invisible horizontal line on which glyphs sit. Every other vertical metric is measured relative to the baseline. In CSS, vertical-align and line-height are both anchored here.',
+				draw: ({ baselineY, charX, font, sample, width }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-						<HLine cw={L.cw} y={L.baselineY} label='baseline' />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
+						<HLine width={width} y={baselineY} label='baseline' />
 					</>
 				),
 			},
@@ -412,13 +493,14 @@ const GROUPS: Group[] = [
 				name: 'x-height',
 				sample: 'xag',
 				fontSize: 140,
-				def: 'The height of lowercase letters without ascenders or descenders, typically measured on "x". A larger x-height relative to cap height improves readability at small sizes.',
-				draw: (L) => (
+				definition:
+					'The height of lowercase letters without ascenders or descenders, typically measured on "x". A larger x-height relative to cap height improves readability at small sizes.',
+				draw: ({ baselineY, charX, font, sample, width, xHeight }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-						<HLine cw={L.cw} y={L.baselineY} color={FG} dashed alpha={0.12} />
-						<HLine cw={L.cw} y={L.baselineY - L.xHeight} label='x-height' />
-						<VBracket x={L.charX - 18} y1={L.baselineY - L.xHeight} y2={L.baselineY} right={false} />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
+						<HLine width={width} y={baselineY} color={FG} dashed alpha={0.12} />
+						<HLine width={width} y={baselineY - xHeight} label='x-height' />
+						<VBracket x={charX - 18} y1={baselineY - xHeight} y2={baselineY} right={false} />
 					</>
 				),
 			},
@@ -427,13 +509,14 @@ const GROUPS: Group[] = [
 				name: 'cap height',
 				sample: 'Hx',
 				fontSize: 140,
-				def: 'The height of uppercase flat letters (H, I, E) measured from the baseline. Usually slightly shorter than the ascender line. Exposed in CSS via the cap unit.',
-				draw: (L) => (
+				definition:
+					'The height of uppercase flat letters (H, I, E) measured from the baseline. Usually slightly shorter than the ascender line. Exposed in CSS via the cap unit.',
+				draw: ({ baselineY, capHeight, charX, font, sample, width }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-						<HLine cw={L.cw} y={L.baselineY} color={FG} dashed alpha={0.12} />
-						<HLine cw={L.cw} y={L.baselineY - L.capHeight} label='cap height' />
-						<VBracket x={L.charX - 18} y1={L.baselineY - L.capHeight} y2={L.baselineY} right={false} />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
+						<HLine width={width} y={baselineY} color={FG} dashed alpha={0.12} />
+						<HLine width={width} y={baselineY - capHeight} label='cap height' />
+						<VBracket x={charX - 18} y1={baselineY - capHeight} y2={baselineY} right={false} />
 					</>
 				),
 			},
@@ -442,14 +525,15 @@ const GROUPS: Group[] = [
 				name: 'ascender',
 				sample: 'hd',
 				fontSize: 140,
-				def: 'The upward stroke of a lowercase letter extending above the x-height, as in b, d, h, k, l. In most typefaces the ascender line sits at or slightly above the cap height.',
-				draw: (L) => (
+				definition:
+					'The upward stroke of a lowercase letter extending above the x-height, as in b, d, h, k, l. In most typefaces the ascender line sits at or slightly above the cap height.',
+				draw: ({ ascenderHeight, baselineY, charX, font, sample, width, xHeight }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-						<HLine cw={L.cw} y={L.baselineY} color={FG} dashed alpha={0.12} />
-						<HLine cw={L.cw} y={L.baselineY - L.xHeight} color={FG} label='x-height' dashed alpha={0.25} />
-						<HLine cw={L.cw} y={L.baselineY - L.ascHeight} label='ascender' />
-						<VBracket x={L.charX - 18} y1={L.baselineY - L.ascHeight} y2={L.baselineY - L.xHeight} right={false} />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
+						<HLine width={width} y={baselineY} color={FG} dashed alpha={0.12} />
+						<HLine width={width} y={baselineY - xHeight} color={FG} label='x-height' dashed alpha={0.25} />
+						<HLine width={width} y={baselineY - ascenderHeight} label='ascender' />
+						<VBracket x={charX - 18} y1={baselineY - ascenderHeight} y2={baselineY - xHeight} right={false} />
 					</>
 				),
 			},
@@ -458,13 +542,14 @@ const GROUPS: Group[] = [
 				name: 'descender',
 				sample: 'pg',
 				fontSize: 140,
-				def: 'The downward stroke of a lowercase letter extending below the baseline, as in p, q, g, j, y. Descender depth varies widely and directly affects minimum comfortable line-height.',
-				draw: (L) => (
+				definition:
+					'The downward stroke of a lowercase letter extending below the baseline, as in p, q, g, j, y. Descender depth varies widely and directly affects minimum comfortable line-height.',
+				draw: ({ baselineY, charX, descenderDepth, font, sample, width }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-						<HLine cw={L.cw} y={L.baselineY} color={FG} dashed alpha={0.12} />
-						<HLine cw={L.cw} y={L.baselineY + L.descDepth} label='descender' />
-						<VBracket x={L.charX - 18} y1={L.baselineY} y2={L.baselineY + L.descDepth} right={false} />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
+						<HLine width={width} y={baselineY} color={FG} dashed alpha={0.12} />
+						<HLine width={width} y={baselineY + descenderDepth} label='descender' />
+						<VBracket x={charX - 18} y1={baselineY} y2={baselineY + descenderDepth} right={false} />
 					</>
 				),
 			},
@@ -473,27 +558,22 @@ const GROUPS: Group[] = [
 				name: 'font ascent',
 				sample: 'A',
 				fontSize: 150,
-				def: "The maximum ascent declared in the font's OS/2 table (sTypoAscender). Used by the browser to compute line box height. May exceed any individual glyph's actual ink to reserve space for all possible characters.",
-				draw: (L) => (
+				definition:
+					"The maximum ascent declared in the font's OS/2 table (sTypoAscender). Used by the browser to compute line box height. May exceed any individual glyph's actual ink to reserve space for all possible characters.",
+				draw: ({ baselineY, capHeight, charX, font, fontAscent, sample, width }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
 						<HLine
-							cw={L.cw}
-							y={L.baselineY - L.capHeight}
+							width={width}
+							y={baselineY - capHeight}
 							color={FG}
 							label='cap height'
 							side='left'
 							dashed
 							alpha={0.25}
 						/>
-						<HLine cw={L.cw} y={L.baselineY - L.fontAscent} label='font ascent' />
-						<VBracket
-							x={L.cw - 22}
-							y1={L.baselineY - L.fontAscent}
-							y2={L.baselineY - L.capHeight}
-							label='gap'
-							right={false}
-						/>
+						<HLine width={width} y={baselineY - fontAscent} label='font ascent' />
+						<VBracket x={width - 22} y1={baselineY - fontAscent} y2={baselineY - capHeight} label='gap' right={false} />
 					</>
 				),
 			},
@@ -502,26 +582,27 @@ const GROUPS: Group[] = [
 				name: 'font descent',
 				sample: 'p',
 				fontSize: 150,
-				def: "The maximum descent declared in the font tables (sTypoDescent). Together with font ascent it defines the em-relative line box. Often deeper than any glyph's actual descender.",
-				draw: (L) => (
+				definition:
+					"The maximum descent declared in the font tables (sTypoDescent). Together with font ascent it defines the em-relative line box. Often deeper than any glyph's actual descender.",
+				draw: ({ baselineY, charX, descenderDepth, font, fontDescent, sample, width }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-						<HLine cw={L.cw} y={L.baselineY} color={FG} dashed alpha={0.12} />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
+						<HLine width={width} y={baselineY} color={FG} dashed alpha={0.12} />
 						<HLine
-							cw={L.cw}
-							y={L.baselineY + L.descDepth}
+							width={width}
+							y={baselineY + descenderDepth}
 							color={FG}
 							label='ink descent'
 							side='left'
 							dashed
 							alpha={0.25}
 						/>
-						<HLine cw={L.cw} y={L.baselineY + L.fontDescent} label='font descent' />
-						{L.fontDescent - L.descDepth > 2 && (
+						<HLine width={width} y={baselineY + fontDescent} label='font descent' />
+						{fontDescent - descenderDepth > 2 && (
 							<VBracket
-								x={L.cw - 22}
-								y1={L.baselineY + L.descDepth}
-								y2={L.baselineY + L.fontDescent}
+								x={width - 22}
+								y1={baselineY + descenderDepth}
+								y2={baselineY + fontDescent}
 								label='gap'
 								right={false}
 							/>
@@ -534,24 +615,27 @@ const GROUPS: Group[] = [
 				name: 'overshoot',
 				sample: 'OH',
 				fontSize: 140,
-				def: 'Rounded or pointed glyphs (O, o, A, V) extend slightly beyond the baseline and cap height to compensate for optical illusion. Without overshoot, round letters appear shorter than flat-topped ones.',
-				draw: (L) => {
-					const capY = L.baselineY - measure('H', L.fs).actualBoundingBoxAscent
-					const oTopY = L.baselineY - measure('O', L.fs).actualBoundingBoxAscent
-					const over = capY - oTopY
+				definition:
+					'Rounded or pointed glyphs (O, o, A, V) extend slightly beyond the baseline and cap height to compensate for optical illusion. Without overshoot, round letters appear shorter than flat-topped ones.',
+				draw: ({ baselineY, charX, font, sample, width }) => {
+					const flatTopY = baselineY - measure('H', font).actualBoundingBoxAscent
+					const roundTopY = baselineY - measure('O', font).actualBoundingBoxAscent
+					const overshoot = flatTopY - roundTopY
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<HLine cw={L.cw} y={capY} color={FG} label='cap height (H)' side='left' dashed alpha={0.35} />
-							{over > 4 ? (
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<HLine width={width} y={flatTopY} color={FG} label='cap height (H)' side='left' dashed alpha={0.35} />
+							{overshoot > 4 ? (
 								<>
-									<HLine cw={L.cw} y={oTopY} label='O overshoot' />
-									<VBracket x={L.cw - 22} y1={oTopY} y2={capY} label='overshoot' right={false} />
+									<HLine width={width} y={roundTopY} label='O overshoot' />
+									<VBracket x={width - 22} y1={roundTopY} y2={flatTopY} label='overshoot' right={false} />
 								</>
 							) : (
 								<>
-									<HLine cw={L.cw} y={oTopY} />
-									{over > 1 && <Label text={`O overshoot (+${over.toFixed(1)}px)`} x={L.cw - 8} y={oTopY - 5} />}
+									<HLine width={width} y={roundTopY} />
+									{overshoot > 1 && (
+										<Label text={`O overshoot (+${overshoot.toFixed(1)}px)`} x={width - 8} y={roundTopY - 5} />
+									)}
 								</>
 							)}
 						</>
@@ -568,15 +652,16 @@ const GROUPS: Group[] = [
 				name: 'advance width',
 				sample: 'H',
 				fontSize: 150,
-				def: 'The total horizontal distance the cursor advances after placing a glyph. Includes ink width plus side bearings on both sides. CSS letter-spacing and word-spacing operate on this value.',
-				draw: (L) => {
-					const y = Math.min(L.baselineY + L.fontDescent + 22, L.ch - 26)
+				definition:
+					'The total horizontal distance the cursor advances after placing a glyph. Includes ink width plus side bearings on both sides. CSS letter-spacing and word-spacing operate on this value.',
+				draw: ({ advance, baselineY, charX, font, fontDescent, height, sample }) => {
+					const y = Math.min(baselineY + fontDescent + 22, height - 26)
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<VLine x={L.charX} ch={L.ch} dashed alpha={0.25} />
-							<VLine x={L.charX + L.advance} ch={L.ch} dashed alpha={0.25} />
-							<HBracket x1={L.charX} x2={L.charX + L.advance} y={y} label='advance width' above={false} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<VLine x={charX} height={height} dashed alpha={0.25} />
+							<VLine x={charX + advance} height={height} dashed alpha={0.25} />
+							<HBracket x1={charX} x2={charX + advance} y={y} label='advance width' above={false} />
 						</>
 					)
 				},
@@ -586,17 +671,16 @@ const GROUPS: Group[] = [
 				name: 'left sidebearing',
 				sample: 'H',
 				fontSize: 150,
-				def: "The horizontal space from the glyph's origin to its leftmost ink edge. Controls visual rhythm on the left side. Negative values allow ink to extend beyond the origin point.",
-				draw: (L) => {
-					const y = Math.min(L.baselineY + L.fontDescent + 14, L.ch - 26)
+				definition:
+					"The horizontal space from the glyph's origin to its leftmost ink edge. Controls visual rhythm on the left side. Negative values allow ink to extend beyond the origin point.",
+				draw: ({ baselineY, charX, font, fontDescent, height, inkLeft, sample }) => {
+					const y = Math.min(baselineY + fontDescent + 14, height - 26)
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<VLine x={L.charX} ch={L.ch} color={FG} label='origin' dashed alpha={0.35} />
-							<VLine x={L.inkLeft} ch={L.ch} dashed alpha={0.5} />
-							{Math.abs(L.inkLeft - L.charX) > 1 && (
-								<HBracket x1={L.charX} x2={L.inkLeft} y={y} label='LSB' above={false} />
-							)}
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<VLine x={charX} height={height} color={FG} label='origin' dashed alpha={0.35} />
+							<VLine x={inkLeft} height={height} dashed alpha={0.5} />
+							{Math.abs(inkLeft - charX) > 1 && <HBracket x1={charX} x2={inkLeft} y={y} label='LSB' above={false} />}
 						</>
 					)
 				},
@@ -606,16 +690,17 @@ const GROUPS: Group[] = [
 				name: 'right sidebearing',
 				sample: 'H',
 				fontSize: 150,
-				def: "The space from a glyph's rightmost ink edge to its advance point. Together with LSB, RSB determines the white space surrounding each character and controls visual rhythm.",
-				draw: (L) => {
-					const rsbEnd = L.charX + L.advance
-					const y = Math.min(L.baselineY + L.fontDescent + 14, L.ch - 26)
+				definition:
+					"The space from a glyph's rightmost ink edge to its advance point. Together with LSB, RSB determines the white space surrounding each character and controls visual rhythm.",
+				draw: ({ advance, baselineY, charX, font, fontDescent, height, inkRight, sample }) => {
+					const advanceEnd = charX + advance
+					const y = Math.min(baselineY + fontDescent + 14, height - 26)
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<VLine x={L.inkRight} ch={L.ch} dashed alpha={0.5} />
-							<VLine x={rsbEnd} ch={L.ch} color={FG} label='advance' dashed alpha={0.35} />
-							{rsbEnd - L.inkRight > 1 && <HBracket x1={L.inkRight} x2={rsbEnd} y={y} label='RSB' above={false} />}
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<VLine x={inkRight} height={height} dashed alpha={0.5} />
+							<VLine x={advanceEnd} height={height} color={FG} label='advance' dashed alpha={0.35} />
+							{advanceEnd - inkRight > 1 && <HBracket x1={inkRight} x2={advanceEnd} y={y} label='RSB' above={false} />}
 						</>
 					)
 				},
@@ -625,15 +710,16 @@ const GROUPS: Group[] = [
 				name: 'ink width',
 				sample: 'H',
 				fontSize: 150,
-				def: "The actual horizontal extent of a glyph's visible ink, from leftmost to rightmost pixel. Does not include side bearings. Useful for optical centering or tight layout calculations.",
-				draw: (L) => {
-					const y = Math.min(L.baselineY + L.fontDescent + 14, L.ch - 26)
+				definition:
+					"The actual horizontal extent of a glyph's visible ink, from leftmost to rightmost pixel. Does not include side bearings. Useful for optical centering or tight layout calculations.",
+				draw: ({ baselineY, charX, font, fontDescent, height, inkLeft, inkRight, sample }) => {
+					const y = Math.min(baselineY + fontDescent + 14, height - 26)
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<VLine x={L.inkLeft} ch={L.ch} dashed alpha={0.4} />
-							<VLine x={L.inkRight} ch={L.ch} dashed alpha={0.4} />
-							<HBracket x1={L.inkLeft} x2={L.inkRight} y={y} label='ink width' above={false} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<VLine x={inkLeft} height={height} dashed alpha={0.4} />
+							<VLine x={inkRight} height={height} dashed alpha={0.4} />
+							<HBracket x1={inkLeft} x2={inkRight} y={y} label='ink width' above={false} />
 						</>
 					)
 				},
@@ -648,14 +734,15 @@ const GROUPS: Group[] = [
 				name: 'em square',
 				sample: 'M',
 				fontSize: 140,
-				def: 'The design space in which each glyph is drawn. Historically the height of a capital "M". In digital type it\'s a conceptual square equal to the font-size, subdivided into UPM units.',
-				draw: (L) => {
-					const [t, b] = [L.baselineY - L.fontAscent, L.baselineY + L.fontDescent]
+				definition:
+					'The design space in which each glyph is drawn. Historically the height of a capital "M". In digital type it\'s a conceptual square equal to the font-size, subdivided into UPM units.',
+				draw: ({ advance, baselineY, charX, font, fontAscent, fontDescent, sample }) => {
+					const [top, bottom] = [baselineY - fontAscent, baselineY + fontDescent]
 					return (
 						<>
-							<Rect x1={L.charX} y1={t} x2={L.charX + L.advance} y2={b} fill fillOpacity={0.07} />
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<Label text='em square' x={L.charX + L.advance / 2} y={t - 7} align='center' />
+							<Rect x1={charX} y1={top} x2={charX + advance} y2={bottom} fill fillOpacity={0.07} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<Label text='em square' x={charX + advance / 2} y={top - 7} align='center' />
 						</>
 					)
 				},
@@ -665,12 +752,13 @@ const GROUPS: Group[] = [
 				name: 'ink bounds',
 				sample: 'A',
 				fontSize: 150,
-				def: "The tightest rectangle containing a glyph's actual rendered pixels. Known as actualBoundingBox in the Canvas API. Varies per character—unlike font bounds which are constant declared values.",
-				draw: (L) => (
+				definition:
+					"The tightest rectangle containing a glyph's actual rendered pixels. Known as actualBoundingBox in the Canvas API. Varies per character—unlike font bounds which are constant declared values.",
+				draw: ({ baselineY, charX, font, inkBottom, inkLeft, inkRight, inkTop, sample }) => (
 					<>
-						<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-						<Rect x1={L.inkLeft} y1={L.inkTop} x2={L.inkRight} y2={L.inkBottom} fill />
-						<Label text='ink bounds' x={L.inkLeft} y={L.inkTop - 7} align='left' />
+						<Char text={sample} font={font} x={charX} baseline={baselineY} />
+						<Rect x1={inkLeft} y1={inkTop} x2={inkRight} y2={inkBottom} fill />
+						<Label text='ink bounds' x={inkLeft} y={inkTop - 7} align='left' />
 					</>
 				),
 			},
@@ -679,23 +767,29 @@ const GROUPS: Group[] = [
 				name: 'font bounds',
 				sample: 'A',
 				fontSize: 150,
-				def: 'The rectangle defined by declared font metrics: (ascent + descent) × advance width. May be much larger than the actual ink. CSS layout operates on font bounds—this is what line-height and the box model use.',
-				draw: (L) => {
-					const [ft, fb] = [L.baselineY - L.fontAscent, L.baselineY + L.fontDescent]
+				definition:
+					'The rectangle defined by declared font metrics: (ascent + descent) × advance width. May be much larger than the actual ink. CSS layout operates on font bounds—this is what line-height and the box model use.',
+				draw: ({
+					advance,
+					baselineY,
+					charX,
+					font,
+					fontAscent,
+					fontDescent,
+					inkBottom,
+					inkLeft,
+					inkRight,
+					inkTop,
+					sample,
+				}) => {
+					const [fontTop, fontBottom] = [baselineY - fontAscent, baselineY + fontDescent]
 					return (
 						<>
-							<Rect x1={L.charX} y1={ft} x2={L.charX + L.advance} y2={fb} fill fillOpacity={0.07} />
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<Rect x1={L.inkLeft} y1={L.inkTop} x2={L.inkRight} y2={L.inkBottom} color={FG} strokeWidth={1} dashed />
-							<Label
-								text='ink'
-								x={L.inkRight + 4}
-								y={(L.inkTop + L.inkBottom) / 2}
-								color={FG}
-								align='left'
-								alpha={0.4}
-							/>
-							<Label text='font bounds' x={L.charX + L.advance - 4} y={ft - 7} />
+							<Rect x1={charX} y1={fontTop} x2={charX + advance} y2={fontBottom} fill fillOpacity={0.07} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<Rect x1={inkLeft} y1={inkTop} x2={inkRight} y2={inkBottom} color={FG} strokeWidth={1} dashed />
+							<Label text='ink' x={inkRight + 4} y={(inkTop + inkBottom) / 2} color={FG} align='left' alpha={0.4} />
+							<Label text='font bounds' x={charX + advance - 4} y={fontTop - 7} />
 						</>
 					)
 				},
@@ -711,24 +805,25 @@ const GROUPS: Group[] = [
 				sample: 'Ag',
 				fontSize: 140,
 				multiLine: true,
-				def: "Extra vertical space added between lines of text, beyond the font's ascent + descent. Named for the lead strips typesetters placed between rows of metal type. In CSS it's part of line-height.",
-				draw: (L1, L2) => {
-					if (!L2) return null
-					const [gapTop, gapBot] = [L1.baselineY + L1.fontDescent, L2.baselineY - L2.fontAscent]
+				definition:
+					"Extra vertical space added between lines of text, beyond the font's ascent + descent. Named for the lead strips typesetters placed between rows of metal type. In CSS it's part of line-height.",
+				draw: (line1, line2) => {
+					if (!line2) return null
+					const [gapTop, gapBottom] = [line1.baselineY + line1.fontDescent, line2.baselineY - line2.fontAscent]
 					return (
 						<>
-							<Char text={L1.sample} fs={L1.fs} x={L1.charX} baseline={L1.baselineY} />
-							<Char text={L2.sample} fs={L2.fs} x={L2.charX} baseline={L2.baselineY} />
-							<HLine cw={L1.cw} y={gapTop} dashed label='font descent' side='right' />
-							<HLine cw={L1.cw} y={gapBot} dashed label='font ascent' side='left' />
-							{gapBot > gapTop + 1 && (
+							<Char text={line1.sample} font={line1.font} x={line1.charX} baseline={line1.baselineY} />
+							<Char text={line2.sample} font={line2.font} x={line2.charX} baseline={line2.baselineY} />
+							<HLine width={line1.width} y={gapTop} dashed label='font descent' side='right' />
+							<HLine width={line1.width} y={gapBottom} dashed label='font ascent' side='left' />
+							{gapBottom > gapTop + 1 && (
 								<>
-									<rect x={0} y={gapTop} width={L1.cw} height={gapBot - gapTop} fill={ACCENT} opacity={0.14} />
-									<VBracket x={L1.cw - 18} y1={gapTop} y2={gapBot} label='leading' right={false} />
+									<rect x={0} y={gapTop} width={line1.width} height={gapBottom - gapTop} fill={ACCENT} opacity={0.14} />
+									<VBracket x={line1.width - 18} y1={gapTop} y2={gapBottom} label='leading' right={false} />
 								</>
 							)}
-							<HLine cw={L1.cw} y={L1.baselineY} color={FG} dashed alpha={0.18} />
-							<HLine cw={L1.cw} y={L2.baselineY} color={FG} dashed alpha={0.18} />
+							<HLine width={line1.width} y={line1.baselineY} color={FG} dashed alpha={0.18} />
+							<HLine width={line1.width} y={line2.baselineY} color={FG} dashed alpha={0.18} />
 						</>
 					)
 				},
@@ -739,16 +834,23 @@ const GROUPS: Group[] = [
 				sample: 'Ag',
 				fontSize: 140,
 				multiLine: true,
-				def: 'The total vertical distance from one baseline to the next. Equals font ascent + font descent + leading. In CSS the line-height property sets this; extra space distributes equally above and below as half-leading.',
-				draw: (L1, L2) => {
-					if (!L2) return null
+				definition:
+					'The total vertical distance from one baseline to the next. Equals font ascent + font descent + leading. In CSS the line-height property sets this; extra space distributes equally above and below as half-leading.',
+				draw: (line1, line2) => {
+					if (!line2) return null
 					return (
 						<>
-							<Char text={L1.sample} fs={L1.fs} x={L1.charX} baseline={L1.baselineY} />
-							<Char text={L2.sample} fs={L2.fs} x={L2.charX} baseline={L2.baselineY} />
-							<HLine cw={L1.cw} y={L1.baselineY} color={FG} label='baseline 1' dashed alpha={0.4} />
-							<HLine cw={L1.cw} y={L2.baselineY} color={FG} label='baseline 2' dashed alpha={0.4} />
-							<VBracket x={L1.cw - 18} y1={L1.baselineY} y2={L2.baselineY} label='line-height' right={false} />
+							<Char text={line1.sample} font={line1.font} x={line1.charX} baseline={line1.baselineY} />
+							<Char text={line2.sample} font={line2.font} x={line2.charX} baseline={line2.baselineY} />
+							<HLine width={line1.width} y={line1.baselineY} color={FG} label='baseline 1' dashed alpha={0.4} />
+							<HLine width={line1.width} y={line2.baselineY} color={FG} label='baseline 2' dashed alpha={0.4} />
+							<VBracket
+								x={line1.width - 18}
+								y1={line1.baselineY}
+								y2={line2.baselineY}
+								label='line-height'
+								right={false}
+							/>
 						</>
 					)
 				},
@@ -758,36 +860,38 @@ const GROUPS: Group[] = [
 				name: 'tracking',
 				sample: 'HELLO',
 				fontSize: 64,
-				def: 'Uniform horizontal spacing applied equally between all glyphs in a text run. Called letter-spacing in CSS. Unlike kerning, tracking is a constant additive value—not glyph-pair-specific.',
-				draw: (L) => {
-					measureCtx.font = L.fs
-					const glyphs = 'HELLO'.split('').map((char) => ({ char, width: measureCtx.measureText(char).width }))
-					const track = (L.trackingEm ?? 0.1) * L.fontSize
-					let x = (L.cw - glyphs.reduce((sum, glyph) => sum + glyph.width, 0) - track * (glyphs.length - 1)) / 2
+				definition:
+					'Uniform horizontal spacing applied equally between all glyphs in a text run. Called letter-spacing in CSS. Unlike kerning, tracking is a constant additive value—not glyph-pair-specific.',
+				draw: ({ baselineY, font, fontDescent, fontSize, sample, trackingEm, width: panelWidth, xHeight }) => {
+					const track = (trackingEm ?? 0.1) * fontSize
+					const widths = sample.split('').map((char) => measure(char, font).width)
+					const totalWidth = widths.reduce((sum, width) => sum + width, 0) + track * (widths.length - 1)
+					const glyphs: { char: string; x: number; width: number }[] = []
+					let cursorX = (panelWidth - totalWidth) / 2
+
+					for (const [i, width] of widths.entries()) {
+						glyphs.push({ char: sample[i]!, x: cursorX, width })
+						cursorX += width + track
+					}
+
 					return (
 						<>
-							{glyphs.map(({ char, width }, i) => {
-								const cx = x
-								x += width + track
-								return (
-									<g key={`${char}-${Math.round(cx)}`}>
-										<text x={cx} y={L.baselineY} style={{ font: L.fs }} fill={FG} dominantBaseline='alphabetic'>
-											{char}
-										</text>
-										{i < glyphs.length - 1 && track > 0 && (
-											<rect
-												x={cx + width}
-												y={L.baselineY - L.xHeight}
-												width={track}
-												height={L.xHeight}
-												fill={ACCENT}
-												opacity={0.22}
-											/>
-										)}
-									</g>
-								)
-							})}
-							<Label text='tracking gaps' x={L.cw / 2} y={L.baselineY + L.fontDescent + 20} align='center' />
+							{glyphs.map(({ char, x, width }, i) => (
+								<g key={`${char}-${Math.round(x)}`}>
+									<Char text={char} font={font} x={x} baseline={baselineY} />
+									{i < glyphs.length - 1 && track > 0 && (
+										<rect
+											x={x + width}
+											y={baselineY - xHeight}
+											width={track}
+											height={xHeight}
+											fill={ACCENT}
+											opacity={0.22}
+										/>
+									)}
+								</g>
+							))}
+							<Label text='tracking gaps' x={panelWidth / 2} y={baselineY + fontDescent + 20} align='center' />
 						</>
 					)
 				},
@@ -797,38 +901,39 @@ const GROUPS: Group[] = [
 				name: 'kerning',
 				sample: 'AV',
 				fontSize: 130,
-				def: "Optical spacing adjustment between specific glyph pairs, encoded in the font's GPOS or kern table. The AV pair is a classic example: without kerning there's a visible gap that kerning tightens for visual balance.",
-				draw: (L) => {
-					const aW = measure('A', L.fs).width
-					const kern = aW + measure('V', L.fs).width - measure('AV', L.fs).width
+				definition:
+					"Optical spacing adjustment between specific glyph pairs, encoded in the font's GPOS or kern table. The AV pair is a classic example: without kerning there's a visible gap that kerning tightens for visual balance.",
+				draw: ({ baselineY, capHeight, charX, descenderDepth, font, fontDescent, height, sample, width }) => {
+					const widthOfA = measure('A', font).width
+					const kern = widthOfA + measure('V', font).width - measure('AV', font).width
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
 							{kern > 0.5 ? (
 								<>
 									<rect
-										x={L.charX + aW - kern}
-										y={L.baselineY - L.capHeight}
+										x={charX + widthOfA - kern}
+										y={baselineY - capHeight}
 										width={kern}
-										height={L.capHeight + L.descDepth}
+										height={capHeight + descenderDepth}
 										fill={ACCENT}
 										opacity={0.22}
 									/>
 									<HBracket
-										x1={L.charX + aW - kern}
-										x2={L.charX + aW}
-										y={L.baselineY + L.fontDescent + 12}
+										x1={charX + widthOfA - kern}
+										x2={charX + widthOfA}
+										y={baselineY + fontDescent + 12}
 										label={`kern −${kern.toFixed(1)}px`}
 										above={false}
 									/>
 								</>
 							) : (
 								<>
-									<VLine x={L.charX + aW} ch={L.ch} color={FG} label='A/V junction' dashed alpha={0.35} />
+									<VLine x={charX + widthOfA} height={height} color={FG} label='A/V junction' dashed alpha={0.35} />
 									<Label
 										text='no kern pair in this font'
-										x={L.cw / 2}
-										y={L.baselineY + L.fontDescent + 22}
+										x={width / 2}
+										y={baselineY + fontDescent + 22}
 										align='center'
 									/>
 								</>
@@ -847,22 +952,31 @@ const GROUPS: Group[] = [
 				name: 'counter',
 				sample: 'O',
 				fontSize: 150,
-				def: 'The enclosed or partially enclosed negative space within a glyph. The fully enclosed hole in O or D is a closed counter; the open concavity in c or u is an open counter. Counter size shapes perceived weight.',
-				draw: (L) => {
-					const cx = L.charX + L.advance / 2
-					const cy = L.baselineY - L.capHeight * 0.5
-					const r = L.xHeight * 0.34
+				definition:
+					'The enclosed or partially enclosed negative space within a glyph. The fully enclosed hole in O or D is a closed counter; the open concavity in c or u is an open counter. Counter size shapes perceived weight.',
+				draw: ({ advance, baselineY, capHeight, charX, font, sample, width, xHeight }) => {
+					const centerX = charX + advance / 2
+					const centerY = baselineY - capHeight * 0.5
+					const radius = xHeight * 0.34
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<circle cx={cx} cy={cy} r={r} fill={ACCENT} opacity={0.2} />
-							<circle cx={cx} cy={cy} r={r} stroke={ACCENT} strokeWidth={1.5} fill='none' opacity={0.7} />
-							<Label text='counter' x={L.cw - 10} y={cy - r - 8} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<circle cx={centerX} cy={centerY} r={radius} fill={ACCENT} opacity={0.2} />
+							<circle
+								cx={centerX}
+								cy={centerY}
+								r={radius}
+								stroke={ACCENT}
+								strokeWidth={1.5}
+								fill='none'
+								opacity={0.7}
+							/>
+							<Label text='counter' x={width - 10} y={centerY - radius - 8} />
 							<line
-								x1={L.cw - 60}
-								y1={cy - r - 5}
-								x2={cx + r + 2}
-								y2={cy - r * 0.5}
+								x1={width - 60}
+								y1={centerY - radius - 5}
+								x2={centerX + radius + 2}
+								y2={centerY - radius * 0.5}
 								stroke={ACCENT}
 								strokeWidth={1}
 								opacity={0.5}
@@ -876,37 +990,34 @@ const GROUPS: Group[] = [
 				name: 'stem',
 				sample: 'H',
 				fontSize: 150,
-				def: "The primary vertical or near-vertical stroke of a letter—the two upright strokes in H, or the single stroke in I. Stem width is a primary variable in determining a typeface's perceived weight.",
-				draw: (L) => {
-					// Pixel-scan at 20% cap height — above baseline serifs, below crossbar
-					const oc = document.createElement('canvas')
-					oc.width = 400
-					oc.height = 400
-					const ox = oc.getContext('2d')!
-					ox.font = L.fs
-					ox.fillStyle = '#fff'
-					ox.textBaseline = 'alphabetic'
-					ox.fillText('H', 0, 300)
-					const row = ox.getImageData(0, Math.round(300 - L.capHeight * 0.2), 400, 1).data
-					let start = -1
-					let stemSeg: [number, number] | null = null
+				definition:
+					"The primary vertical or near-vertical stroke of a letter—the two upright strokes in H, or the single stroke in I. Stem width is a primary variable in determining a typeface's perceived weight.",
+				draw: ({ baselineY, capHeight, charX, font, sample }) => {
+					// Scanned at 20% of cap height — above the baseline serifs, below the crossbar,
+					// so the first ink span is the left stem alone.
+					const raster = rasterize('H', font)
+					const stemSpan = rowSpans(raster, Math.round(SCAN_BASELINE - capHeight * 0.2))[0]
+					if (!stemSpan) return null
 
-					for (let x = 0; x < 400; x++) {
-						const ink = row[x * 4 + 3]! > 128
-						if (ink && start < 0) start = x
-						if (!ink && start >= 0) {
-							stemSeg = [start, x - 1]
-							break
-						}
-					}
-
-					if (!stemSeg) return null
-					const [sl, sw] = [L.charX + stemSeg[0], stemSeg[1] - stemSeg[0] + 1]
+					const stemLeft = charX + stemSpan[0]
+					const stemWidth = stemSpan[1] - stemSpan[0] + 1
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<rect x={sl} y={L.baselineY - L.capHeight} width={sw} height={L.capHeight} fill={ACCENT} opacity={0.22} />
-							<HBracket x1={sl} x2={sl + sw} y={Math.max(L.baselineY - L.capHeight - 14, 34)} label='stem' />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<rect
+								x={stemLeft}
+								y={baselineY - capHeight}
+								width={stemWidth}
+								height={capHeight}
+								fill={ACCENT}
+								opacity={0.22}
+							/>
+							<HBracket
+								x1={stemLeft}
+								x2={stemLeft + stemWidth}
+								y={Math.max(baselineY - capHeight - 14, 34)}
+								label='stem'
+							/>
 						</>
 					)
 				},
@@ -916,61 +1027,38 @@ const GROUPS: Group[] = [
 				name: 'bowl',
 				sample: 'b',
 				fontSize: 150,
-				def: 'The curved closed stroke forming the rounded part of letters like b, d, o, p, q. Bowl size and shape create the distinctive silhouette of a typeface and affect its texture at small sizes.',
-				draw: (L) => {
-					const oc = document.createElement('canvas')
-					oc.width = 400
-					oc.height = 400
-					const ox = oc.getContext('2d')!
-					ox.font = L.fs
-					ox.fillStyle = '#fff'
-					ox.textBaseline = 'alphabetic'
-					ox.fillText('b', 0, 300)
+				definition:
+					'The curved closed stroke forming the rounded part of letters like b, d, o, p, q. Bowl size and shape create the distinctive silhouette of a typeface and affect its texture at small sizes.',
+				draw: ({ baselineY, charX, font, inkRight, sample, xHeight }) => {
+					const raster = rasterize('b', font)
 
-					// Horizontal scan at mid x-height: find stem → gap → bowl start
-					const row = ox.getImageData(0, Math.round(300 - L.xHeight * 0.5), 400, 1).data
-					let phase = 0 // 0=before stem, 1=in stem, 2=in gap, 3=found bowl
-					let bowlStart = -1
+					// At mid x-height a 'b' reads as stem, gap, bowl — so the second ink span starts the bowl.
+					const bowlSpan = rowSpans(raster, Math.round(SCAN_BASELINE - xHeight * 0.5))[1]
+					if (!bowlSpan) return null
 
-					for (let x = 0; x < 400 && phase < 3; x++) {
-						const ink = row[x * 4 + 3]! > 128
+					// Column down the middle of the bowl gives its vertical extent.
+					const bowlRight = Math.round(inkRight - charX)
+					const column = columnSpans(raster, Math.round((bowlSpan[0] + bowlRight) / 2))
+					const inkTop = column[0]?.[0]
+					const inkBottom = column.at(-1)?.[1]
+					if (inkTop == null || inkBottom == null) return null
 
-						if (phase === 0 && ink) phase = 1
-						else if (phase === 1 && !ink) phase = 2
-						else if (phase === 2 && ink) {
-							bowlStart = x
-							phase = 3
-						}
-					}
-
-					if (bowlStart < 0) return null
-
-					// Vertical scan at bowl midpoint to find top/bottom of bowl ink
-					const bowlRight = Math.round(L.inkRight - L.charX)
-					const col = ox.getImageData(Math.round((bowlStart + bowlRight) / 2), 0, 1, 400).data
-					let bowlBot = 300
-					let bowlTop = -1
-
-					for (let y = 0; y < 400; y++) {
-						if (col[y * 4 + 3]! > 128) {
-							if (bowlTop < 0) bowlTop = y
-							bowlBot = y
-						}
-					}
-
-					if (bowlTop < 0) return null
-
-					// Convert offscreen canvas coords (baseline=300) to SVG coords
-					const bx = L.charX + bowlStart
-					const bw = L.inkRight - bx
-					const bTop = L.baselineY + (bowlTop - 300)
-					const bH = bowlBot - bowlTop + 1
+					const bowlX = charX + bowlSpan[0]
+					const bowlWidth = inkRight - bowlX
+					const bowlTop = baselineY + (inkTop - SCAN_BASELINE)
 
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<rect x={bx} y={bTop} width={bw} height={bH} fill={ACCENT} opacity={0.22} />
-							<HBracket x1={bx} x2={bx + bw} y={Math.max(bTop - 14, 26)} label='bowl' />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<rect
+								x={bowlX}
+								y={bowlTop}
+								width={bowlWidth}
+								height={inkBottom - inkTop + 1}
+								fill={ACCENT}
+								opacity={0.22}
+							/>
+							<HBracket x1={bowlX} x2={bowlX + bowlWidth} y={Math.max(bowlTop - 14, 26)} label='bowl' />
 						</>
 					)
 				},
@@ -985,30 +1073,31 @@ const GROUPS: Group[] = [
 				name: 'half-leading',
 				sample: 'Ag',
 				fontSize: 130,
-				def: 'The extra space above and below inline text produced by the gap between line-height and the em square, split equally top and bottom. This phantom padding is why CSS text appears to have mysterious vertical spacing.',
-				draw: (L) => {
-					const half = L.fontSize * 0.125
-					const topHL = L.baselineY - L.fontAscent - half
+				definition:
+					'The extra space above and below inline text produced by the gap between line-height and the em square, split equally top and bottom. This phantom padding is why CSS text appears to have mysterious vertical spacing.',
+				draw: ({ baselineY, charX, font, fontAscent, fontDescent, fontSize, sample, width }) => {
+					const halfLeading = fontSize * 0.125
+					const halfLeadingTop = baselineY - fontAscent - halfLeading
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
-							<rect x={0} y={topHL} width={L.cw} height={half} fill={ACCENT} opacity={0.14} />
-							<rect x={0} y={L.baselineY + L.fontDescent} width={L.cw} height={half} fill={ACCENT} opacity={0.14} />
-							<HLine cw={L.cw} y={L.baselineY - L.fontAscent} color={FG} label='font ascent' dashed alpha={0.3} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
+							<rect x={0} y={halfLeadingTop} width={width} height={halfLeading} fill={ACCENT} opacity={0.14} />
+							<rect x={0} y={baselineY + fontDescent} width={width} height={halfLeading} fill={ACCENT} opacity={0.14} />
+							<HLine width={width} y={baselineY - fontAscent} color={FG} label='font ascent' dashed alpha={0.3} />
 							<HLine
-								cw={L.cw}
-								y={L.baselineY + L.fontDescent}
+								width={width}
+								y={baselineY + fontDescent}
 								color={FG}
 								label='font descent'
 								side='left'
 								dashed
 								alpha={0.3}
 							/>
-							<VBracket x={10} y1={topHL} y2={L.baselineY - L.fontAscent} label='½ lead' right />
+							<VBracket x={10} y1={halfLeadingTop} y2={baselineY - fontAscent} label='½ lead' right />
 							<VBracket
 								x={10}
-								y1={L.baselineY + L.fontDescent}
-								y2={L.baselineY + L.fontDescent + half}
+								y1={baselineY + fontDescent}
+								y2={baselineY + fontDescent + halfLeading}
 								label='½ lead'
 								right
 							/>
@@ -1021,29 +1110,46 @@ const GROUPS: Group[] = [
 				name: 'text-box-trim',
 				sample: 'Ag',
 				fontSize: 120,
-				def: 'A CSS property (text-box: trim-both) that removes half-leading from the top and bottom of a text block. Allows containers to size tightly to cap height or x-height, enabling precise spacing without magic-number padding.',
-				draw: (L) => {
-					const half = L.fontSize * 0.125
-					const [normT, normB] = [L.baselineY - L.fontAscent - half, L.baselineY + L.fontDescent + half]
-					const trim = L.textBoxTrim ?? 'both'
-					const trimT = trim === 'end' ? normT : L.baselineY - L.capHeight
-					const trimB = trim === 'start' ? normB : L.baselineY + L.descDepth
+				definition:
+					'A CSS property (text-box: trim-both) that removes half-leading from the top and bottom of a text block. Allows containers to size tightly to cap height or x-height, enabling precise spacing without magic-number padding.',
+				draw: ({
+					advance,
+					baselineY,
+					capHeight,
+					charX,
+					descenderDepth,
+					font,
+					fontAscent,
+					fontDescent,
+					fontSize,
+					inkRight,
+					sample,
+					textBoxTrim,
+				}) => {
+					const halfLeading = fontSize * 0.125
+					const [defaultTop, defaultBottom] = [
+						baselineY - fontAscent - halfLeading,
+						baselineY + fontDescent + halfLeading,
+					]
+					const trim = textBoxTrim ?? 'both'
+					const trimTop = trim === 'end' ? defaultTop : baselineY - capHeight
+					const trimBottom = trim === 'start' ? defaultBottom : baselineY + descenderDepth
 					return (
 						<>
-							<Char text={L.sample} fs={L.fs} x={L.charX} baseline={L.baselineY} />
+							<Char text={sample} font={font} x={charX} baseline={baselineY} />
 							<Rect
-								x1={L.charX - 8}
-								y1={normT}
-								x2={L.charX + L.advance + 8}
-								y2={normB}
+								x1={charX - 8}
+								y1={defaultTop}
+								x2={charX + advance + 8}
+								y2={defaultBottom}
 								color={FG}
 								strokeWidth={1}
 								dashed
 							/>
 							<Label
 								text='default'
-								x={L.charX - 10}
-								y={normT - 7}
+								x={charX - 10}
+								y={defaultTop - 7}
 								color={FG}
 								align='left'
 								alpha={trim === 'none' ? 0.7 : 0.35}
@@ -1051,15 +1157,15 @@ const GROUPS: Group[] = [
 							{trim !== 'none' && (
 								<>
 									<Rect
-										x1={L.charX - 8}
-										y1={trimT}
-										x2={L.inkRight + 8}
-										y2={trimB}
+										x1={charX - 8}
+										y1={trimTop}
+										x2={inkRight + 8}
+										y2={trimBottom}
 										fill
 										fillOpacity={0.08}
 										strokeWidth={1.5}
 									/>
-									<Label text={`trim-${trim}`} x={L.inkRight + 12} y={trimT - 7} align='left' />
+									<Label text={`trim-${trim}`} x={inkRight + 12} y={trimTop - 7} align='left' />
 								</>
 							)}
 						</>
@@ -1070,24 +1176,33 @@ const GROUPS: Group[] = [
 	},
 ]
 
-// ── Idle diagram ───────────────────────────────────────────────────────────────
-function Idle({ cw, ch, font, fontWeight }: { cw: number; ch: number; font: string; fontWeight: number }) {
-	const L = computeLayout('Ag', 140, font, fontWeight, cw, ch)
+function Idle({
+	width,
+	height,
+	family,
+	fontWeight,
+}: {
+	width: number
+	height: number
+	family: string
+	fontWeight: number
+}) {
+	const layout = computeLayout('Ag', 140, family, fontWeight, width, height)
 	const lines: [number, string][] = [
-		[L.baselineY, 'baseline'],
-		[L.baselineY - L.xHeight, 'x-height'],
-		[L.baselineY - L.capHeight, 'cap height'],
-		[L.baselineY - L.fontAscent, 'ascent'],
-		[L.baselineY + L.fontDescent, 'descent'],
-		[L.baselineY + L.descDepth, 'descender'],
+		[layout.baselineY, 'baseline'],
+		[layout.baselineY - layout.xHeight, 'x-height'],
+		[layout.baselineY - layout.capHeight, 'cap height'],
+		[layout.baselineY - layout.fontAscent, 'ascent'],
+		[layout.baselineY + layout.fontDescent, 'descent'],
+		[layout.baselineY + layout.descenderDepth, 'descender'],
 	]
 	return (
 		<>
-			<Char text='Ag' fs={L.fs} x={L.charX} baseline={L.baselineY} color={FG} alpha={0.08} />
+			<Char text='Ag' font={layout.font} x={layout.charX} baseline={layout.baselineY} color={FG} alpha={0.08} />
 			{lines.map(([y, label]) => (
 				<g key={label}>
-					<line x1={0} y1={y} x2={cw} y2={y} stroke={FG} strokeWidth={1} strokeDasharray='3 6' opacity={0.08} />
-					<text x={cw - 8} y={y - 3} fill={FG} opacity={0.12} fontSize={10} fontFamily={MONO} textAnchor='end'>
+					<line x1={0} y1={y} x2={width} y2={y} stroke={FG} strokeWidth={1} strokeDasharray='3 6' opacity={0.08} />
+					<text x={width - 8} y={y - 3} fill={FG} opacity={0.12} fontSize={10} fontFamily={MONO} textAnchor='end'>
 						{label}
 					</text>
 				</g>
@@ -1096,95 +1211,17 @@ function Idle({ cw, ch, font, fontWeight }: { cw: number; ch: number; font: stri
 	)
 }
 
-// ── Hero geometry ─────────────────────────────────────────────────────────────
-// Every annotation on the hero is derived by rasterizing a single glyph to a
-// detached canvas and scanning it for ink transitions, so the callouts follow
-// whichever font is selected instead of being pinned to one measured typeface.
-//
-// Highlights are never drawn as approximate shapes. Each one re-renders the
-// word in ACCENT and clips it to a measured region, so the colour lands exactly
-// on the letterform; counters — which are holes, not ink — invert that and mask
-// the word out of a filled rect instead.
-//
-// `heroGeometry` is referentially transparent: the canvases it allocates are
-// never attached to the document and no module state is touched, so the same
-// font always yields the same coordinates and it memoizes safely on `font`.
-
-const HERO_W = 900
-const HERO_H = 480
+const HERO_WIDTH = 900
+const HERO_HEIGHT = 480
 const HERO_WEIGHT = 700
-const HERO_L1 = Math.round(HERO_H * 0.4)
-const HERO_L2 = Math.round(HERO_H * 0.83)
+const HERO_BASELINE_1 = Math.round(HERO_HEIGHT * 0.4)
+const HERO_BASELINE_2 = Math.round(HERO_HEIGHT * 0.83)
 const LINE_1 = 'Anatomy' // A=0 n=1 a=2 t=3 o=4 m=5 y=6
 const LINE_2 = 'of Type' // o=0 f=1 ' '=2 T=3 y=4 p=5 e=6
-const SCAN = 400 // offscreen scan canvas, px square
-const SCAN_BASELINE = 300 // where the glyph sits inside that canvas
-const INK = 128 // alpha above which a pixel counts as ink
 
 type Point = { x: number; y: number }
 
 type Box = { x: number; y: number; width: number; height: number }
-
-type Span = [start: number, end: number]
-
-type Raster = {
-	ink: (x: number, y: number) => boolean
-	advance: number
-}
-
-// Draw one glyph in isolation and expose an ink predicate over its pixels.
-// A single getImageData readback backs every scan below.
-function rasterize(char: string, fs: string): Raster {
-	const canvas = document.createElement('canvas')
-	canvas.width = SCAN
-	canvas.height = SCAN
-	const ctx = canvas.getContext('2d')!
-	ctx.font = fs
-	ctx.fillStyle = '#fff'
-	ctx.textBaseline = 'alphabetic'
-	ctx.fillText(char, 0, SCAN_BASELINE)
-	const { data } = ctx.getImageData(0, 0, SCAN, SCAN)
-	return {
-		ink: (x, y) => x >= 0 && x < SCAN && y >= 0 && y < SCAN && data[(y * SCAN + x) * 4 + 3]! > INK,
-		advance: ctx.measureText(char).width,
-	}
-}
-
-// Contiguous ink spans along one row.
-function rowSpans({ ink }: Raster, y: number, limit = SCAN): Span[] {
-	const spans: Span[] = []
-	let start = -1
-
-	for (let x = 0; x < limit; x++) {
-		if (ink(x, y)) {
-			if (start < 0) start = x
-		} else if (start >= 0) {
-			spans.push([start, x - 1])
-			start = -1
-		}
-	}
-
-	if (start >= 0) spans.push([start, limit - 1])
-	return spans
-}
-
-// Contiguous ink spans down one column.
-function colSpans({ ink }: Raster, x: number): Span[] {
-	const spans: Span[] = []
-	let start = -1
-
-	for (let y = 0; y < SCAN; y++) {
-		if (ink(x, y)) {
-			if (start < 0) start = y
-		} else if (start >= 0) {
-			spans.push([start, y - 1])
-			start = -1
-		}
-	}
-
-	if (start >= 0) spans.push([start, SCAN - 1])
-	return spans
-}
 
 // Topmost ink row within a horizontal slice of the glyph.
 function topRow(raster: Raster, x0 = 0, x1 = SCAN) {
@@ -1192,13 +1229,11 @@ function topRow(raster: Raster, x0 = 0, x1 = SCAN) {
 	return -1
 }
 
-// Bottommost ink row of the glyph.
 function bottomRow(raster: Raster) {
 	for (let y = SCAN - 1; y >= 0; y--) for (let x = 0; x < SCAN; x++) if (raster.ink(x, y)) return y
 	return -1
 }
 
-// Outermost ink on all four sides.
 function inkBounds(raster: Raster) {
 	let left = SCAN
 	let right = -1
@@ -1221,7 +1256,7 @@ function inkBounds(raster: Raster) {
 // The enclosed void of a glyph: probe a column for stroke → void → stroke, then
 // re-scan the void's mid row for its horizontal extent.
 function enclosedVoid(raster: Raster, probeX: number) {
-	const vertical = colSpans(raster, probeX)
+	const vertical = columnSpans(raster, probeX)
 	if (vertical.length < 2) return null
 	const top = vertical[0]![1] + 1
 	const bottom = vertical[1]![0] - 1
@@ -1240,7 +1275,7 @@ function enclosedVoid(raster: Raster, probeX: number) {
 // Apex of an arch or shoulder. Columns whose ink starts within `BAND` of the
 // glyph's highest point form crests; the left stem's crest is dropped so
 // `index` counts arches only.
-function archApex(raster: Raster, index: number): Point | null {
+function archApex(raster: Raster, index: number) {
 	const BAND = 3
 	const width = Math.ceil(raster.advance)
 	const top = topRow(raster, 0, width)
@@ -1266,7 +1301,7 @@ function archApex(raster: Raster, index: number): Point | null {
 	if (start >= 0) crests.push([start, width - 1])
 
 	// A crest centred in the leftmost fifth of the advance is the stem, not an arch.
-	const arches = crests.filter(([s, e]) => (s + e) / 2 > width * 0.2)
+	const arches = crests.filter(([left, right]) => (left + right) / 2 > width * 0.2)
 	const pool = arches.length ? arches : crests
 	const arch = pool[Math.min(index, pool.length - 1)]
 	return arch ? { x: (arch[0] + arch[1]) / 2, y: top } : null
@@ -1377,7 +1412,7 @@ function outsideMask({ ink }: Raster) {
 // Aperture of 'a': the widest gap between two strokes that still opens onto the
 // outside. Filtering by reachability is what keeps this off the bowl's counter,
 // which is the widest gap overall but fully enclosed.
-function apertureGap(raster: Raster, xHeight: number): Point | null {
+function apertureGap(raster: Raster, xHeight: number) {
 	const outside = outsideMask(raster)
 	let best: Point | null = null
 	let widest = 0
@@ -1400,7 +1435,7 @@ function apertureGap(raster: Raster, xHeight: number): Point | null {
 
 // Terminal of 't': the right end of the crossbar. Searching only above the
 // bottom hook keeps the hook's rightward curve from winning.
-function crossbarTerminal(raster: Raster, xHeight: number): Point | null {
+function crossbarTerminal(raster: Raster, xHeight: number) {
 	const top = topRow(raster)
 	if (top < 0) return null
 	const floor = Math.round(SCAN_BASELINE - xHeight * 0.35)
@@ -1417,20 +1452,27 @@ function crossbarTerminal(raster: Raster, xHeight: number): Point | null {
 	return best
 }
 
-function heroGeometry(font: string) {
-	const fs = px(Math.round((HERO_FONT_SIZE * HERO_H) / BASE_CH), font, HERO_WEIGHT)
+// Every annotation on the hero is derived by rasterizing a single glyph to a detached
+// canvas and scanning it for ink transitions, so the callouts follow whichever font is
+// selected instead of being pinned to one measured typeface.
+//
+// Referentially transparent: the canvases allocated here are never attached to the
+// document and no module state is touched, so the same font always yields the same
+// coordinates and it memoizes safely on `family`.
+function heroGeometry(family: string) {
+	const font = cssFont(Math.round((HERO_FONT_SIZE * HERO_HEIGHT) / BASE_HEIGHT), family, HERO_WEIGHT)
 
 	// Local measuring context — heroGeometry must not disturb the shared one.
 	const measurer = document.createElement('canvas').getContext('2d')!
-	measurer.font = fs
+	measurer.font = font
 	const capHeight = measurer.measureText('H').actualBoundingBoxAscent
 	const xHeight = measurer.measureText('x').actualBoundingBoxAscent
 	const ascent = measurer.measureText('f').actualBoundingBoxAscent
 	const descent = measurer.measureText('p').actualBoundingBoxDescent
 
 	// Kerning-aware per-character positions within a centred word.
-	const charPos = (word: string) => {
-		const x0 = (HERO_W - measurer.measureText(word).width) / 2
+	const charPositions = (word: string) => {
+		const x0 = (HERO_WIDTH - measurer.measureText(word).width) / 2
 		return word.split('').map((char, i) => ({
 			char,
 			x: x0 + measurer.measureText(word.slice(0, i)).width,
@@ -1438,32 +1480,31 @@ function heroGeometry(font: string) {
 		}))
 	}
 
-	const anatomy = charPos(LINE_1)
-	const ofType = charPos(LINE_2)
+	const anatomy = charPositions(LINE_1)
+	const ofType = charPositions(LINE_2)
 	// LINE_1/LINE_2 are 7-char constants — indexes 0–6 always exist.
 	const anatomyX0 = anatomy[0]!.x
 	const ofTypeX0 = ofType[0]!.x
 
 	// Canvas rows sit `SCAN_BASELINE` above their own origin; shift onto a text baseline.
-	const onLine1 = (canvasY: number) => HERO_L1 + canvasY - SCAN_BASELINE
-	const onLine2 = (canvasY: number) => HERO_L2 + canvasY - SCAN_BASELINE
+	const onLine1 = (canvasY: number) => HERO_BASELINE_1 + canvasY - SCAN_BASELINE
+	const onLine2 = (canvasY: number) => HERO_BASELINE_2 + canvasY - SCAN_BASELINE
 
-	const capital = rasterize('A', fs)
-	const enn = rasterize('n', fs)
-	const ay = rasterize('a', fs)
-	const tee = rasterize('t', fs)
-	const oh = rasterize('o', fs)
-	const emm = rasterize('m', fs)
-	const why = rasterize('y', fs)
-	const eff = rasterize('f', fs)
-	const pee = rasterize('p', fs)
+	const capital = rasterize('A', font)
+	const enn = rasterize('n', font)
+	const ay = rasterize('a', font)
+	const tee = rasterize('t', font)
+	const oh = rasterize('o', font)
+	const emm = rasterize('m', font)
+	const why = rasterize('y', font)
+	const eff = rasterize('f', font)
+	const pee = rasterize('p', font)
 
-	// ── Crossbar of 'A' ───────────────────────────────────────────────────────
 	// The centre column carries ink only where the crossbar crosses the counter.
 	const capWidth = Math.round(capital.advance)
 	const centreX = Math.round(capWidth * 0.48)
-	const centreSpans = colSpans(capital, centreX).filter(
-		([s]) => s > SCAN_BASELINE - capHeight * 0.75 && s < SCAN_BASELINE - capHeight * 0.1,
+	const centreSpans = columnSpans(capital, centreX).filter(
+		([spanTop]) => spanTop > SCAN_BASELINE - capHeight * 0.75 && spanTop < SCAN_BASELINE - capHeight * 0.1,
 	)
 	const barTop = centreSpans.length ? centreSpans[0]![0] : Math.round(SCAN_BASELINE - capHeight * 0.44)
 	const barBottom = centreSpans.length ? centreSpans[0]![1] : Math.round(SCAN_BASELINE - capHeight * 0.36)
@@ -1500,7 +1541,6 @@ function heroGeometry(font: string) {
 		},
 	}
 
-	// ── Counter of 'o' ────────────────────────────────────────────────────────
 	// A hole, not ink: the box below is filled with ACCENT and the word is
 	// masked back out of it, so what remains is precisely the enclosed void.
 	const ohVoid = enclosedVoid(oh, Math.round(oh.advance * 0.5))
@@ -1513,12 +1553,11 @@ function heroGeometry(font: string) {
 			}
 		: {
 				x: anatomy[4]!.x + oh.advance * 0.28,
-				y: HERO_L1 - xHeight * 0.78,
+				y: HERO_BASELINE_1 - xHeight * 0.78,
 				width: oh.advance * 0.44,
 				height: xHeight * 0.56,
 			}
 
-	// ── Bowl of 'p' ───────────────────────────────────────────────────────────
 	// Everything right of the stem, between the x-height and the baseline.
 	// Below the baseline only the stem has ink, and its narrowest row is the stem
 	// proper — sampling a single row instead lets a foot serif pass for the stem
@@ -1538,11 +1577,10 @@ function heroGeometry(font: string) {
 				x: ofType[5]!.x + bowlLeft,
 				y: onLine2(bowlTop) - 2,
 				width: peeBounds.right - bowlLeft + 3,
-				height: HERO_L2 - onLine2(bowlTop) + 3,
+				height: HERO_BASELINE_2 - onLine2(bowlTop) + 3,
 			}
-		: { x: ofType[5]!.x, y: HERO_L2 - xHeight, width: ofType[5]!.w, height: xHeight }
+		: { x: ofType[5]!.x, y: HERO_BASELINE_2 - xHeight, width: ofType[5]!.w, height: xHeight }
 
-	// ── Ascender of 'f' and descender of 'y' ──────────────────────────────────
 	// Both are *parts* of a glyph, so each clip is a half-plane cut at the
 	// x-height or the baseline rather than the whole character.
 	const effBounds = inkBounds(eff)
@@ -1550,7 +1588,7 @@ function heroGeometry(font: string) {
 		x: ofType[1]!.x + (effBounds ? effBounds.left - 3 : 0),
 		y: 0,
 		width: effBounds ? effBounds.right - effBounds.left + 7 : ofType[1]!.w,
-		height: HERO_L2 - xHeight,
+		height: HERO_BASELINE_2 - xHeight,
 	}
 	// Stopped at the next character's origin: 'y' overhangs its advance, and
 	// without the clamp the box reaches far enough right to tint the 'p' stem.
@@ -1558,18 +1596,17 @@ function heroGeometry(font: string) {
 	const descenderLeft = ofType[4]!.x + (whyBounds ? whyBounds.left - 3 : 0)
 	const descenderBox: Box = {
 		x: descenderLeft,
-		y: HERO_L2,
+		y: HERO_BASELINE_2,
 		width: Math.min(ofType[5]!.x, ofType[4]!.x + (whyBounds ? whyBounds.right + 4 : ofType[4]!.w)) - descenderLeft,
-		height: HERO_H - HERO_L2,
+		height: HERO_HEIGHT - HERO_BASELINE_2,
 	}
 	// The descender's own ink, so its callout lands on the 'y' and not the 'p'.
 	const whyTail = rowSpans(why, Math.round(SCAN_BASELINE + descent * 0.55))[0]
 	const descenderDot: Point = {
 		x: ofType[4]!.x + (whyTail ? (whyTail[0] + whyTail[1]) / 2 : why.advance * 0.4),
-		y: HERO_L2 + descent * 0.55,
+		y: HERO_BASELINE_2 + descent * 0.55,
 	}
 
-	// ── The 'y' as two strokes, on line 1 ─────────────────────────────────────
 	// A 'y' is two strokes: one arm stops at the junction, the other carries on
 	// into the descender. The clip takes whichever side `yArms` measured as the
 	// carrier — above the junction it runs along the traced seam between the
@@ -1605,38 +1642,37 @@ function heroGeometry(font: string) {
 			: ''
 	const stroke: Point = arms
 		? { x: anatomy[6]!.x + (arms.arm[0] + arms.arm[1]) / 2, y: onLine1(arms.sample.y) }
-		: { x: anatomy[6]!.x + why.advance * 0.8, y: HERO_L1 - xHeight * 0.5 }
+		: { x: anatomy[6]!.x + why.advance * 0.8, y: HERO_BASELINE_1 - xHeight * 0.5 }
 
-	// ── Remaining callout anchors ─────────────────────────────────────────────
 	const capApex = topRow(capital, 0, capWidth)
 	const capApexSpans = rowSpans(capital, capApex, capWidth)
 	const uppercase: Point = capApexSpans.length
 		? { x: anatomyX0 + (capApexSpans[0]![0] + capApexSpans.at(-1)![1]) / 2, y: onLine1(capApex) }
-		: { x: anatomy[0]!.x + anatomy[0]!.w * 0.5, y: HERO_L1 - capHeight }
+		: { x: anatomy[0]!.x + anatomy[0]!.w * 0.5, y: HERO_BASELINE_1 - capHeight }
 
-	const nArch = archApex(enn, 0)
-	const lowercase: Point = nArch
-		? { x: anatomy[1]!.x + nArch.x, y: onLine1(nArch.y) }
-		: { x: anatomy[1]!.x + anatomy[1]!.w * 0.6, y: HERO_L1 - xHeight }
+	const ennArch = archApex(enn, 0)
+	const lowercase: Point = ennArch
+		? { x: anatomy[1]!.x + ennArch.x, y: onLine1(ennArch.y) }
+		: { x: anatomy[1]!.x + anatomy[1]!.w * 0.6, y: HERO_BASELINE_1 - xHeight }
 
-	const mArch = archApex(emm, 0)
-	const shoulder: Point = mArch
-		? { x: anatomy[5]!.x + mArch.x, y: onLine1(mArch.y) }
-		: { x: anatomy[5]!.x + anatomy[5]!.w * 0.4, y: HERO_L1 - xHeight }
+	const emmArch = archApex(emm, 0)
+	const shoulder: Point = emmArch
+		? { x: anatomy[5]!.x + emmArch.x, y: onLine1(emmArch.y) }
+		: { x: anatomy[5]!.x + anatomy[5]!.w * 0.4, y: HERO_BASELINE_1 - xHeight }
 
 	const gap = apertureGap(ay, xHeight)
 	const aperture: Point = gap
 		? { x: anatomy[2]!.x + gap.x, y: onLine1(gap.y) }
-		: { x: anatomy[2]!.x + anatomy[2]!.w * 0.6, y: HERO_L1 - xHeight * 0.6 }
+		: { x: anatomy[2]!.x + anatomy[2]!.w * 0.6, y: HERO_BASELINE_1 - xHeight * 0.6 }
 
 	const tip = crossbarTerminal(tee, xHeight)
 	const terminal: Point = tip
 		? { x: anatomy[3]!.x + tip.x, y: onLine1(tip.y) }
-		: { x: anatomy[3]!.x + anatomy[3]!.w, y: HERO_L1 - xHeight }
+		: { x: anatomy[3]!.x + anatomy[3]!.w, y: HERO_BASELINE_1 - xHeight }
 	// A terminal is the free end of a stroke, so highlight a run of the crossbar
 	// roughly as long as it is thick. A bare dot gave no sense of what it named.
 	const crossbarColumn = tip
-		? colSpans(tee, Math.max(0, tip.x - 5)).find(([s, e]) => tip.y >= s - 2 && tip.y <= e + 2)
+		? columnSpans(tee, Math.max(0, tip.x - 5)).find(([top, bottom]) => tip.y >= top - 2 && tip.y <= bottom + 2)
 		: undefined
 	const terminalBox: Box | null = tip
 		? {
@@ -1651,10 +1687,10 @@ function heroGeometry(font: string) {
 	const effSpans = rowSpans(eff, effTop)
 	const ascender: Point = effSpans.length
 		? { x: ofType[1]!.x + (effSpans[0]![0] + effSpans.at(-1)![1]) / 2, y: onLine2(effTop) }
-		: { x: ofType[1]!.x + ofType[1]!.w * 0.5, y: HERO_L2 - ascent }
+		: { x: ofType[1]!.x + ofType[1]!.w * 0.5, y: HERO_BASELINE_2 - ascent }
 
 	return {
-		fs,
+		font,
 		capHeight,
 		xHeight,
 		ascent,
@@ -1677,71 +1713,56 @@ function heroGeometry(font: string) {
 		aperture,
 		terminal,
 		ascender,
-		stem: { x: ofType[3]!.x + ofType[3]!.w * 0.5, y: HERO_L2 - capHeight * 0.48 },
+		stem: { x: ofType[3]!.x + ofType[3]!.w * 0.5, y: HERO_BASELINE_2 - capHeight * 0.48 },
 		// Clear of whichever is wider — the default margin, or the second line
 		// itself, which in a monospaced face runs far enough right to reach it.
-		bracketX: Math.max(HERO_W - 160, ofTypeX0 + measurer.measureText(LINE_2).width + 14),
+		bracketX: Math.max(HERO_WIDTH - 160, ofTypeX0 + measurer.measureText(LINE_2).width + 14),
 		// Top of the bowl's arc rather than its right edge, so the leader runs
 		// straight up into open space instead of across the 'e'.
 		bowl: { x: bowlBox.x + bowlBox.width * 0.5, y: bowlBox.y + 3 },
 		descenderDot,
 		guideYs: [
 			...new Set([
-				HERO_L1,
-				HERO_L1 - capHeight,
-				HERO_L1 - xHeight,
-				HERO_L2,
-				HERO_L2 - capHeight,
-				HERO_L2 - xHeight,
-				HERO_L2 + descent,
+				HERO_BASELINE_1,
+				HERO_BASELINE_1 - capHeight,
+				HERO_BASELINE_1 - xHeight,
+				HERO_BASELINE_2,
+				HERO_BASELINE_2 - capHeight,
+				HERO_BASELINE_2 - xHeight,
+				HERO_BASELINE_2 + descent,
 			]),
 		],
 	}
 }
 
-// ── Anatomy Hero ──────────────────────────────────────────────────────────────
-function AnatomyHero({ font }: { font: string }) {
-	const G = useMemo(() => heroGeometry(font), [font])
-	const { anatomy, capHeight, xHeight, ascent, descent } = G
+function AnatomyHero({ family }: { family: string }) {
+	const geometry = useMemo(() => heroGeometry(family), [family])
+	const { anatomy, capHeight, xHeight, ascent, descent } = geometry
 
-	// The two words, drawn at a given colour, as the base layer.
-	const line1 = (fill: string) => (
-		<text x={G.anatomyX0} y={HERO_L1} style={{ font: G.fs }} dominantBaseline='alphabetic' fill={fill}>
-			{LINE_1}
-		</text>
-	)
-	const line2 = (fill: string) => (
-		<text x={G.ofTypeX0} y={HERO_L2} style={{ font: G.fs }} dominantBaseline='alphabetic' fill={fill}>
-			{LINE_2}
-		</text>
+	const glyph = (text: string, x: number, baseline: number, color = FG) => (
+		<Char text={text} font={geometry.font} x={x} baseline={baseline} color={color} />
 	)
 
-	// Each highlight redraws a *single* glyph in ACCENT and clips it to a measured
-	// region, which is what keeps the colour on the letterform. Redrawing the whole
-	// word instead lets a clip tint whichever neighbour happens to reach into it —
-	// Courier Bold's 'm' overflows its own advance far enough to catch the 'y'
-	// stroke clip and pick up a blue serif. `charPos` positions include the run's
-	// kerning, so a glyph drawn on its own lands exactly over its base-layer twin.
-	const glyph = (char: string, x: number, baseline: number, fill: string) => (
-		<text x={x} y={baseline} style={{ font: G.fs }} dominantBaseline='alphabetic' fill={fill}>
-			{char}
-		</text>
-	)
-
-	const callout = (text: string, dot: Point, lx: number, ly: number, anchor: 'end' | 'middle' | 'start' = 'middle') => (
+	const callout = (
+		text: string,
+		dot: Point,
+		labelX: number,
+		labelY: number,
+		anchor: 'end' | 'middle' | 'start' = 'middle',
+	) => (
 		<g key={text}>
 			{/* Ringed in the page colour so a dot stays legible whether it lands on
 			    a plain letterform or inside one of the ACCENT highlights. */}
 			<circle cx={dot.x} cy={dot.y} r={3.5} fill={ACCENT} stroke={BG} strokeWidth={1.5} />
-			<line x1={dot.x} y1={dot.y} x2={lx} y2={ly} stroke={ACCENT} strokeWidth={1} opacity={0.55} />
+			<line x1={dot.x} y1={dot.y} x2={labelX} y2={labelY} stroke={ACCENT} strokeWidth={1} opacity={0.55} />
 			<text
-				x={lx}
-				y={ly}
+				x={labelX}
+				y={labelY}
 				fill={FG}
 				fontSize={12}
 				fontFamily={MONO}
 				textAnchor={anchor}
-				dominantBaseline={ly <= dot.y ? 'auto' : 'hanging'}
+				dominantBaseline={labelY <= dot.y ? 'auto' : 'hanging'}
 				opacity={0.7}
 			>
 				{text}
@@ -1749,61 +1770,61 @@ function AnatomyHero({ font }: { font: string }) {
 		</g>
 	)
 
-	const ABOVE1 = HERO_L1 - capHeight - 30
-	const BELOW1 = HERO_L1 + 30
-	const BELOW2 = HERO_L2 + descent + 22
-	const BRACKET_X = G.bracketX
+	const ABOVE1 = HERO_BASELINE_1 - capHeight - 30
+	const BELOW1 = HERO_BASELINE_1 + 30
+	const BELOW2 = HERO_BASELINE_2 + descent + 22
+	const BRACKET_X = geometry.bracketX
 
 	// Labels in the top row are anchored to the feature they point at, which in a
 	// monospaced face packs them close enough to touch. Nudge each one right of
 	// its predecessor; the leader line keeps the association readable.
 	const LABEL_GAP = 84
-	const counterX = G.counterBox.x + G.counterBox.width / 2
-	const topRowX = [G.uppercase.x, G.lowercase.x, counterX, G.shoulder.x]
+	const counterX = geometry.counterBox.x + geometry.counterBox.width / 2
+	const topRowX = [geometry.uppercase.x, geometry.lowercase.x, counterX, geometry.shoulder.x]
 	for (let i = 1; i < topRowX.length; i++) topRowX[i] = Math.max(topRowX[i]!, topRowX[i - 1]! + LABEL_GAP)
 
 	return (
 		<svg
-			viewBox={`0 0 ${HERO_W} ${HERO_H}`}
+			viewBox={`0 0 ${HERO_WIDTH} ${HERO_HEIGHT}`}
 			width='100%'
 			style={{ display: 'block' }}
 			aria-label='Anatomy of Type — letterforms annotated with their anatomical feature names'
 		>
 			<defs>
 				<clipPath id='hero-crossbar'>
-					<polygon points={G.crossbar.clip} />
+					<polygon points={geometry.crossbar.clip} />
 				</clipPath>
 				<clipPath id='hero-stroke'>
-					<polygon points={G.strokeClip} />
+					<polygon points={geometry.strokeClip} />
 				</clipPath>
 				<clipPath id='hero-bowl'>
-					<rect {...G.bowlBox} />
+					<rect {...geometry.bowlBox} />
 				</clipPath>
-				{G.terminalBox && (
+				{geometry.terminalBox && (
 					<clipPath id='hero-terminal'>
-						<rect {...G.terminalBox} />
+						<rect {...geometry.terminalBox} />
 					</clipPath>
 				)}
 				<clipPath id='hero-ascender'>
-					<rect {...G.ascenderBox} />
+					<rect {...geometry.ascenderBox} />
 				</clipPath>
 				<clipPath id='hero-descender'>
-					<rect {...G.descenderBox} />
+					<rect {...geometry.descenderBox} />
 				</clipPath>
 				{/* White where the counter box is, black where the glyph puts ink down —
 				    so filling the box through this mask paints only the enclosed void. */}
-				<mask id='hero-counter' maskUnits='userSpaceOnUse' x={0} y={0} width={HERO_W} height={HERO_H}>
-					<rect {...G.counterBox} fill='white' />
-					{glyph('o', G.anatomy[4]!.x, HERO_L1, 'black')}
+				<mask id='hero-counter' maskUnits='userSpaceOnUse' x={0} y={0} width={HERO_WIDTH} height={HERO_HEIGHT}>
+					<rect {...geometry.counterBox} fill='white' />
+					{glyph('o', geometry.anatomy[4]!.x, HERO_BASELINE_1, 'black')}
 				</mask>
 			</defs>
 
-			{G.guideYs.map((y) => (
+			{geometry.guideYs.map((y) => (
 				<line
 					key={y}
 					x1={0}
 					y1={y}
-					x2={HERO_W}
+					x2={HERO_WIDTH}
 					y2={y}
 					stroke={FG}
 					strokeWidth={1}
@@ -1812,56 +1833,79 @@ function AnatomyHero({ font }: { font: string }) {
 				/>
 			))}
 
-			{/* Both words in full, then one clipped single-glyph ACCENT overlay per feature. */}
-			{line1(FG)}
-			{line2(FG)}
+			{glyph(LINE_1, geometry.anatomyX0, HERO_BASELINE_1)}
+			{glyph(LINE_2, geometry.ofTypeX0, HERO_BASELINE_2)}
 
-			<g clipPath='url(#hero-crossbar)'>{glyph('A', G.anatomy[0]!.x, HERO_L1, ACCENT)}</g>
-			{G.strokeClip && <g clipPath='url(#hero-stroke)'>{glyph('y', G.anatomy[6]!.x, HERO_L1, ACCENT)}</g>}
-			{G.terminalBox && <g clipPath='url(#hero-terminal)'>{glyph('t', G.anatomy[3]!.x, HERO_L1, ACCENT)}</g>}
-			<g clipPath='url(#hero-bowl)'>{glyph('p', G.ofType[5]!.x, HERO_L2, ACCENT)}</g>
-			<g clipPath='url(#hero-ascender)'>{glyph('f', G.ofType[1]!.x, HERO_L2, ACCENT)}</g>
-			<g clipPath='url(#hero-descender)'>{glyph('y', G.ofType[4]!.x, HERO_L2, ACCENT)}</g>
-			<rect {...G.counterBox} fill={ACCENT} mask='url(#hero-counter)' />
+			{/* Both words in full above, then one ACCENT overlay per feature below. Each overlay
+			    redraws a *single* glyph and clips it to a measured region, which is what keeps the
+			    colour on the letterform. Redrawing the whole word instead lets a clip tint whichever
+			    neighbour happens to reach into it — Courier Bold's 'm' overflows its own advance far
+			    enough to catch the 'y' stroke clip and pick up a blue serif. `charPositions` includes
+			    the run's kerning, so a glyph drawn on its own lands exactly over its base-layer twin. */}
+			<g clipPath='url(#hero-crossbar)'>{glyph('A', geometry.anatomy[0]!.x, HERO_BASELINE_1, ACCENT)}</g>
+			{geometry.strokeClip && (
+				<g clipPath='url(#hero-stroke)'>{glyph('y', geometry.anatomy[6]!.x, HERO_BASELINE_1, ACCENT)}</g>
+			)}
+			{geometry.terminalBox && (
+				<g clipPath='url(#hero-terminal)'>{glyph('t', geometry.anatomy[3]!.x, HERO_BASELINE_1, ACCENT)}</g>
+			)}
+			<g clipPath='url(#hero-bowl)'>{glyph('p', geometry.ofType[5]!.x, HERO_BASELINE_2, ACCENT)}</g>
+			<g clipPath='url(#hero-ascender)'>{glyph('f', geometry.ofType[1]!.x, HERO_BASELINE_2, ACCENT)}</g>
+			<g clipPath='url(#hero-descender)'>{glyph('y', geometry.ofType[4]!.x, HERO_BASELINE_2, ACCENT)}</g>
+			<rect {...geometry.counterBox} fill={ACCENT} mask='url(#hero-counter)' />
 
-			{/* ── Labels — above line 1 ── */}
-			{callout('uppercase', G.uppercase, topRowX[0]!, ABOVE1)}
-			{callout('lowercase', G.lowercase, topRowX[1]!, ABOVE1)}
-			{callout('counter', { x: counterX, y: G.counterBox.y + G.counterBox.height / 2 }, topRowX[2]!, ABOVE1)}
-			{callout('shoulder', G.shoulder, topRowX[3]!, ABOVE1)}
+			{callout('uppercase', geometry.uppercase, topRowX[0]!, ABOVE1)}
+			{callout('lowercase', geometry.lowercase, topRowX[1]!, ABOVE1)}
+			{callout(
+				'counter',
+				{ x: counterX, y: geometry.counterBox.y + geometry.counterBox.height / 2 },
+				topRowX[2]!,
+				ABOVE1,
+			)}
+			{callout('shoulder', geometry.shoulder, topRowX[3]!, ABOVE1)}
 
-			{/* ── Labels — below line 1 ── */}
-			{callout('cross bar', G.crossbar.dot, G.crossbar.dot.x - 14, BELOW1, 'end')}
-			{callout('aperture', G.aperture, anatomy[2]!.x + anatomy[2]!.w * 0.5 + 30, BELOW1, 'start')}
-			{callout('terminal', G.terminal, anatomy[3]!.x + anatomy[3]!.w * 0.5 + 44, BELOW1, 'start')}
-			{callout('stroke', G.stroke, anatomy[6]!.x + anatomy[6]!.w + 6, BELOW1, 'start')}
+			{callout('cross bar', geometry.crossbar.dot, geometry.crossbar.dot.x - 14, BELOW1, 'end')}
+			{callout('aperture', geometry.aperture, anatomy[2]!.x + anatomy[2]!.w * 0.5 + 30, BELOW1, 'start')}
+			{callout('terminal', geometry.terminal, anatomy[3]!.x + anatomy[3]!.w * 0.5 + 44, BELOW1, 'start')}
+			{callout('stroke', geometry.stroke, anatomy[6]!.x + anatomy[6]!.w + 6, BELOW1, 'start')}
 
-			{/* ── Labels — line 2 ── */}
-			{callout('ascender', G.ascender, G.ofTypeX0 - 8, HERO_L2 - ascent + 14, 'end')}
-			{callout('stem', G.stem, G.stem.x - 34, BELOW2, 'end')}
+			{callout('ascender', geometry.ascender, geometry.ofTypeX0 - 8, HERO_BASELINE_2 - ascent + 14, 'end')}
+			{callout('stem', geometry.stem, geometry.stem.x - 34, BELOW2, 'end')}
 			{/* Routed up into the empty band between the two lines — to the right
 			    the 'e' would sit on top of the label. */}
-			{callout('bowl', G.bowl, G.bowl.x, HERO_L2 - capHeight - 16)}
-			{callout('descender', G.descenderDot, G.descenderDot.x + 10, BELOW2, 'start')}
-			{callout('baseline', { x: G.ofTypeX0 + 2, y: HERO_L2 }, G.ofTypeX0 - 6, HERO_L2 + 18, 'end')}
+			{callout('bowl', geometry.bowl, geometry.bowl.x, HERO_BASELINE_2 - capHeight - 16)}
+			{callout('descender', geometry.descenderDot, geometry.descenderDot.x + 10, BELOW2, 'start')}
+			{callout(
+				'baseline',
+				{ x: geometry.ofTypeX0 + 2, y: HERO_BASELINE_2 },
+				geometry.ofTypeX0 - 6,
+				HERO_BASELINE_2 + 18,
+				'end',
+			)}
 
 			{/* Right-side brackets. The two spans share a baseline, so nesting them
 			    at one x drew them on top of each other: the x-height bracket is
 			    inset instead, and each label sits beside the part of its own span
 			    the other doesn't cover — keeping them capHeight/2 apart in any font. */}
 			<g stroke={FG} strokeWidth={1} fill={FG} opacity={0.65}>
-				<path d={`M${BRACKET_X},${HERO_L2 - capHeight}h8v${capHeight}h-8`} fill='none' />
+				<path d={`M${BRACKET_X},${HERO_BASELINE_2 - capHeight}h8v${capHeight}h-8`} fill='none' />
 				<text
 					x={BRACKET_X + 46}
-					y={HERO_L2 - (capHeight + xHeight) / 2}
+					y={HERO_BASELINE_2 - (capHeight + xHeight) / 2}
 					fontSize={11}
 					fontFamily={MONO}
 					dominantBaseline='middle'
 				>
 					cap height
 				</text>
-				<path d={`M${BRACKET_X + 20},${HERO_L2 - xHeight}h8v${xHeight}h-8`} fill='none' strokeDasharray='2 3' />
-				<text x={BRACKET_X + 46} y={HERO_L2 - xHeight / 2} fontSize={11} fontFamily={MONO} dominantBaseline='middle'>
+				<path d={`M${BRACKET_X + 20},${HERO_BASELINE_2 - xHeight}h8v${xHeight}h-8`} fill='none' strokeDasharray='2 3' />
+				<text
+					x={BRACKET_X + 46}
+					y={HERO_BASELINE_2 - xHeight / 2}
+					fontSize={11}
+					fontFamily={MONO}
+					dominantBaseline='middle'
+				>
 					x-height
 				</text>
 			</g>
@@ -1869,49 +1913,47 @@ function AnatomyHero({ font }: { font: string }) {
 	)
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
 function findTerm(id: string) {
-	for (const g of GROUPS) for (const t of g.terms) if (t.id === id) return t
+	for (const group of GROUPS) for (const term of group.terms) if (term.id === id) return term
 	return null
 }
 
 function renderTerm(
 	term: Term,
-	font: string,
+	family: string,
 	fontWeight: number,
-	cw: number,
-	ch: number,
+	width: number,
+	height: number,
 	lineHeightRatio?: number,
 	trackingEm?: number,
 	textBoxTrim?: TextBoxTrim,
 ) {
 	if (term.multiLine) {
-		const [L1, L2] = multiLayout(term.sample, term.fontSize, font, fontWeight, cw, ch, lineHeightRatio)
-		return term.draw(L1, L2)
+		const [line1, line2] = multiLayout(term.sample, term.fontSize, family, fontWeight, width, height, lineHeightRatio)
+		return term.draw(line1, line2)
 	}
 
-	const L = computeLayout(term.sample, term.fontSize, font, fontWeight, cw, ch)
-	if (term.id === 'tracking') return term.draw({ ...L, trackingEm })
-	if (term.id === 'textboxtrim') return term.draw({ ...L, textBoxTrim })
-	return term.draw(L)
+	const layout = computeLayout(term.sample, term.fontSize, family, fontWeight, width, height)
+	if (term.id === 'tracking') return term.draw({ ...layout, trackingEm })
+	if (term.id === 'textboxtrim') return term.draw({ ...layout, textBoxTrim })
+	return term.draw(layout)
 }
 
-// ── App ────────────────────────────────────────────────────────────────────────
 function App() {
 	const panelRef = useRef<HTMLDivElement>(null)
-	const [font, setFont] = useState('serif')
+	const [family, setFamily] = useState('serif')
 	const [pinned, setPinned] = useState<string | null>(null)
 	const [hovered, setHovered] = useState<string | null>(null)
-	const [dims, setDims] = useState({ cw: 330, ch: 400, mob: false })
-	const { cw, ch, mob } = dims
+	const [size, setSize] = useState({ width: 330, height: 400, isMobile: false })
+	const { width, height, isMobile } = size
 	const [fontWeightSize, setFontWeightSize] = useState<FontWeightSize>('normal')
 	const [leadingSize, setLeadingSize] = useState<LeadingSize>('md')
 	const [trackingSize, setTrackingSize] = useState<TrackingSize>('widest')
 	const [textBoxTrim, setTextBoxTrim] = useState<TextBoxTrim>('both')
 
-	const fontWeight = WEIGHT_OPTIONS.find((o) => o.value === fontWeightSize)!.weight
-	const leadingRatio = LEADING_OPTIONS.find((o) => o.value === leadingSize)!.ratio
-	const trackingEm = TRACKING_OPTIONS.find((o) => o.value === trackingSize)!.em
+	const fontWeight = WEIGHT_OPTIONS.find((option) => option.value === fontWeightSize)!.weight
+	const leadingRatio = LEADING_OPTIONS.find((option) => option.value === leadingSize)!.ratio
+	const trackingEm = TRACKING_OPTIONS.find((option) => option.value === trackingSize)!.em
 
 	const activeId = pinned ?? hovered
 	const activeTerm = activeId ? findTerm(activeId) : null
@@ -1919,27 +1961,34 @@ function App() {
 	useEffect(() => {
 		const panel = panelRef.current!
 		let rafId: number | null = null
-		const obs = new ResizeObserver(() => {
+		const observer = new ResizeObserver(() => {
 			if (rafId !== null) cancelAnimationFrame(rafId)
 			rafId = requestAnimationFrame(() => {
 				rafId = null
-				const isMob = getComputedStyle(panel).getPropertyValue('--mobile').trim() === '1'
-				const s = getComputedStyle(panel)
-				const w = Math.round(panel.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight))
-				if (w) setDims({ cw: w, ch: isMob ? Math.round(w * 0.48) : BASE_CH, mob: isMob })
+				const style = getComputedStyle(panel)
+				const mobile = style.getPropertyValue('--mobile').trim() === '1'
+				const panelWidth = Math.round(
+					panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+				)
+				if (panelWidth)
+					setSize({
+						width: panelWidth,
+						height: mobile ? Math.round(panelWidth * 0.48) : BASE_HEIGHT,
+						isMobile: mobile,
+					})
 			})
 		})
-		obs.observe(panel)
+		observer.observe(panel)
 
 		return () => {
-			obs.disconnect()
+			observer.disconnect()
 			if (rafId !== null) cancelAnimationFrame(rafId)
 		}
 	}, [])
 
 	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') setPinned(null)
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') setPinned(null)
 		}
 
 		window.addEventListener('keydown', onKey)
@@ -1961,7 +2010,7 @@ function App() {
 			<div className='full-bleed-container min-h-screen bg-base-100 text-base-content'>
 				<div className='content-root'>
 					<div className='border-b border-base-300 overflow-hidden'>
-						<AnatomyHero font={font} />
+						<AnatomyHero family={family} />
 					</div>
 					<header className='px-8 pt-14 pb-10 border-b border-base-300'>
 						<p className='font-mono text-xs tracking-[.18em] uppercase text-base-content/40 mb-3'>
@@ -1975,20 +2024,20 @@ function App() {
 							any term to see it illustrated.
 						</p>
 					</header>
-					<div className={`main-grid${mob ? ' mobile' : ''}`}>
-						<div ref={panelRef} className='diagram-panel sticky top-6' style={mob ? { width: '100%' } : undefined}>
+					<div className={`main-grid${isMobile ? ' mobile' : ''}`}>
+						<div ref={panelRef} className='diagram-panel sticky top-6' style={isMobile ? { width: '100%' } : undefined}>
 							<div className='rounded-box border border-base-300 bg-base-200 overflow-hidden'>
 								<div className='border-b border-base-300'>
 									<div className='flex items-center px-4 py-2 border-b border-base-300/50'>
 										<div className='join'>
-											{(['serif', 'sans', 'mono'] as const).map((f) => (
+											{(['serif', 'sans', 'mono'] as const).map((key) => (
 												<button
-													key={f}
+													key={key}
 													type='button'
-													className={`join-item btn btn-xs${font === f ? ' btn-active' : ''}`}
-													onClick={() => setFont(f)}
+													className={`join-item btn btn-xs${family === key ? ' btn-active' : ''}`}
+													onClick={() => setFamily(key)}
 												>
-													{f.charAt(0).toUpperCase() + f.slice(1)}
+													{key.charAt(0).toUpperCase() + key.slice(1)}
 												</button>
 											))}
 										</div>
@@ -1997,7 +2046,7 @@ function App() {
 										<RadioGroup
 											variant='btn'
 											value={fontWeightSize}
-											onChange={(e) => setFontWeightSize(e.target.value as FontWeightSize)}
+											onChange={(event) => setFontWeightSize(event.target.value as FontWeightSize)}
 											options={[...WEIGHT_OPTIONS]}
 											className='join'
 											classNames={{ item: 'join-item btn-xs' }}
@@ -2005,25 +2054,25 @@ function App() {
 									</div>
 								</div>
 								<svg
-									viewBox={`0 0 ${cw} ${ch}`}
-									width={cw}
-									height={ch}
+									viewBox={`0 0 ${width} ${height}`}
+									width={width}
+									height={height}
 									style={{ display: 'block' }}
 									aria-label={activeTerm?.name ?? 'Typography metrics diagram'}
 								>
 									{activeTerm ? (
 										renderTerm(
 											activeTerm,
-											font,
+											family,
 											fontWeight,
-											cw,
-											ch,
+											width,
+											height,
 											activeTerm.multiLine ? leadingRatio : undefined,
 											trackingEm,
 											textBoxTrim,
 										)
 									) : (
-										<Idle cw={cw} ch={ch} font={font} fontWeight={fontWeight} />
+										<Idle width={width} height={height} family={family} fontWeight={fontWeight} />
 									)}
 								</svg>
 								<div className='flex items-center justify-between px-4 py-2.5 border-t border-base-300 min-h-10'>
@@ -2032,7 +2081,7 @@ function App() {
 										<RadioGroup
 											variant='btn'
 											value={leadingSize}
-											onChange={(e) => setLeadingSize(e.target.value as LeadingSize)}
+											onChange={(event) => setLeadingSize(event.target.value as LeadingSize)}
 											options={[...LEADING_OPTIONS]}
 											className='join'
 											classNames={{ item: 'join-item btn-xs' }}
@@ -2042,7 +2091,7 @@ function App() {
 										<RadioGroup
 											variant='btn'
 											value={trackingSize}
-											onChange={(e) => setTrackingSize(e.target.value as TrackingSize)}
+											onChange={(event) => setTrackingSize(event.target.value as TrackingSize)}
 											options={[...TRACKING_OPTIONS]}
 											className='join'
 											classNames={{ item: 'join-item btn-xs' }}
@@ -2052,7 +2101,7 @@ function App() {
 										<RadioGroup
 											variant='btn'
 											value={textBoxTrim}
-											onChange={(e) => setTextBoxTrim(e.target.value as TextBoxTrim)}
+											onChange={(event) => setTextBoxTrim(event.target.value as TextBoxTrim)}
 											options={[...TEXT_BOX_OPTIONS]}
 											className='join'
 											classNames={{ item: 'join-item btn-xs' }}
@@ -2060,13 +2109,13 @@ function App() {
 									)}
 								</div>
 							</div>
-							{!mob && (
+							{!isMobile && (
 								<p className='pin-hint text-center font-mono text-xs text-base-content/25 mt-2'>
 									Click to pin · <kbd className='kbd kbd-xs'>Esc</kbd> to unpin
 								</p>
 							)}
 						</div>
-						<div className={mob ? 'pt-5 px-4' : ''}>
+						<div className={isMobile ? 'pt-5 px-4' : ''}>
 							{GROUPS.map((group) => (
 								<div key={group.name} className='mb-11'>
 									<h2 className='font-mono text-xs tracking-[.18em] uppercase text-base-content/40 pb-3 border-b border-base-300 mb-1'>
@@ -2079,10 +2128,10 @@ function App() {
 											className={`block w-full text-left mt-1 p-3 rounded-lg border transition-colors hover:bg-base-200 hover:border-base-300 ${activeId === term.id ? 'bg-base-200 border-base-300' : 'border-transparent'}`}
 											onMouseEnter={() => !pinned && setHovered(term.id)}
 											onMouseLeave={() => !pinned && setHovered(null)}
-											onClick={() => setPinned((p) => (p === term.id ? null : term.id))}
+											onClick={() => setPinned((current) => (current === term.id ? null : term.id))}
 										>
 											<p className='font-mono text-sm font-medium mb-1'>{term.name}</p>
-											<p className='text-xs text-base-content/60 leading-relaxed'>{term.def}</p>
+											<p className='text-xs text-base-content/60 leading-relaxed'>{term.definition}</p>
 										</button>
 									))}
 								</div>

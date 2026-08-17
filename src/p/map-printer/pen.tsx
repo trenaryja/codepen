@@ -83,7 +83,6 @@ const { CANVAS_MAX_TILES_PER_DIM, CANVAS_MAX_TILE_AREA } = (() => {
 		const other = Math.ceil(n / side)
 		return other <= maxDim && test(side * TILE_SIZE, other * TILE_SIZE)
 	})
-	console.log(`[map-printer] Canvas limits: ${maxDim} tiles/dim (${maxDim * TILE_SIZE}px), ${maxArea} tile area`)
 	return { CANVAS_MAX_TILES_PER_DIM: maxDim, CANVAS_MAX_TILE_AREA: maxArea }
 })()
 
@@ -187,12 +186,8 @@ const getPosition = () =>
 		.then((p) => [p.coords.longitude, p.coords.latitude] satisfies [number, number])
 		.catch(() => [-74.006, 40.7128] satisfies [number, number])
 
-let downloadController: AbortController | null = null
-
 const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, style: MapStyle, filename?: string) => {
-	downloadController?.abort()
 	const controller = new AbortController()
-	downloadController = controller
 	const { signal } = controller
 
 	const { cols, rows } = boundsToGrid(bounds)
@@ -218,27 +213,21 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 
 				const startCol = cx * chunkCols
 				const startRow = cy * chunkRows
-				const cCols = Math.min(chunkCols, cols - startCol)
-				const cRows = Math.min(chunkRows, rows - startRow)
+				const colsInChunk = Math.min(chunkCols, cols - startCol)
+				const rowsInChunk = Math.min(chunkRows, rows - startRow)
 
-				if (cCols <= 0 || cRows <= 0) {
-					console.warn(`[map-printer] Skipping empty chunk r${cy}c${cx}: ${cCols}x${cRows}`)
-					continue
-				}
-
-				const canvasW = cCols * TILE_SIZE
-				const canvasH = cRows * TILE_SIZE
+				const canvasWidth = colsInChunk * TILE_SIZE
+				const canvasHeight = rowsInChunk * TILE_SIZE
 				const chunkLabel = multiFile ? ` (part ${cy * chunksX + cx + 1}/${totalChunks})` : ''
-				console.log(`[map-printer] Chunk r${cy}c${cx}: ${cCols}x${cRows} tiles, ${canvasW}x${canvasH}px`)
 
-				const canvas = new OffscreenCanvas(canvasW, canvasH)
+				const canvas = new OffscreenCanvas(canvasWidth, canvasHeight)
 				const ctx = canvas.getContext('2d')
 				if (!ctx) throw new Error('Could not create canvas context')
 
 				const pieces: { url: string; dx: number; dy: number }[] = []
 
-				for (let x = 0; x < cCols; x++) {
-					for (let y = 0; y < cRows; y++) {
+				for (let x = 0; x < colsInChunk; x++) {
+					for (let y = 0; y < rowsInChunk; y++) {
 						const tileX = bounds.west + startCol + x
 						const tileY = bounds.north + startRow + y
 						pieces.push({
@@ -278,7 +267,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 					blob = await canvas.convertToBlob({ type, ...(format === 'jpg' && { quality: 0.92 }) })
 				} catch (blobErr) {
 					throw new Error(
-						`convertToBlob failed for chunk r${cy}c${cx} (${canvasW}x${canvasH}px). ` +
+						`convertToBlob failed for chunk r${cy}c${cx} (${canvasWidth}x${canvasHeight}px). ` +
 							`Detected limits: ${CANVAS_MAX_TILES_PER_DIM * TILE_SIZE}px/dim, ${CANVAS_MAX_TILE_AREA} tile area. ` +
 							`${blobErr instanceof Error ? blobErr.message : blobErr}`,
 					)
@@ -306,8 +295,6 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 
 		toast.error('Download failed', { id, description: e instanceof Error ? e.message : 'Unknown error' })
 		throw e
-	} finally {
-		if (downloadController === controller) downloadController = null
 	}
 }
 

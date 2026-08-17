@@ -6,8 +6,8 @@ const Root = () => {
 	const [time, setTime] = useState(() => new Date())
 
 	useEffect(() => {
-		const t = setInterval(() => setTime(new Date()), 1000)
-		return () => clearInterval(t)
+		const id = setInterval(() => setTime(new Date()), 1000)
+		return () => clearInterval(id)
 	}, [])
 
 	return (

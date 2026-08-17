@@ -37,7 +37,7 @@ import {
 	Toaster,
 } from 'https://esm.sh/@trenaryja/ui'
 import React, { createContext, use, useRef, useState } from 'https://esm.sh/react'
-import type { CSSProperties, ReactElement, ReactNode } from 'https://esm.sh/react'
+import type { ReactElement, ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	LuCircle,
@@ -51,8 +51,6 @@ import {
 } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
 import { z } from 'https://esm.sh/zod'
-
-// ── Schema ────────────────────────────────────────────────────────────────────
 
 const imageUrlSchema = z.union([z.url(), z.string().startsWith('data:image/')])
 
@@ -101,20 +99,20 @@ const tierListSchema = z.preprocess(
 			items: z.array(itemSchema),
 			settings: settingsSchema.default({ showLabels: true, showImages: true, itemShape: 'rounded' }),
 		})
-		.superRefine((data, ctx) => {
+		.superRefine((data, context) => {
 			const tierIds = R.map(data.tiers, R.prop('id'))
 			if (new Set(tierIds).size !== tierIds.length)
-				ctx.addIssue({ code: 'custom', path: ['tiers'], message: 'Tier IDs must be unique' })
+				context.addIssue({ code: 'custom', path: ['tiers'], message: 'Tier IDs must be unique' })
 
 			const itemIds = R.map(data.items, R.prop('id'))
 			if (new Set(itemIds).size !== itemIds.length)
-				ctx.addIssue({ code: 'custom', path: ['items'], message: 'Item IDs must be unique' })
+				context.addIssue({ code: 'custom', path: ['items'], message: 'Item IDs must be unique' })
 
 			const itemIdSet = new Set(itemIds)
 			data.tiers.forEach((tier, tierIndex) => {
 				const missing = tier.itemIds.filter((id) => !itemIdSet.has(id))
 				if (missing.length)
-					ctx.addIssue({
+					context.addIssue({
 						code: 'custom',
 						path: ['tiers', tierIndex, 'itemIds'],
 						message: `Unknown item id(s): ${missing.join(', ')}`,
@@ -130,7 +128,7 @@ const tierListSchema = z.preprocess(
 				R.map(([id]) => id),
 			)
 			if (multiAssigned.length)
-				ctx.addIssue({
+				context.addIssue({
 					code: 'custom',
 					path: ['tiers'],
 					message: `Items assigned to multiple tiers: ${multiAssigned.join(', ')}`,
@@ -165,8 +163,6 @@ const defaultTierList: TierList = tierListSchema.parse({
 		{ id: randomId(), label: 'Example 8' },
 	],
 })
-
-// ── State ─────────────────────────────────────────────────────────────────────
 
 const BANK_ID = 'option-bank'
 const STORAGE_KEY = 'tier-list'
@@ -204,9 +200,9 @@ type TierListContextValue = {
 const TierListContext = createContext<TierListContextValue | undefined>(undefined)
 
 const useTierList = () => {
-	const ctx = use(TierListContext)
-	if (!ctx) throw new Error('useTierList must be used within a TierListProvider')
-	return ctx
+	const context = use(TierListContext)
+	if (!context) throw new Error('useTierList must be used within a TierListProvider')
+	return context
 }
 
 const TierListProvider = ({ children }: { children: ReactNode }) => {
@@ -218,10 +214,13 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 	const [editingItemId, setEditingItemId] = useState<string | null>(null)
 	const editingItem = tierList.items.find((item) => item.id === editingItemId)
 
-	const setSettings = (settings: TierListSettings) => setTierList((prev) => ({ ...prev, settings }))
+	const setSettings = (settings: TierListSettings) => setTierList((previous) => ({ ...previous, settings }))
 
 	const handleTierUpdate = (updated: Tier) =>
-		setTierList((prev) => ({ ...prev, tiers: prev.tiers.map((t) => (t.id === updated.id ? updated : t)) }))
+		setTierList((previous) => ({
+			...previous,
+			tiers: previous.tiers.map((tier) => (tier.id === updated.id ? updated : tier)),
+		}))
 
 	const handleTierInsert = (index: number, initial: Partial<Tier> = {}) => {
 		const newTier: Tier = {
@@ -231,106 +230,117 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 			itemIds: initial.itemIds ?? [],
 			imageUrl: initial.imageUrl,
 		}
-		setTierList((prev) => ({ ...prev, tiers: [...prev.tiers.slice(0, index), newTier, ...prev.tiers.slice(index)] }))
+		setTierList((previous) => ({
+			...previous,
+			tiers: [...previous.tiers.slice(0, index), newTier, ...previous.tiers.slice(index)],
+		}))
 		return newTier
 	}
 
 	const handleTierDelete = (tierId: string) =>
-		setTierList((prev) =>
-			prev.tiers.length > 1 ? { ...prev, tiers: prev.tiers.filter((t) => t.id !== tierId) } : prev,
+		setTierList((previous) =>
+			previous.tiers.length > 1
+				? { ...previous, tiers: previous.tiers.filter((tier) => tier.id !== tierId) }
+				: previous,
 		)
 
 	const handleTierDrop = (activeId: UniqueIdentifier, overId?: UniqueIdentifier) => {
 		if (!overId) return
-		setTierList((prev) => {
-			const fromIndex = prev.tiers.findIndex((t) => t.id === String(activeId))
-			const toIndex = prev.tiers.findIndex((t) => t.id === String(overId))
-			if (fromIndex === -1 || toIndex === -1) return prev
-			return { ...prev, tiers: arrayMove(prev.tiers, fromIndex, toIndex) }
+		setTierList((previous) => {
+			const fromIndex = previous.tiers.findIndex((tier) => tier.id === String(activeId))
+			const toIndex = previous.tiers.findIndex((tier) => tier.id === String(overId))
+			if (fromIndex === -1 || toIndex === -1) return previous
+			return { ...previous, tiers: arrayMove(previous.tiers, fromIndex, toIndex) }
 		})
 	}
 
 	const handleItemMove = (itemId: string, containerId: string, index?: number) => {
-		setTierList((prev) => {
-			const item = prev.items.find((i) => i.id === itemId)
-			if (!item) return prev
+		setTierList((previous) => {
+			const item = previous.items.find((candidate) => candidate.id === itemId)
+			if (!item) return previous
 
-			const tiersWithoutItem = prev.tiers.map((t) => ({ ...t, itemIds: t.itemIds.filter((id) => id !== itemId) }))
+			const tiersWithoutItem = previous.tiers.map((tier) => ({
+				...tier,
+				itemIds: tier.itemIds.filter((id) => id !== itemId),
+			}))
 
 			if (containerId === BANK_ID) {
 				// Bank order is derived from the items array; insert before the bank item at `index`
-				const assigned = new Set(tiersWithoutItem.flatMap((t) => t.itemIds))
-				const bankItems = prev.items.filter((i) => !assigned.has(i.id) && i.id !== itemId)
+				const assigned = new Set(tiersWithoutItem.flatMap((tier) => tier.itemIds))
+				const bankItems = previous.items.filter((candidate) => !assigned.has(candidate.id) && candidate.id !== itemId)
 				const insertBefore = index != null ? bankItems[index] : undefined
-				const remaining = prev.items.filter((i) => i.id !== itemId)
-				const insertAt = insertBefore ? remaining.findIndex((i) => i.id === insertBefore.id) : remaining.length
+				const remaining = previous.items.filter((candidate) => candidate.id !== itemId)
+				const insertAt = insertBefore
+					? remaining.findIndex((candidate) => candidate.id === insertBefore.id)
+					: remaining.length
 				return {
-					...prev,
+					...previous,
 					tiers: tiersWithoutItem,
 					items: [...remaining.slice(0, insertAt), item, ...remaining.slice(insertAt)],
 				}
 			}
 
-			const tiers = tiersWithoutItem.map((t) => {
-				if (t.id !== containerId) return t
-				const insertAt = index != null ? Math.min(index, t.itemIds.length) : t.itemIds.length
-				return { ...t, itemIds: [...t.itemIds.slice(0, insertAt), itemId, ...t.itemIds.slice(insertAt)] }
+			const tiers = tiersWithoutItem.map((tier) => {
+				if (tier.id !== containerId) return tier
+				const insertAt = index != null ? Math.min(index, tier.itemIds.length) : tier.itemIds.length
+				return { ...tier, itemIds: [...tier.itemIds.slice(0, insertAt), itemId, ...tier.itemIds.slice(insertAt)] }
 			})
-			return { ...prev, tiers }
+			return { ...previous, tiers }
 		})
 	}
 
 	const handleItemReorder = (containerId: string, itemId: string, overItemId: string) => {
-		setTierList((prev) => {
+		setTierList((previous) => {
 			if (containerId === BANK_ID) {
-				const fromIndex = prev.items.findIndex((i) => i.id === itemId)
-				const toIndex = prev.items.findIndex((i) => i.id === overItemId)
-				if (fromIndex === -1 || toIndex === -1) return prev
-				return { ...prev, items: arrayMove(prev.items, fromIndex, toIndex) }
+				const fromIndex = previous.items.findIndex((item) => item.id === itemId)
+				const toIndex = previous.items.findIndex((item) => item.id === overItemId)
+				if (fromIndex === -1 || toIndex === -1) return previous
+				return { ...previous, items: arrayMove(previous.items, fromIndex, toIndex) }
 			}
 
-			const tiers = prev.tiers.map((t) => {
-				if (t.id !== containerId) return t
-				const fromIndex = t.itemIds.indexOf(itemId)
-				const toIndex = t.itemIds.indexOf(overItemId)
-				if (fromIndex === -1 || toIndex === -1) return t
-				return { ...t, itemIds: arrayMove(t.itemIds, fromIndex, toIndex) }
+			const tiers = previous.tiers.map((tier) => {
+				if (tier.id !== containerId) return tier
+				const fromIndex = tier.itemIds.indexOf(itemId)
+				const toIndex = tier.itemIds.indexOf(overItemId)
+				if (fromIndex === -1 || toIndex === -1) return tier
+				return { ...tier, itemIds: arrayMove(tier.itemIds, fromIndex, toIndex) }
 			})
-			return { ...prev, tiers }
+			return { ...previous, tiers }
 		})
 	}
 
 	const handleItemInsert = () => {
 		const newItem: Item = { id: randomId(), label: 'New Item' }
-		setTierList((prev) => ({ ...prev, items: [...prev.items, newItem] }))
+		setTierList((previous) => ({ ...previous, items: [...previous.items, newItem] }))
 		return newItem
 	}
 
 	const handleItemUpdate = (updated: Item) =>
-		setTierList((prev) => ({ ...prev, items: prev.items.map((i) => (i.id === updated.id ? updated : i)) }))
-
-	const handleItemDelete = (itemId: string) =>
-		setTierList((prev) => ({
-			...prev,
-			items: prev.items.filter((i) => i.id !== itemId),
-			tiers: prev.tiers.map((t) => ({ ...t, itemIds: t.itemIds.filter((id) => id !== itemId) })),
+		setTierList((previous) => ({
+			...previous,
+			items: previous.items.map((item) => (item.id === updated.id ? updated : item)),
 		}))
 
-	const handleImport = (imported: TierList) => setTierList(imported)
+	const handleItemDelete = (itemId: string) =>
+		setTierList((previous) => ({
+			...previous,
+			items: previous.items.filter((item) => item.id !== itemId),
+			tiers: previous.tiers.map((tier) => ({ ...tier, itemIds: tier.itemIds.filter((id) => id !== itemId) })),
+		}))
 
-	const handleTitleUpdate = (title: string) => setTierList((prev) => ({ ...prev, title }))
+	const handleTitleUpdate = (title: string) => setTierList((previous) => ({ ...previous, title }))
 
 	const getItemsForTier = (tierId: string) => {
-		const tier = tierList.tiers.find((t) => t.id === String(tierId))
+		const tier = tierList.tiers.find((candidate) => candidate.id === tierId)
 		if (!tier) return []
 		return tier.itemIds
-			.map((itemId) => tierList.items.find((it) => it.id === itemId))
-			.filter((it): it is Item => it !== undefined)
+			.map((itemId) => tierList.items.find((item) => item.id === itemId))
+			.filter((item): item is Item => item !== undefined)
 	}
 
 	const getUnassignedItems = () => {
-		const assigned = new Set(tierList.tiers.flatMap((x) => x.itemIds))
-		return tierList.items.filter((x) => !assigned.has(x.id))
+		const assigned = new Set(tierList.tiers.flatMap((tier) => tier.itemIds))
+		return tierList.items.filter((item) => !assigned.has(item.id))
 	}
 
 	return (
@@ -351,7 +361,7 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 				handleItemInsert,
 				handleItemUpdate,
 				handleItemDelete,
-				handleImport,
+				handleImport: setTierList,
 				handleTitleUpdate,
 				getItemsForTier,
 				getUnassignedItems,
@@ -361,8 +371,6 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 		</TierListContext>
 	)
 }
-
-// ── Shared bits ───────────────────────────────────────────────────────────────
 
 const shapeClasses = {
 	square: 'rounded-none',
@@ -385,7 +393,7 @@ const ImageUrlField = ({ id, value, onChange }: ImageUrlFieldProps) => (
 			id={id}
 			type='text'
 			value={value ?? ''}
-			onChange={(e) => onChange(e.target.value || undefined)}
+			onChange={(event) => onChange(event.target.value || undefined)}
 			placeholder='https://… or data:image/…'
 			className='input w-full'
 		/>
@@ -398,57 +406,54 @@ const ImageUrlField = ({ id, value, onChange }: ImageUrlFieldProps) => (
 	</div>
 )
 
-// ── Tier editing ──────────────────────────────────────────────────────────────
-
-type EditTierRowFormProps = {
-	tier: Tier
+type EditEntityFormProps = {
+	noun: 'Item' | 'Tier'
+	entity: Item | Tier
+	deleteDisabled?: boolean
+	onSave: (fields: Pick<Item, 'color' | 'imageUrl' | 'label'>) => void
+	onDelete: () => void
 	close: () => void
 }
 
-const EditTierRowForm = ({ tier, close }: EditTierRowFormProps) => {
-	const { tierList, handleTierUpdate, handleTierDelete } = useTierList()
-	const [label, setLabel] = useState(tier.label)
-	const [color, setColor] = useState(tier.color)
-	const [imageUrl, setImageUrl] = useState(tier.imageUrl)
+// Tiers and items edit the same three fields, so they share one form
+const EditEntityForm = ({ noun, entity, deleteDisabled, onSave, onDelete, close }: EditEntityFormProps) => {
+	const [label, setLabel] = useState(entity.label)
+	const [color, setColor] = useState(entity.color)
+	const [imageUrl, setImageUrl] = useState(entity.imageUrl)
 
 	const isValid = !!label.trim() && (!imageUrl || imageUrlSchema.safeParse(imageUrl).success)
-
-	const handleSave = () => {
-		handleTierUpdate({ ...tier, label: label.trim(), color, imageUrl })
-		close()
-		toast.success('Tier updated')
-	}
+	const idPrefix = noun.toLowerCase()
 
 	return (
 		<div className='grid grid-cols-[auto_1fr] gap-4 items-center'>
-			<h3 className='font-bold text-lg col-span-full'>Edit Tier</h3>
+			<h3 className='font-bold text-lg col-span-full'>Edit {noun}</h3>
 
-			<label htmlFor='tier-label'>Label</label>
+			<label htmlFor={`${idPrefix}-label`}>Label</label>
 			<input
-				id='tier-label'
+				id={`${idPrefix}-label`}
 				type='text'
 				value={label}
-				onChange={(e) => setLabel(e.target.value)}
-				placeholder='Tier label'
+				onChange={(event) => setLabel(event.target.value)}
+				placeholder={`${noun} label`}
 				className='input w-full'
 			/>
 
 			<span className='self-start'>Color</span>
 			<ColorPicker value={color} onChange={setColor} format='hex' />
 
-			<label htmlFor='tier-image' className='self-start'>
+			<label htmlFor={`${idPrefix}-image`} className='self-start'>
 				Image
 			</label>
-			<ImageUrlField id='tier-image' value={imageUrl} onChange={setImageUrl} />
+			<ImageUrlField id={`${idPrefix}-image`} value={imageUrl} onChange={setImageUrl} />
 
 			<div className='flex justify-between col-span-full gap-2'>
 				<ConfirmButton
 					className='btn btn-error btn-outline'
-					disabled={tierList.tiers.length === 1}
+					disabled={deleteDisabled}
 					onConfirm={() => {
-						handleTierDelete(tier.id)
+						onDelete()
 						close()
-						toast.success('Tier deleted')
+						toast.success(`${noun} deleted`)
 					}}
 				>
 					<LuTrash2 /> Delete
@@ -457,7 +462,16 @@ const EditTierRowForm = ({ tier, close }: EditTierRowFormProps) => {
 					<button type='button' className='btn' onClick={close}>
 						Cancel
 					</button>
-					<button type='button' className='btn btn-primary' disabled={!isValid} onClick={handleSave}>
+					<button
+						type='button'
+						className='btn btn-primary'
+						disabled={!isValid}
+						onClick={() => {
+							onSave({ label: label.trim(), color, imageUrl })
+							close()
+							toast.success(`${noun} updated`)
+						}}
+					>
 						Save
 					</button>
 				</div>
@@ -472,92 +486,42 @@ type EditTierRowDialogProps = {
 }
 
 const EditTierRowDialog = ({ tier, trigger }: EditTierRowDialogProps) => {
+	const { tierList, handleTierUpdate, handleTierDelete } = useTierList()
 	const [open, setOpen] = useState(false)
 	return (
 		<Modal open={open} onOpenChange={setOpen} trigger={trigger}>
 			{/* Mount the form only while open so each edit starts from the tier's current values */}
-			{open && <EditTierRowForm tier={tier} close={() => setOpen(false)} />}
+			{open && (
+				<EditEntityForm
+					noun='Tier'
+					entity={tier}
+					deleteDisabled={tierList.tiers.length === 1}
+					onSave={(fields) => handleTierUpdate({ ...tier, ...fields })}
+					onDelete={() => handleTierDelete(tier.id)}
+					close={() => setOpen(false)}
+				/>
+			)}
 		</Modal>
-	)
-}
-
-// ── Item editing ──────────────────────────────────────────────────────────────
-
-type EditTierItemFormProps = {
-	item: Item
-	close: () => void
-}
-
-const EditTierItemForm = ({ item, close }: EditTierItemFormProps) => {
-	const { handleItemUpdate, handleItemDelete } = useTierList()
-	const [label, setLabel] = useState(item.label)
-	const [color, setColor] = useState(item.color)
-	const [imageUrl, setImageUrl] = useState(item.imageUrl)
-
-	const isValid = !!label.trim() && (!imageUrl || imageUrlSchema.safeParse(imageUrl).success)
-
-	const handleSave = () => {
-		handleItemUpdate({ ...item, label: label.trim(), color, imageUrl })
-		close()
-		toast.success('Item updated')
-	}
-
-	return (
-		<div className='grid grid-cols-[auto_1fr] gap-4 items-center'>
-			<h3 className='font-bold text-lg col-span-full'>Edit Item</h3>
-
-			<label htmlFor='item-label'>Label</label>
-			<input
-				id='item-label'
-				type='text'
-				value={label}
-				onChange={(e) => setLabel(e.target.value)}
-				placeholder='Item label'
-				className='input w-full'
-			/>
-
-			<span className='self-start'>Color</span>
-			<ColorPicker value={color} onChange={setColor} format='hex' />
-
-			<label htmlFor='item-image' className='self-start'>
-				Image
-			</label>
-			<ImageUrlField id='item-image' value={imageUrl} onChange={setImageUrl} />
-
-			<div className='flex justify-between col-span-full gap-2'>
-				<ConfirmButton
-					className='btn btn-error btn-outline'
-					onConfirm={() => {
-						handleItemDelete(item.id)
-						close()
-						toast.success('Item deleted')
-					}}
-				>
-					<LuTrash2 /> Delete
-				</ConfirmButton>
-				<div className='flex gap-2'>
-					<button type='button' className='btn' onClick={close}>
-						Cancel
-					</button>
-					<button type='button' className='btn btn-primary' disabled={!isValid} onClick={handleSave}>
-						Save
-					</button>
-				</div>
-			</div>
-		</div>
 	)
 }
 
 const EditTierItemDialog = () => {
-	const { editingItem, setEditingItemId } = useTierList()
+	const { editingItem, setEditingItemId, handleItemUpdate, handleItemDelete } = useTierList()
 	return (
 		<Modal open={!!editingItem} onOpenChange={(open) => !open && setEditingItemId(null)}>
-			{editingItem && <EditTierItemForm key={editingItem.id} item={editingItem} close={() => setEditingItemId(null)} />}
+			{editingItem && (
+				<EditEntityForm
+					key={editingItem.id}
+					noun='Item'
+					entity={editingItem}
+					onSave={(fields) => handleItemUpdate({ ...editingItem, ...fields })}
+					onDelete={() => handleItemDelete(editingItem.id)}
+					close={() => setEditingItemId(null)}
+				/>
+			)}
 		</Modal>
 	)
 }
-
-// ── Tier list pieces ──────────────────────────────────────────────────────────
 
 type TierItemProps = {
 	item: Item
@@ -568,7 +532,7 @@ const TierItem = ({ item, isOverlay }: TierItemProps) => {
 	const { settings, setEditingItemId } = useTierList()
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id })
 
-	const style: CSSProperties = {
+	const style = {
 		transform: CSS.Transform.toString(transform),
 		transition,
 		backgroundColor: item.color,
@@ -627,7 +591,7 @@ const TierRow = ({ tier, isOverlay }: TierRowProps) => {
 	// a separate useDroppable with the same id would conflict with it
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tier.id })
 
-	const index = tierList.tiers.findIndex((t) => t.id === tier.id)
+	const index = tierList.tiers.findIndex((candidate) => candidate.id === tier.id)
 	const items = getItemsForTier(tier.id)
 
 	const style = {
@@ -679,8 +643,6 @@ const TierRow = ({ tier, isOverlay }: TierRowProps) => {
 	)
 }
 
-// ── Toolbar ───────────────────────────────────────────────────────────────────
-
 const shapes = [
 	{ name: 'square', Icon: LuSquare },
 	{ name: 'rounded', Icon: LuSquircle },
@@ -707,7 +669,7 @@ const EditSettingsDialog = () => {
 					className='toggle'
 					id='show-labels'
 					checked={settings.showLabels}
-					onChange={(e) => setSettings({ ...settings, showLabels: e.target.checked })}
+					onChange={(event) => setSettings({ ...settings, showLabels: event.target.checked })}
 				/>
 
 				<label htmlFor='show-images'>Show Images</label>
@@ -716,7 +678,7 @@ const EditSettingsDialog = () => {
 					className='toggle'
 					id='show-images'
 					checked={settings.showImages}
-					onChange={(e) => setSettings({ ...settings, showImages: e.target.checked })}
+					onChange={(event) => setSettings({ ...settings, showImages: event.target.checked })}
 				/>
 
 				<span>Item Shape</span>
@@ -742,15 +704,14 @@ const ExportButton = () => {
 
 	const handleExport = () => {
 		try {
-			const jsonStr = JSON.stringify(tierList, null, 2)
-			const blob = new Blob([jsonStr], { type: 'application/json' })
+			const blob = new Blob([JSON.stringify(tierList, null, 2)], { type: 'application/json' })
 			const url = URL.createObjectURL(blob)
-			const a = document.createElement('a')
-			a.href = url
-			a.download = `${tierList.title.replace(/\s+/g, '-').toLowerCase()}.json`
-			document.body.appendChild(a)
-			a.click()
-			document.body.removeChild(a)
+			const link = document.createElement('a')
+			link.href = url
+			link.download = `${tierList.title.replace(/\s+/g, '-').toLowerCase()}.json`
+			document.body.appendChild(link)
+			link.click()
+			document.body.removeChild(link)
 			URL.revokeObjectURL(url)
 			toast.success('Tier list exported')
 		} catch {
@@ -767,11 +728,11 @@ const ExportButton = () => {
 
 const importSchema = z
 	.string()
-	.transform((s, ctx) => {
+	.transform((value, context) => {
 		try {
-			return JSON.parse(s)
+			return JSON.parse(value)
 		} catch {
-			ctx.addIssue({ code: 'custom', message: 'Invalid JSON format' })
+			context.addIssue({ code: 'custom', message: 'Invalid JSON format' })
 			return z.NEVER
 		}
 	})
@@ -784,7 +745,9 @@ const ImportDialog = () => {
 	const [isDraggingFile, setIsDraggingFile] = useState(false)
 
 	const result = importSchema.safeParse(jsonInput)
-	const issues = result.error?.issues.map((i) => `${i.path.length ? i.path.join('.') : '(root)'}: ${i.message}`)
+	const issues = result.error?.issues.map(
+		(issue) => `${issue.path.length ? issue.path.join('.') : '(root)'}: ${issue.message}`,
+	)
 
 	const processJsonInput = () => {
 		if (!result.success) return
@@ -811,27 +774,27 @@ const ImportDialog = () => {
 			<div className='space-y-4 mt-2'>
 				<div
 					className={cn('relative', isDraggingFile && 'ring-2 ring-primary')}
-					onDragOver={(e) => {
-						e.preventDefault()
+					onDragOver={(event) => {
+						event.preventDefault()
 						setIsDraggingFile(true)
 					}}
-					onDragLeave={(e) => {
-						e.preventDefault()
+					onDragLeave={(event) => {
+						event.preventDefault()
 						setIsDraggingFile(false)
 					}}
-					onDrop={(e) => {
-						e.preventDefault()
+					onDrop={(event) => {
+						event.preventDefault()
 						setIsDraggingFile(false)
-						const file = e.dataTransfer.files[0]
+						const file = event.dataTransfer.files[0]
 						if (file?.type !== 'application/json') return toast.error('Please drop a valid JSON file.')
 						const reader = new FileReader()
-						reader.onload = (event) => setJsonInput(String(event.target?.result ?? ''))
+						reader.onload = (loadEvent) => setJsonInput(String(loadEvent.target?.result ?? ''))
 						reader.readAsText(file)
 					}}
 				>
 					<TextArea
 						value={jsonInput}
-						onChange={(e) => setJsonInput(e.target.value)}
+						onChange={(event) => setJsonInput(event.target.value)}
 						className='font-mono text-xs w-full min-h-32 max-h-[60ch]'
 					/>
 					{isDraggingFile && (
@@ -874,8 +837,6 @@ const ImportDialog = () => {
 	)
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
-
 // Whether the dragged item sits past the over item (next wrap line, or right of its midpoint)
 const isAfterOverItem = (active: Active, over: Over) => {
 	const { translated } = active.rect.current
@@ -911,17 +872,17 @@ const Index = () => {
 		useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
 	)
 
-	const isTierId = (id: UniqueIdentifier) => tierList.tiers.some((t) => t.id === id)
+	const isTierId = (id: UniqueIdentifier) => tierList.tiers.some((tier) => tier.id === id)
 	const isContainerId = (id: UniqueIdentifier) => id === BANK_ID || isTierId(id)
 
 	const getContainerItemIds = (containerId: string) =>
 		containerId === BANK_ID
 			? unassignedItems.map((item) => item.id)
-			: (tierList.tiers.find((t) => t.id === containerId)?.itemIds ?? [])
+			: (tierList.tiers.find((tier) => tier.id === containerId)?.itemIds ?? [])
 
 	const findContainerId = (id: UniqueIdentifier) => {
 		if (isContainerId(id)) return String(id)
-		const tier = tierList.tiers.find((t) => t.itemIds.includes(String(id)))
+		const tier = tierList.tiers.find((candidate) => candidate.itemIds.includes(String(id)))
 		if (tier) return tier.id
 		return tierList.items.some((item) => item.id === id) ? BANK_ID : undefined
 	}
@@ -931,7 +892,10 @@ const Index = () => {
 	// snaps to the closest item inside it so the whole row is a drop target.
 	const collisionDetection: CollisionDetection = (args) => {
 		if (isTierId(args.active.id))
-			return closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((c) => isTierId(c.id)) })
+			return closestCenter({
+				...args,
+				droppableContainers: args.droppableContainers.filter((container) => isTierId(container.id)),
+			})
 
 		const pointerCollisions = pointerWithin(args)
 		const collisions = pointerCollisions.length > 0 ? pointerCollisions : rectIntersection(args)
@@ -951,7 +915,7 @@ const Index = () => {
 				const closestItem = closestCenter({
 					...args,
 					droppableContainers: args.droppableContainers.filter(
-						(c) => c.id !== overId && containerItemIds.includes(String(c.id)),
+						(container) => container.id !== overId && containerItemIds.includes(String(container.id)),
 					),
 				})[0]
 				if (closestItem) overId = closestItem.id
@@ -964,7 +928,7 @@ const Index = () => {
 
 	const handleDragStart = (event: DragStartEvent) => {
 		const activeId = event.active.id
-		const item = tierList.items.find((i) => i.id === activeId)
+		const item = tierList.items.find((candidate) => candidate.id === activeId)
 
 		if (item) {
 			setActiveItem(item)
@@ -972,7 +936,7 @@ const Index = () => {
 			return
 		}
 
-		const tier = tierList.tiers.find((t) => t.id === activeId)
+		const tier = tierList.tiers.find((candidate) => candidate.id === activeId)
 
 		if (tier) {
 			setActiveTier(tier)
@@ -1023,7 +987,7 @@ const Index = () => {
 				<input
 					className='input font-bold grow'
 					value={tierList.title}
-					onChange={(e) => handleTitleUpdate(e.target.value)}
+					onChange={(event) => handleTitleUpdate(event.target.value)}
 				/>
 				<ThemePicker />
 				<EditSettingsDialog />
@@ -1039,7 +1003,7 @@ const Index = () => {
 				onDragOver={handleDragOver}
 				onDragEnd={handleDragEnd}
 			>
-				<SortableContext items={tierList.tiers.map((t) => t.id)} strategy={rectSortingStrategy}>
+				<SortableContext items={tierList.tiers.map((tier) => tier.id)} strategy={rectSortingStrategy}>
 					<div className='border-collapse'>
 						{tierList.tiers.map((tier) => (
 							<TierRow key={tier.id} tier={tier} />

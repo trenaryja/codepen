@@ -28,7 +28,6 @@ import {
 	WiThunderstorm,
 } from 'https://esm.sh/react-icons/wi'
 
-// ── Constants ─────────────────────────────────────────────────────────────────
 const HOUR = 3_600_000
 const DAY = 86_400_000
 const QUARTER_HOUR = 900_000
@@ -53,7 +52,6 @@ const DEMO_TRACKS = [
 
 const round = (value: unknown) => Math.round(Number(value ?? 0))
 
-// ── Time helpers (Intl-based) ─────────────────────────────────────────────────
 const formatterCache = new Map<string, Intl.DateTimeFormat>()
 
 const getFormatter = (options: Intl.DateTimeFormatOptions) => {
@@ -139,7 +137,7 @@ const parseWallTime = (raw: string): number[] | null => {
 	return [(hour % 12) * 60 + minute, ((hour % 12) + 12) * 60 + minute]
 }
 
-// ── Solar altitude (NOAA-style, used only to pick day vs night icons) ─────────
+// NOAA-style solar altitude, used only to pick day vs night icons.
 const solarAltitude = (instant: number, latitude: number, longitude: number) => {
 	const days = instant / DAY - 10957.5
 	const meanLongitude = 280.46 + 0.9856474 * days
@@ -158,7 +156,6 @@ const solarAltitude = (instant: number, latitude: number, longitude: number) => 
 	)
 }
 
-// ── Weather (open-meteo, no key) ──────────────────────────────────────────────
 type Weather = { temperature: number; code: number; feelsLike: number }
 
 const weatherKey = (city: City) => `${city.latitude.toFixed(2)},${city.longitude.toFixed(2)}`
@@ -183,6 +180,7 @@ const weatherGlyph = (code: number, day: boolean, className: string) => {
 	return <Icon className={className} />
 }
 
+// Live weather from open-meteo; no API key required.
 const useWeather = (cities: City[], fahrenheit: boolean) => {
 	const [weather, setWeather] = useState<Record<string, Weather>>({})
 	const [ready, setReady] = useState(false)
@@ -237,7 +235,7 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 	return { weather, ready }
 }
 
-// ── Forecast, fetched per city per mode on first expand ───────────────────────
+// Forecast is fetched per city per mode, on first expand.
 // One cell shape serves both modes: hourly = temp + rain %, daily = high (primary) / low (secondary) + rain %
 type ForecastCell = {
 	time: string
@@ -306,7 +304,7 @@ const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 	return { cells, loading: cells === undefined }
 }
 
-// ── Home detection: IANA zone immediately, IP geolocation refines it ──────────
+// Zones the platform still reports under a superseded name.
 const TIME_ZONE_ALIASES: Record<string, string> = {
 	'Asia/Calcutta': 'Asia/Kolkata',
 	'Asia/Saigon': 'Asia/Ho_Chi_Minh',
@@ -324,6 +322,7 @@ const fallbackHome: City = {
 	timeZone: homeTimeZone,
 }
 
+// The IANA zone resolves immediately; IP geolocation refines it to a real city.
 const useDetectedHome = () => {
 	const [detected, setDetected] = useState(fallbackHome)
 	const [pending, setPending] = useState(true)
@@ -362,7 +361,7 @@ const useDetectedHome = () => {
 	return { detected, pending }
 }
 
-// ── City search (open-meteo geocoding, no key) ────────────────────────────────
+// open-meteo geocoding, no API key required.
 const useCitySearch = (query: string) => {
 	const [matches, setMatches] = useState<City[]>(() => {
 		const lower = query.trim().toLowerCase()
@@ -428,7 +427,6 @@ const useCitySearch = (query: string) => {
 	return { matches, searching }
 }
 
-// ── Tracks + shared view settings ─────────────────────────────────────────────
 const VIEWS = ['list', 'bands'] as const
 type View = (typeof VIEWS)[number]
 
@@ -466,7 +464,6 @@ const loadStored = (): Stored | null => {
 	}
 }
 
-// ── Editable primitive ────────────────────────────────────────────────────────
 // A display button that swaps in place for a daisy input sized to match its own type scale
 const Editable = ({
 	display,
@@ -574,7 +571,6 @@ const expandOnClick = (onToggle: () => void) => (event: { target: EventTarget | 
 	onToggle()
 }
 
-// ── Weather widgets ───────────────────────────────────────────────────────────
 const WeatherChip = ({ city }: { city: City }) => {
 	const { instant, weather, weatherReady, fahrenheit } = useSettings()
 	if (isUtc(city)) return null
@@ -627,7 +623,6 @@ const ForecastPanel = ({ city }: { city: City }) => {
 	)
 }
 
-// ── Cards ─────────────────────────────────────────────────────────────────────
 const TrackCard = ({
 	track,
 	expanded,
@@ -704,7 +699,6 @@ const TrackCard = ({
 	)
 }
 
-// ── Bands view ────────────────────────────────────────────────────────────────
 const BAND_SAMPLE = HOUR / 2 // civil twilight lasts about one half-hour stop, so the gradient interpolates it softly
 const LABEL_STEP = 3 * HOUR
 
@@ -827,7 +821,6 @@ const BandsView = ({
 	)
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
 type SearchMode = { kind: 'add' | 'home' } | { kind: 'track'; id: string }
 
 const App = () => {

@@ -2,15 +2,8 @@ import { Field, Input, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import React, { useEffect, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
-type TimeUnit = {
-	label: string
-	value: number
-}
-
-function getElapsed(from: Date, now: Date): TimeUnit[] {
-	const ms = now.getTime() - from.getTime()
-	const absMs = Math.abs(ms)
-	const seconds = absMs / 1000
+function getElapsed(from: Date, now: Date) {
+	const seconds = Math.abs(now.getTime() - from.getTime()) / 1000
 	const minutes = seconds / 60
 	const hours = minutes / 60
 	const days = hours / 24
@@ -29,7 +22,7 @@ function getElapsed(from: Date, now: Date): TimeUnit[] {
 	]
 }
 
-function formatValue(value: number): string {
+function formatValue(value: number) {
 	if (value >= 100) return Math.floor(value).toLocaleString()
 	if (value >= 10) return value.toFixed(1)
 	if (value >= 1) return value.toFixed(2)
@@ -48,14 +41,14 @@ function Root() {
 		return () => clearInterval(id)
 	}, [])
 
-	const primaryUnit = elapsed.find((u) => u.value >= 1) ?? elapsed.at(-1)!
+	const primaryUnit = elapsed.find((unit) => unit.value >= 1) ?? elapsed.at(-1)!
 	const directionLabel = isFuture ? 'until' : 'since'
 
 	return (
 		<ThemeProvider>
 			<main className='min-h-screen full-bleed-container grid place-items-center content-center gap-y-10'>
 				<Field label='Pick a date & time' error={Number.isNaN(target.getTime()) ? 'Invalid date' : undefined}>
-					<Input type='datetime-local' value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
+					<Input type='datetime-local' value={targetDate} onChange={(event) => setTargetDate(event.target.value)} />
 				</Field>
 
 				{Number.isNaN(target.getTime()) ? null : (

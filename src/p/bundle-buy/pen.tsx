@@ -12,35 +12,14 @@ import {
 	LuTrash2,
 	LuX,
 } from 'https://esm.sh/react-icons/lu'
-import { z } from 'https://esm.sh/zod'
 
-// ─── Schema (import/export wire format) ─────────────────────────────────────
-
-const ScenarioItemSchema = z.object({ name: z.string().min(1), symbol: z.string().min(1) })
-
-const ScenarioBundleSchema = z.object({
-	name: z.string().min(1),
-	price: z.number().positive(),
-	quantities: z.array(z.number().int().nonnegative()),
-})
-
+// The wire format for scenarios: what `PRESET_SCENARIOS` are authored in and what the
+// AI prompt asks for back. `hydrate` turns it into the runtime shape below.
 type ScenarioImport = {
 	name: string
 	items: { name: string; symbol: string }[]
 	bundles: { name: string; price: number; quantities: number[] }[]
 }
-
-const ScenarioSchema = z
-	.object({
-		name: z.string().min(1),
-		items: z.array(ScenarioItemSchema).min(1),
-		bundles: z.array(ScenarioBundleSchema).min(1),
-	})
-	.refine((s: ScenarioImport) => s.bundles.every((b) => b.quantities.length === s.items.length), {
-		message: 'Every bundle quantities array must have the same length as items',
-	})
-
-// ─── Types (runtime) ────────────────────────────────────────────────────────
 
 type Item = { id: string; displayName: string; variable: string }
 
@@ -60,12 +39,6 @@ type Solution = {
 type ImpliedValue = { itemId: string; value: number }
 
 const uid = () => crypto.randomUUID().slice(0, 8)
-
-// ─── Hydrate / Dehydrate ────────────────────────────────────────────────────
-
-function parseScenario(json: string): ScenarioImport {
-	return ScenarioSchema.parse(JSON.parse(json))
-}
 
 function hydrate(input: ScenarioImport): Scenario {
 	const items: Item[] = input.items.map((i) => ({ id: uid(), displayName: i.name, variable: i.symbol }))
@@ -90,8 +63,7 @@ function dehydrate(scenario: Scenario): ScenarioImport {
 	}
 }
 
-// ─── Solver: Brute-force ILP for small bundle problems ───────────────────────
-
+// Brute-force ILP — viable only because bundle counts stay small.
 function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
 	if (bundles.length === 0 || items.length === 0) return null
 
@@ -159,8 +131,7 @@ function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
 	return best
 }
 
-// ─── Least-squares implied value decomposition ───────────────────────────────
-
+// Least-squares decomposition of bundle prices into per-item implied values.
 function deriveImpliedValues(bundles: Bundle[], items: Item[]): ImpliedValue[] {
 	if (bundles.length === 0 || items.length === 0) return []
 
@@ -203,8 +174,6 @@ function deriveImpliedValues(bundles: Bundle[], items: Item[]): ImpliedValue[] {
 
 	return items.map((item, i) => ({ itemId: item.id, value: x[i] }))
 }
-
-// ─── Default scenario ────────────────────────────────────────────────────────
 
 const USB_C_SCENARIO: Scenario = {
 	id: 'usb-c-magnetic',
@@ -316,8 +285,6 @@ ${JSON.stringify(example, null, 2)}
 
 Generate a scenario for: [DESCRIBE YOUR PRODUCT/SITUATION HERE]`
 }
-
-// ─── Components ──────────────────────────────────────────────────────────────
 
 function ItemEditor({ items, onChange }: { items: Item[]; onChange: (items: Item[]) => void }) {
 	const addItem = () => onChange([...items, { id: uid(), displayName: '', variable: '' }])
@@ -512,11 +479,11 @@ function ValueDecomposition({
 			</p>
 			<div className='flex flex-wrap gap-3'>
 				{items.map((item) => {
-					const val = valueMap[item.id] ?? 0
+					const value = valueMap[item.id] ?? 0
 					return (
 						<div key={item.id} className='surface p-4 text-center min-w-32'>
 							<div className='text-2xl mb-1'>{item.variable}</div>
-							<div className='text-xl font-mono font-bold'>{fmt(val)}</div>
+							<div className='text-xl font-mono font-bold'>{fmt(value)}</div>
 							<div className='text-xs opacity-60'>{item.displayName}</div>
 						</div>
 					)
@@ -601,7 +568,6 @@ function SolutionDisplay({
 
 	const bundleMap = Object.fromEntries(bundles.map((b) => [b.id, b]))
 	const purchasedBundles = Object.entries(solution.bundleCounts).filter(([, count]) => count > 0)
-	if (!Object.values(needs).some((n) => n > 0)) return null
 
 	return (
 		<div className='space-y-4'>
@@ -740,12 +706,12 @@ function AllCombinationsTable({
 						</tr>
 					</thead>
 					<tbody>
-						{combos.map((combo, idx) => {
+						{combos.map((combo, index) => {
 							const isOptimal =
 								solution && bundles.every((b, j) => (solution.bundleCounts[b.id] ?? 0) === combo.counts[j])
 							return (
 								<tr key={combo.counts.join('-')} className={isOptimal ? 'bg-success/15 font-bold' : ''}>
-									<td className='text-right opacity-50'>#{idx + 1}</td>
+									<td className='text-right opacity-50'>#{index + 1}</td>
 									{bundles.map((b, j) => (
 										<td key={b.id} className='text-center font-mono'>
 											{/* eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- a zero count intentionally renders the dimmed 0 */}
@@ -1004,7 +970,7 @@ function Root() {
 	}
 
 	const updateScenario = (patch: Partial<Scenario>) =>
-		setScenarios((prev) => prev.map((s) => (s.id === scenario.id ? { ...s, ...patch } : s)))
+		setScenarios((previous) => previous.map((s) => (s.id === scenario.id ? { ...s, ...patch } : s)))
 
 	const hasNeeds = Object.values(needs).some((n) => n > 0)
 	const solution = hasNeeds ? solve(scenario.bundles, scenario.items, needs) : null
@@ -1034,13 +1000,13 @@ function Root() {
 						}}
 						onNew={() => {
 							const s = { ...EMPTY_SCENARIO, id: uid() }
-							setScenarios((prev) => [...prev, s])
+							setScenarios((previous) => [...previous, s])
 							setActiveId(s.id)
 							setConfigOpen(true)
 						}}
 						onDuplicate={() => {
 							const s = { ...scenario, id: uid(), name: `${scenario.name} (copy)` }
-							setScenarios((prev) => [...prev, s])
+							setScenarios((previous) => [...previous, s])
 							setActiveId(s.id)
 						}}
 						onRestoreDefaults={() => {

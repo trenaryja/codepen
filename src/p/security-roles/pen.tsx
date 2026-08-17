@@ -15,8 +15,6 @@ import React, { useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuKeyRound, LuPlus, LuShieldCheck, LuShuffle, LuTrash2, LuUserX, LuX } from 'https://esm.sh/react-icons/lu'
 
-// ─── Constants ────────────────────────────────────────────────
-
 const PERMISSIONS = [
 	'programs:view',
 	'programs:edit',
@@ -27,19 +25,20 @@ const PERMISSIONS = [
 ] as const
 type Permission = (typeof PERMISSIONS)[number]
 
-const PERM_GROUPS = [
-	{ asset: 'Programs', perms: ['programs:view', 'programs:edit'] as Permission[] },
-	{ asset: 'Solicitations', perms: ['solicitations:view', 'solicitations:edit'] as Permission[] },
-	{ asset: 'Projects', perms: ['projects:view', 'projects:edit'] as Permission[] },
+const PERMISSION_GROUPS: { asset: string; permissions: Permission[] }[] = [
+	{ asset: 'Programs', permissions: ['programs:view', 'programs:edit'] },
+	{ asset: 'Solicitations', permissions: ['solicitations:view', 'solicitations:edit'] },
+	{ asset: 'Projects', permissions: ['projects:view', 'projects:edit'] },
 ]
 
-const ORG_NAMES = ['Coal', 'Oil & Gas', 'Solar', 'Wind', 'Nuclear'] as const
+const ORG_NAMES = ['Coal', 'Oil & Gas', 'Solar', 'Wind', 'Nuclear']
 
-// ─── Types ────────────────────────────────────────────────────
+// The two models this pen compares. Current: every role bakes in its org scope, so the same
+// `baseRole` is duplicated once per org. Proposed: roles are pure permission sets and orgs are
+// attached per user. Both render from the same `UserData.orgRoles` so the toggle can flip live.
+type OldRole = { name: string; baseRole: string; permissions: Permission[]; orgs: string[] }
 
-type OldRoleDef = { name: string; baseRole: string; permissions: Permission[]; orgs: string[] }
-
-type NewRoleDef = { name: string; permissions: Permission[] }
+type NewRole = { name: string; permissions: Permission[] }
 
 type OrgRole = { org: string; roles: string[] }
 
@@ -54,9 +53,7 @@ type UserData = {
 	orgRoles: OrgRole[]
 }
 
-// ─── Defaults ─────────────────────────────────────────────────
-
-const DEFAULT_NEW_ROLES: NewRoleDef[] = [
+const DEFAULT_NEW_ROLES: NewRole[] = [
 	{ name: 'Admin', permissions: [...PERMISSIONS] },
 	{
 		name: 'Power User',
@@ -70,24 +67,22 @@ const DEFAULT_NEW_ROLES: NewRoleDef[] = [
 	{ name: 'Basic User', permissions: ['programs:view', 'solicitations:view', 'projects:view'] },
 ]
 
-const DEFAULT_OLD_ROLES: OldRoleDef[] = DEFAULT_NEW_ROLES.flatMap((r) =>
+const DEFAULT_OLD_ROLES: OldRole[] = DEFAULT_NEW_ROLES.flatMap((role) =>
 	ORG_NAMES.map((org) => ({
-		name: `${org} ${r.name}`,
-		baseRole: r.name,
-		permissions: [...r.permissions],
+		name: `${org} ${role.name}`,
+		baseRole: role.name,
+		permissions: [...role.permissions],
 		orgs: [org],
 	})),
 )
 
-// ─── Generation ───────────────────────────────────────────────
+const toggle = <T,>(values: readonly T[], value: T) =>
+	values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
 
-const pick = <T,>(arr: readonly T[], min = 1, max = arr.length) =>
-	faker.helpers.arrayElements([...arr], faker.number.int({ min, max: Math.min(max, arr.length) }))
+const pick = <T,>(values: readonly T[], min = 1, max = values.length) =>
+	faker.helpers.arrayElements([...values], faker.number.int({ min, max: Math.min(max, values.length) }))
 
-const genOrgRoles = (roleNames: string[]): OrgRole[] =>
-	pick(ORG_NAMES, 1, 4).map((org) => ({ org, roles: pick(roleNames, 1, 2) }))
-
-const genUser = (roleNames: string[]): UserData => ({
+const generateUser = (roleNames: string[]) => ({
 	id: faker.string.uuid(),
 	firstName: faker.person.firstName(),
 	lastName: faker.person.lastName(),
@@ -95,211 +90,129 @@ const genUser = (roleNames: string[]): UserData => ({
 	avatar: faker.image.avatar(),
 	isSystemAdmin: faker.datatype.boolean({ probability: 0.1 }),
 	active: true,
-	orgRoles: genOrgRoles(roleNames),
+	orgRoles: pick(ORG_NAMES, 1, 4).map((org) => ({ org, roles: pick(roleNames, 1, 2) })),
 })
 
-const genAll = (roleNames: string[], n = 10) => Array.from({ length: n }, () => genUser(roleNames))
+const generateUsers = (roleNames: string[], count = 10) => Array.from({ length: count }, () => generateUser(roleNames))
 
-const fullName = (u: UserData) => `${u.firstName} ${u.lastName}`
+const fullName = (user: UserData) => `${user.firstName} ${user.lastName}`
 
-// ─── Old model helpers ───────────────────────────────────────
-
-const getUserActiveOldRoles = (orgRoles: OrgRole[], oldRoles: OldRoleDef[]) =>
+const getUserActiveOldRoles = (orgRoles: OrgRole[], oldRoles: OldRole[]) =>
 	oldRoles
-		.filter((r) => r.orgs.some((org) => orgRoles.some((or) => or.org === org && or.roles.includes(r.baseRole))))
-		.map((r) => r.name)
+		.filter((role) =>
+			role.orgs.some((org) => orgRoles.some((orgRole) => orgRole.org === org && orgRole.roles.includes(role.baseRole))),
+		)
+		.map((role) => role.name)
 
-const toggleOldRoleForUser = (user: UserData, roleName: string, oldRoles: OldRoleDef[]): UserData => {
-	const role = oldRoles.find((r) => r.name === roleName)
+// An old role spans several orgs, so toggling it adds/removes its `baseRole` in every org it covers.
+const toggleOldRoleForUser = (user: UserData, roleName: string, oldRoles: OldRole[]) => {
+	const role = oldRoles.find((candidate) => candidate.name === roleName)
 	if (!role) return user
 	const isActive = getUserActiveOldRoles(user.orgRoles, oldRoles).includes(roleName)
-	let newOrgRoles = user.orgRoles.map((or) => ({ ...or, roles: [...or.roles] }))
+	let orgRoles = user.orgRoles.map((orgRole) => ({ ...orgRole, roles: [...orgRole.roles] }))
 
 	for (const org of role.orgs) {
 		if (isActive) {
-			newOrgRoles = newOrgRoles.map((or) =>
-				or.org === org ? { ...or, roles: or.roles.filter((r) => r !== role.baseRole) } : or,
+			orgRoles = orgRoles.map((orgRole) =>
+				orgRole.org === org ? { ...orgRole, roles: orgRole.roles.filter((name) => name !== role.baseRole) } : orgRole,
 			)
 		} else {
-			const existing = newOrgRoles.find((or) => or.org === org)
-
-			if (existing) {
-				if (!existing.roles.includes(role.baseRole)) existing.roles.push(role.baseRole)
-			} else {
-				newOrgRoles.push({ org, roles: [role.baseRole] })
-			}
+			const existing = orgRoles.find((orgRole) => orgRole.org === org)
+			if (!existing) orgRoles.push({ org, roles: [role.baseRole] })
+			else if (!existing.roles.includes(role.baseRole)) existing.roles.push(role.baseRole)
 		}
 	}
 
-	return { ...user, orgRoles: newOrgRoles.filter((or) => or.roles.length > 0) }
+	return { ...user, orgRoles: orgRoles.filter((orgRole) => orgRole.roles.length > 0) }
 }
 
-// ─── Shared UI ───────────────────────────────────────────────
-
-const BadgeMultiSelect = ({
+const BadgeMultiSelect = <T extends string>({
 	label,
 	options,
 	active,
 	onToggle,
 }: {
 	label: string
-	options: string[]
-	active: string[]
-	onToggle: (v: string) => void
+	options: readonly T[]
+	active: readonly T[]
+	onToggle: (value: T) => void
 }) => (
 	<Field label={label}>
 		<div className='flex flex-wrap gap-1'>
-			{options.map((v) => (
+			{options.map((option) => (
 				<button
 					type='button'
-					key={v}
-					className={`badge badge-xs cursor-pointer transition-colors ${active.includes(v) ? 'badge-primary' : 'badge-ghost opacity-30 hover:opacity-60'}`}
-					onClick={() => onToggle(v)}
+					key={option}
+					className={`badge badge-xs cursor-pointer transition-colors ${active.includes(option) ? 'badge-primary' : 'badge-ghost opacity-30 hover:opacity-60'}`}
+					onClick={() => onToggle(option)}
 				>
-					{v}
+					{option}
 				</button>
 			))}
 		</div>
 	</Field>
 )
 
-// ─── Role Cards ──────────────────────────────────────────────
-
-const OldRoleCard = ({
+// `orgs` present means the old model (org-scoped role): it adds the org count to the subtitle and an
+// Orgs picker. The caller merges `onUpdate`'s result back into its own role so `baseRole`/`orgs` survive.
+const RoleCard = ({
 	role,
+	orgs,
 	onUpdate,
 	onDelete,
 }: {
-	role: OldRoleDef
-	onUpdate: (r: OldRoleDef) => void
+	role: NewRole
+	orgs?: { active: string[]; onToggle: (org: string) => void }
+	onUpdate: (role: NewRole) => void
 	onDelete?: () => void
-}) => {
-	const togglePerm = (p: string) => {
-		const perm = p as Permission
-		const permissions = role.permissions.includes(perm)
-			? role.permissions.filter((x) => x !== perm)
-			: [...role.permissions, perm]
-		onUpdate({ ...role, permissions })
-	}
-
-	const toggleOrg = (org: string) => {
-		const orgs = role.orgs.includes(org) ? role.orgs.filter((x) => x !== org) : [...role.orgs, org]
-		onUpdate({ ...role, orgs })
-	}
-
-	return (
-		<div className='collapse collapse-arrow bg-base-200 mb-2'>
-			<input type='checkbox' />
-			<div className='collapse-title flex items-center gap-3 pr-10'>
-				<div className='flex-1 min-w-0'>
-					<div className='text-sm font-medium truncate leading-tight'>{role.name}</div>
-					<div className='text-xs opacity-40'>
-						{role.orgs.length} org{role.orgs.length !== 1 ? 's' : ''} · {role.permissions.length} permissions
-					</div>
+}) => (
+	<div className='collapse collapse-arrow bg-base-200 mb-2'>
+		<input type='checkbox' />
+		<div className='collapse-title flex items-center gap-3 pr-10'>
+			<div className='flex-1 min-w-0'>
+				<div className='text-sm font-medium truncate leading-tight'>{role.name}</div>
+				<div className='text-xs opacity-40'>
+					{orgs && `${orgs.active.length} org${orgs.active.length !== 1 ? 's' : ''} · `}
+					{role.permissions.length} permissions
 				</div>
-				{onDelete && (
-					<button
-						type='button'
-						title='Delete role'
-						className='opacity-20 hover:opacity-80 hover:text-error cursor-pointer z-10'
-						onClick={(e) => {
-							e.stopPropagation()
-							onDelete()
-						}}
-					>
-						<LuX size={14} />
-					</button>
-				)}
 			</div>
-			<div className='collapse-content'>
-				<div className='grid gap-1.5 pt-1'>
-					<Field label='Name'>
-						<Input
-							className='input-xs w-full'
-							value={role.name}
-							onChange={(e) => onUpdate({ ...role, name: e.target.value })}
-						/>
-					</Field>
-					<BadgeMultiSelect label='Orgs' options={[...ORG_NAMES]} active={role.orgs} onToggle={toggleOrg} />
-					{PERM_GROUPS.map((g) => (
-						<BadgeMultiSelect
-							key={g.asset}
-							label={g.asset}
-							options={g.perms}
-							active={role.permissions}
-							onToggle={togglePerm}
-						/>
-					))}
-				</div>
+			{onDelete && (
+				<button
+					type='button'
+					title='Delete role'
+					className='opacity-20 hover:opacity-80 hover:text-error cursor-pointer z-10'
+					onClick={(event) => {
+						event.stopPropagation()
+						onDelete()
+					}}
+				>
+					<LuX size={14} />
+				</button>
+			)}
+		</div>
+		<div className='collapse-content'>
+			<div className='grid gap-1.5 pt-1'>
+				<Field label='Name'>
+					<Input
+						className='input-xs w-full'
+						value={role.name}
+						onChange={(event) => onUpdate({ ...role, name: event.target.value })}
+					/>
+				</Field>
+				{orgs && <BadgeMultiSelect label='Orgs' options={ORG_NAMES} active={orgs.active} onToggle={orgs.onToggle} />}
+				{PERMISSION_GROUPS.map((group) => (
+					<BadgeMultiSelect
+						key={group.asset}
+						label={group.asset}
+						options={group.permissions}
+						active={role.permissions}
+						onToggle={(permission) => onUpdate({ ...role, permissions: toggle(role.permissions, permission) })}
+					/>
+				))}
 			</div>
 		</div>
-	)
-}
-
-const NewRoleCard = ({
-	role,
-	onUpdate,
-	onDelete,
-}: {
-	role: NewRoleDef
-	onUpdate: (r: NewRoleDef) => void
-	onDelete?: () => void
-}) => {
-	const togglePerm = (p: string) => {
-		const perm = p as Permission
-		const permissions = role.permissions.includes(perm)
-			? role.permissions.filter((x) => x !== perm)
-			: [...role.permissions, perm]
-		onUpdate({ ...role, permissions })
-	}
-
-	return (
-		<div className='collapse collapse-arrow bg-base-200 mb-2'>
-			<input type='checkbox' />
-			<div className='collapse-title flex items-center gap-3 pr-10'>
-				<div className='flex-1 min-w-0'>
-					<div className='text-sm font-medium truncate leading-tight'>{role.name}</div>
-					<div className='text-xs opacity-40'>{role.permissions.length} permissions</div>
-				</div>
-				{onDelete && (
-					<button
-						type='button'
-						title='Delete role'
-						className='opacity-20 hover:opacity-80 hover:text-error cursor-pointer z-10'
-						onClick={(e) => {
-							e.stopPropagation()
-							onDelete()
-						}}
-					>
-						<LuX size={14} />
-					</button>
-				)}
-			</div>
-			<div className='collapse-content'>
-				<div className='grid gap-1.5 pt-1'>
-					<Field label='Name'>
-						<Input
-							className='input-xs w-full'
-							value={role.name}
-							onChange={(e) => onUpdate({ ...role, name: e.target.value })}
-						/>
-					</Field>
-					{PERM_GROUPS.map((g) => (
-						<BadgeMultiSelect
-							key={g.asset}
-							label={g.asset}
-							options={g.perms}
-							active={role.permissions}
-							onToggle={togglePerm}
-						/>
-					))}
-				</div>
-			</div>
-		</div>
-	)
-}
-
-// ─── User Card (shared wrapper + security slot) ──────────────
+	</div>
+)
 
 const UserCard = ({
 	user,
@@ -307,7 +220,7 @@ const UserCard = ({
 	children,
 }: {
 	user: UserData
-	onUpdate: (u: UserData) => void
+	onUpdate: (user: UserData) => void
 	children: React.ReactNode
 }) => (
 	<div className='collapse collapse-arrow bg-base-200 mb-2'>
@@ -337,14 +250,14 @@ const UserCard = ({
 							<Input
 								className='input-xs w-full'
 								value={user.firstName}
-								onChange={(e) => onUpdate({ ...user, firstName: e.target.value })}
+								onChange={(event) => onUpdate({ ...user, firstName: event.target.value })}
 							/>
 						</Field>
 						<Field label='Last Name'>
 							<Input
 								className='input-xs w-full'
 								value={user.lastName}
-								onChange={(e) => onUpdate({ ...user, lastName: e.target.value })}
+								onChange={(event) => onUpdate({ ...user, lastName: event.target.value })}
 							/>
 						</Field>
 					</div>
@@ -353,14 +266,14 @@ const UserCard = ({
 							className='input-xs w-full'
 							type='email'
 							value={user.email}
-							onChange={(e) => onUpdate({ ...user, email: e.target.value })}
+							onChange={(event) => onUpdate({ ...user, email: event.target.value })}
 						/>
 					</Field>
 					<Field label='Status'>
 						<Toggle
 							className='toggle-xs'
 							checked={user.active}
-							onChange={(e) => onUpdate({ ...user, active: e.target.checked })}
+							onChange={(event) => onUpdate({ ...user, active: event.target.checked })}
 						/>
 					</Field>
 				</Fieldset>
@@ -374,7 +287,7 @@ const UserCard = ({
 						<Toggle
 							className='toggle-xs toggle-error'
 							checked={user.isSystemAdmin}
-							onChange={(e) => onUpdate({ ...user, isSystemAdmin: e.target.checked })}
+							onChange={(event) => onUpdate({ ...user, isSystemAdmin: event.target.checked })}
 						/>
 					</Field>
 					{children}
@@ -408,36 +321,6 @@ const UserCard = ({
 	</div>
 )
 
-const OldUserSecurity = ({
-	user,
-	oldRoles,
-	onUpdate,
-}: {
-	user: UserData
-	oldRoles: OldRoleDef[]
-	onUpdate: (u: UserData) => void
-}) => {
-	const activeRoles = getUserActiveOldRoles(user.orgRoles, oldRoles)
-	const allRoleNames = oldRoles.map((r) => r.name)
-
-	return (
-		<Field label='Roles'>
-			<div className='flex flex-wrap gap-1'>
-				{allRoleNames.map((name) => (
-					<button
-						type='button'
-						key={name}
-						className={`badge badge-xs cursor-pointer transition-colors ${activeRoles.includes(name) ? 'badge-primary' : 'badge-ghost opacity-30 hover:opacity-60'}`}
-						onClick={() => onUpdate(toggleOldRoleForUser(user, name, oldRoles))}
-					>
-						{name}
-					</button>
-				))}
-			</div>
-		</Field>
-	)
-}
-
 const NewUserSecurity = ({
 	user,
 	roleNames,
@@ -445,40 +328,40 @@ const NewUserSecurity = ({
 }: {
 	user: UserData
 	roleNames: string[]
-	onUpdate: (u: UserData) => void
+	onUpdate: (user: UserData) => void
 }) => {
-	const toggleRole = (orgIdx: number, role: string) => {
-		const newOrgRoles = user.orgRoles
-			.map((or, i) => {
-				if (i !== orgIdx) return or
-				const roles = or.roles.includes(role) ? or.roles.filter((r) => r !== role) : [...or.roles, role]
-				return { ...or, roles }
-			})
-			.filter((or) => or.roles.length > 0)
-		onUpdate({ ...user, orgRoles: newOrgRoles })
-	}
+	const toggleRole = (orgIndex: number, role: string) =>
+		onUpdate({
+			...user,
+			orgRoles: user.orgRoles
+				.map((orgRole, i) => (i === orgIndex ? { ...orgRole, roles: toggle(orgRole.roles, role) } : orgRole))
+				.filter((orgRole) => orgRole.roles.length > 0),
+		})
 
 	const addOrg = (org: string) =>
 		onUpdate({ ...user, orgRoles: [...user.orgRoles, { org, roles: [roleNames.at(-1)!] }] })
-	const removeOrg = (idx: number) => onUpdate({ ...user, orgRoles: user.orgRoles.filter((_, i) => i !== idx) })
-	const availableOrgs = ORG_NAMES.filter((o) => !user.orgRoles.some((or) => or.org === o))
+
+	const removeOrg = (orgIndex: number) =>
+		onUpdate({ ...user, orgRoles: user.orgRoles.filter((_, i) => i !== orgIndex) })
+
+	const availableOrgs = ORG_NAMES.filter((org) => !user.orgRoles.some((orgRole) => orgRole.org === org))
 
 	return (
 		<>
-			{user.orgRoles.map((or, idx) => (
-				<div key={or.org} className='flex items-center gap-2 bg-base-300/50 rounded-lg px-2.5 py-1.5'>
-					<span className='text-xs font-semibold w-28 shrink-0 truncate'>{or.org}</span>
+			{user.orgRoles.map((orgRole, orgIndex) => (
+				<div key={orgRole.org} className='flex items-center gap-2 bg-base-300/50 rounded-lg px-2.5 py-1.5'>
+					<span className='text-xs font-semibold w-28 shrink-0 truncate'>{orgRole.org}</span>
 					<div className='flex flex-wrap gap-1 flex-1'>
-						{roleNames.map((r) => (
+						{roleNames.map((roleName) => (
 							<button
 								type='button'
-								key={r}
+								key={roleName}
 								className={`badge badge-xs cursor-pointer transition-colors ${
-									or.roles.includes(r) ? 'badge-primary' : 'badge-ghost opacity-30 hover:opacity-60'
+									orgRole.roles.includes(roleName) ? 'badge-primary' : 'badge-ghost opacity-30 hover:opacity-60'
 								}`}
-								onClick={() => toggleRole(idx, r)}
+								onClick={() => toggleRole(orgIndex, roleName)}
 							>
-								{r}
+								{roleName}
 							</button>
 						))}
 					</div>
@@ -486,7 +369,7 @@ const NewUserSecurity = ({
 						type='button'
 						title='Remove org'
 						className='opacity-20 hover:opacity-80 hover:text-error cursor-pointer'
-						onClick={() => removeOrg(idx)}
+						onClick={() => removeOrg(orgIndex)}
 					>
 						<LuX size={12} />
 					</button>
@@ -498,10 +381,10 @@ const NewUserSecurity = ({
 						<LuPlus size={10} /> org
 					</Button>
 					<ul tabIndex={0} className='dropdown-content menu bg-base-300 rounded-box z-20 w-36 p-1 shadow-lg'>
-						{availableOrgs.map((o) => (
-							<li key={o}>
-								<button type='button' className='text-xs' onClick={() => addOrg(o)}>
-									{o}
+						{availableOrgs.map((org) => (
+							<li key={org}>
+								<button type='button' className='text-xs' onClick={() => addOrg(org)}>
+									{org}
 								</button>
 							</li>
 						))}
@@ -512,60 +395,63 @@ const NewUserSecurity = ({
 	)
 }
 
-// ─── Root ─────────────────────────────────────────────────────
-
 const Root = () => {
-	const [oldRoles, setOldRoles] = useLocalStorage<OldRoleDef[]>({
+	const [oldRoles, setOldRoles] = useLocalStorage<OldRole[]>({
 		key: 'security-old-roles-v1',
 		defaultValue: DEFAULT_OLD_ROLES,
 	})
-	const [newRoles, setNewRoles] = useLocalStorage<NewRoleDef[]>({
+	const [newRoles, setNewRoles] = useLocalStorage<NewRole[]>({
 		key: 'security-new-roles-v1',
 		defaultValue: DEFAULT_NEW_ROLES,
 	})
-	const newRoleNames = newRoles.map((r) => r.name)
+	const newRoleNames = newRoles.map((role) => role.name)
 	const [users, setUsers] = useLocalStorage<UserData[]>({
 		key: 'security-users-v3',
-		defaultValue: genAll(newRoleNames),
+		defaultValue: generateUsers(newRoleNames),
 	})
 	const [tab, setTab] = useState<'roles' | 'users'>('users')
 	const [search, setSearch] = useState('')
 	const [proposed, setProposed] = useState(false)
 
-	// Migrate old data without firstName/lastName
-	const safeUsers = (users.length > 0 && 'firstName' in users[0]! ? users : null) ?? genAll(newRoleNames)
+	// Stored users predating firstName/lastName are unusable — regenerate rather than migrate.
+	const safeUsers = (users.length > 0 && 'firstName' in users[0]! ? users : null) ?? generateUsers(newRoleNames)
 
-	const updateUser = (i: number, u: UserData) => setUsers((prev) => prev.map((x, j) => (j === i ? u : x)))
+	const updateUser = (index: number, user: UserData) =>
+		setUsers((previous) => previous.map((existing, i) => (i === index ? user : existing)))
 
-	const updateOldRole = (i: number, r: OldRoleDef) => setOldRoles((prev) => prev.map((x, j) => (j === i ? r : x)))
-	const deleteOldRole = (i: number) => setOldRoles((prev) => prev.filter((_, j) => j !== i))
+	const updateOldRole = (index: number, role: OldRole) =>
+		setOldRoles((previous) => previous.map((existing, i) => (i === index ? role : existing)))
+
+	const updateNewRole = (index: number, role: NewRole) =>
+		setNewRoles((previous) => previous.map((existing, i) => (i === index ? role : existing)))
+
+	const deleteOldRole = (index: number) => setOldRoles((previous) => previous.filter((_, i) => i !== index))
+	const deleteNewRole = (index: number) => setNewRoles((previous) => previous.filter((_, i) => i !== index))
 
 	const addOldRole = () => {
 		const name = `New Role ${oldRoles.length + 1}`
-		setOldRoles((prev) => [...prev, { name, baseRole: name, permissions: [], orgs: [] }])
+		setOldRoles((previous) => [...previous, { name, baseRole: name, permissions: [], orgs: [] }])
 	}
 
-	const updateNewRole = (i: number, r: NewRoleDef) => setNewRoles((prev) => prev.map((x, j) => (j === i ? r : x)))
-	const deleteNewRole = (i: number) => setNewRoles((prev) => prev.filter((_, j) => j !== i))
-	const addNewRole = () => setNewRoles((prev) => [...prev, { name: `New Role ${prev.length + 1}`, permissions: [] }])
-
-	const randomizeAll = () => setUsers(genAll(newRoleNames))
+	const addNewRole = () =>
+		setNewRoles((previous) => [...previous, { name: `New Role ${previous.length + 1}`, permissions: [] }])
 
 	const reset = () => {
-		for (const k of ['security-old-roles-v1', 'security-new-roles-v1', 'security-users-v3']) localStorage.removeItem(k)
+		for (const key of ['security-old-roles-v1', 'security-new-roles-v1', 'security-users-v3'])
+			localStorage.removeItem(key)
 		setOldRoles(DEFAULT_OLD_ROLES)
 		setNewRoles(DEFAULT_NEW_ROLES)
-		setUsers(genAll(DEFAULT_NEW_ROLES.map((r) => r.name)))
+		setUsers(generateUsers(DEFAULT_NEW_ROLES.map((role) => role.name)))
 	}
 
-	const q = search.toLowerCase()
-	const filtered = q
+	const query = search.toLowerCase()
+	const filteredUsers = query
 		? safeUsers.filter(
-				(u) =>
-					fullName(u).toLowerCase().includes(q) ||
-					u.email.toLowerCase().includes(q) ||
-					u.firstName.toLowerCase().includes(q) ||
-					u.lastName.toLowerCase().includes(q),
+				(user) =>
+					fullName(user).toLowerCase().includes(query) ||
+					user.email.toLowerCase().includes(query) ||
+					user.firstName.toLowerCase().includes(query) ||
+					user.lastName.toLowerCase().includes(query),
 			)
 		: safeUsers
 
@@ -575,7 +461,7 @@ const Root = () => {
 				<header className='navbar bg-base-300 gap-2 sticky top-0 z-20 full-bleed px-4'>
 					<div className='flex-1 flex items-center gap-3'>
 						<span className={`text-sm font-medium ${!proposed ? 'opacity-100' : 'opacity-40'}`}>Current</span>
-						<Toggle checked={proposed} onChange={(e) => setProposed(e.target.checked)} />
+						<Toggle checked={proposed} onChange={(event) => setProposed(event.target.checked)} />
 						<span className={`text-sm font-medium ${proposed ? 'opacity-100' : 'opacity-40'}`}>Proposed</span>
 					</div>
 					<div>
@@ -583,7 +469,7 @@ const Root = () => {
 							className='input-sm w-48'
 							placeholder={tab === 'users' ? 'Search users...' : 'Search roles...'}
 							value={search}
-							onChange={(e) => setSearch(e.target.value)}
+							onChange={(event) => setSearch(event.target.value)}
 						/>
 					</div>
 					<div role='tablist' className='tabs tabs-boxed tabs-sm'>
@@ -602,7 +488,11 @@ const Root = () => {
 							Roles
 						</button>
 					</div>
-					<Button className='btn-sm btn-ghost btn-square' title='Randomize users' onClick={randomizeAll}>
+					<Button
+						className='btn-sm btn-ghost btn-square'
+						title='Randomize users'
+						onClick={() => setUsers(generateUsers(newRoleNames))}
+					>
 						<LuShuffle size={14} />
 					</Button>
 					<Button className='btn-sm btn-ghost btn-square text-error' title='Reset all data' onClick={reset}>
@@ -631,25 +521,26 @@ const Root = () => {
 					</div>
 
 					{tab === 'users' ? (
-						filtered.length ? (
+						filteredUsers.length ? (
 							<div className='space-y-2'>
-								{filtered
+								{filteredUsers
 									.toSorted((a, b) => fullName(a).localeCompare(fullName(b)))
-									.map((u) => {
-										const i = safeUsers.indexOf(u)
+									.map((user) => {
+										const index = safeUsers.indexOf(user)
 										return (
-											<UserCard key={u.id} user={u} onUpdate={(updated) => updateUser(i, updated)}>
+											<UserCard key={user.id} user={user} onUpdate={(updated) => updateUser(index, updated)}>
 												{proposed ? (
 													<NewUserSecurity
-														user={u}
+														user={user}
 														roleNames={newRoleNames}
-														onUpdate={(updated) => updateUser(i, updated)}
+														onUpdate={(updated) => updateUser(index, updated)}
 													/>
 												) : (
-													<OldUserSecurity
-														user={u}
-														oldRoles={oldRoles}
-														onUpdate={(updated) => updateUser(i, updated)}
+													<BadgeMultiSelect
+														label='Roles'
+														options={oldRoles.map((role) => role.name)}
+														active={getUserActiveOldRoles(user.orgRoles, oldRoles)}
+														onToggle={(name) => updateUser(index, toggleOldRoleForUser(user, name, oldRoles))}
 													/>
 												)}
 											</UserCard>
@@ -662,16 +553,16 @@ const Root = () => {
 					) : proposed ? (
 						<div className='space-y-2'>
 							{newRoles
-								.filter((r) => !q || r.name.toLowerCase().includes(q))
+								.filter((role) => !query || role.name.toLowerCase().includes(query))
 								.toSorted((a, b) => a.name.localeCompare(b.name))
-								.map((r) => {
-									const i = newRoles.indexOf(r)
+								.map((role) => {
+									const index = newRoles.indexOf(role)
 									return (
-										<NewRoleCard
-											key={i}
-											role={r}
-											onUpdate={(updated) => updateNewRole(i, updated)}
-											onDelete={newRoles.length > 1 ? () => deleteNewRole(i) : undefined}
+										<RoleCard
+											key={index}
+											role={role}
+											onUpdate={(updated) => updateNewRole(index, updated)}
+											onDelete={newRoles.length > 1 ? () => deleteNewRole(index) : undefined}
 										/>
 									)
 								})}
@@ -679,16 +570,20 @@ const Root = () => {
 					) : (
 						<div className='space-y-2'>
 							{oldRoles
-								.filter((r) => !q || r.name.toLowerCase().includes(q))
+								.filter((role) => !query || role.name.toLowerCase().includes(query))
 								.toSorted((a, b) => a.name.localeCompare(b.name))
-								.map((r) => {
-									const i = oldRoles.indexOf(r)
+								.map((role) => {
+									const index = oldRoles.indexOf(role)
 									return (
-										<OldRoleCard
-											key={i}
-											role={r}
-											onUpdate={(updated) => updateOldRole(i, updated)}
-											onDelete={oldRoles.length > 1 ? () => deleteOldRole(i) : undefined}
+										<RoleCard
+											key={index}
+											role={role}
+											orgs={{
+												active: role.orgs,
+												onToggle: (org) => updateOldRole(index, { ...role, orgs: toggle(role.orgs, org) }),
+											}}
+											onUpdate={(updated) => updateOldRole(index, { ...role, ...updated })}
+											onDelete={oldRoles.length > 1 ? () => deleteOldRole(index) : undefined}
 										/>
 									)
 								})}

@@ -62,31 +62,34 @@ const SOUNDS: Record<string, { label: string; url: string }> = {
 	warning: { label: 'Warning', url: `${CDN}/notification/warning.207aed9.mp3` },
 }
 
-const msFor = (mode: TimerMode, s: Settings) => s[`${mode}Duration`] * 60_000
+const msFor = (mode: TimerMode, settings: Settings) => settings[`${mode}Duration`] * 60_000
 
-const nextMode = (cur: TimerMode, count: number, interval: number): TimerMode =>
-	cur === 'pomodoro' ? ((count + 1) % interval === 0 ? 'longBreak' : 'shortBreak') : 'pomodoro'
+const nextMode = (current: TimerMode, count: number, interval: number): TimerMode =>
+	current === 'pomodoro' ? ((count + 1) % interval === 0 ? 'longBreak' : 'shortBreak') : 'pomodoro'
 
 const formatTime = (ms: number) => {
-	const s = Math.max(0, Math.ceil(ms / 1000))
-	return { mm: String(Math.floor(s / 60)).padStart(2, '0'), ss: String(s % 60).padStart(2, '0') }
+	const totalSeconds = Math.max(0, Math.ceil(ms / 1000))
+	return {
+		mm: String(Math.floor(totalSeconds / 60)).padStart(2, '0'),
+		ss: String(totalSeconds % 60).padStart(2, '0'),
+	}
 }
 
-const playSound = (key: string, vol: number) => {
-	const a = new Audio((SOUNDS[key] ?? SOUNDS.completed!).url)
-	a.volume = vol / 100
-	a.play()
+const playSound = (key: string, volume: number) => {
+	const audio = new Audio((SOUNDS[key] ?? SOUNDS.completed!).url)
+	audio.volume = volume / 100
+	audio.play()
 }
 
 const playAlarm = ({ alarmSound, alarmVolume, alarmRepeat }: Settings) => {
-	let n = 0
+	let repeats = 0
 	playSound(alarmSound, alarmVolume)
 
 	if (alarmRepeat > 1) {
 		const id = setInterval(() => {
 			playSound(alarmSound, alarmVolume)
-			n += 1
-			if (n >= alarmRepeat - 1) clearInterval(id)
+			repeats += 1
+			if (repeats >= alarmRepeat - 1) clearInterval(id)
 		}, 700)
 	}
 }
@@ -116,8 +119,8 @@ const useTimer = (settings: Settings) => {
 
 	const [displayMs, setDisplayMs] = useState(() => {
 		if (state.isRunning && state.targetEndTime) {
-			const r = state.targetEndTime - Date.now()
-			return r > 0 ? r : 0
+			const remaining = state.targetEndTime - Date.now()
+			return remaining > 0 ? remaining : 0
 		}
 
 		return state.remainingMs
@@ -145,8 +148,8 @@ const useTimer = (settings: Settings) => {
 
 	const { start: startTick, stop: stopTick } = useInterval(() => {
 		if (!state.isRunning || !state.targetEndTime) return
-		const r = state.targetEndTime - Date.now()
-		setDisplayMs(r > 0 ? r : 0)
+		const remaining = state.targetEndTime - Date.now()
+		setDisplayMs(remaining > 0 ? remaining : 0)
 	}, 100)
 
 	useEffect(() => {
@@ -169,9 +172,9 @@ const useTimer = (settings: Settings) => {
 	}, [displayMs, state.isRunning])
 	const syncDisplayFromClock = useEffectEvent(() => {
 		if (state.isRunning && state.targetEndTime) {
-			const r = state.targetEndTime - Date.now()
+			const remaining = state.targetEndTime - Date.now()
 			// eslint-disable-next-line @eslint-react/set-state-in-effect -- mount-only resync of the countdown from the persisted wall-clock target
-			setDisplayMs(r > 0 ? r : 0)
+			setDisplayMs(remaining > 0 ? remaining : 0)
 		}
 	})
 	useEffect(() => {
@@ -180,14 +183,15 @@ const useTimer = (settings: Settings) => {
 
 	const start = () => {
 		const ms = displayMs > 0 ? displayMs : msFor(state.mode, settings)
-		setState((s) => ({ ...s, isRunning: true, targetEndTime: Date.now() + ms }))
+		setState((current) => ({ ...current, isRunning: true, targetEndTime: Date.now() + ms }))
 	}
 
-	const pause = () => setState((s) => ({ ...s, isRunning: false, targetEndTime: null, remainingMs: displayMs }))
+	const pause = () =>
+		setState((current) => ({ ...current, isRunning: false, targetEndTime: null, remainingMs: displayMs }))
 
 	const reset = () => {
 		const ms = msFor(state.mode, settings)
-		setState((s) => ({ ...s, isRunning: false, targetEndTime: null, remainingMs: ms }))
+		setState((current) => ({ ...current, isRunning: false, targetEndTime: null, remainingMs: ms }))
 		setDisplayMs(ms)
 	}
 
@@ -198,7 +202,7 @@ const useTimer = (settings: Settings) => {
 
 	const switchMode = (mode: TimerMode) => {
 		const ms = msFor(mode, settings)
-		setState((s) => ({ ...s, mode, isRunning: false, targetEndTime: null, remainingMs: ms }))
+		setState((current) => ({ ...current, mode, isRunning: false, targetEndTime: null, remainingMs: ms }))
 		setDisplayMs(ms)
 		completedRef.current = false
 	}
@@ -217,7 +221,8 @@ function SettingsModal({
 	setSettings: (s: ((p: Settings) => Settings) | Settings) => void
 	settings: Settings
 }) {
-	const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setSettings((prev) => ({ ...prev, [k]: v }))
+	const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
+		setSettings((previous) => ({ ...previous, [key]: value }))
 
 	return (
 		<Modal open={open} onOpenChange={onOpenChange} backdropBlur>
