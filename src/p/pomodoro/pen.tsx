@@ -371,7 +371,7 @@ function Root() {
 
 				<div className='flex items-center gap-3'>
 					{state.isRunning && (
-						<Button className='btn-ghost btn-circle' onClick={reset} title='Reset (R)'>
+						<Button className='btn-ghost btn-circle' onClick={reset} title='Reset'>
 							<LuRefreshCw />
 						</Button>
 					)}
@@ -379,7 +379,7 @@ function Root() {
 						{state.isRunning ? 'Pause' : 'Start'}
 					</Button>
 					{state.isRunning && (
-						<Button className='btn-ghost btn-circle' onClick={skip} title='Skip (S)'>
+						<Button className='btn-ghost btn-circle' onClick={skip} title='Skip'>
 							<LuSkipForward />
 						</Button>
 					)}
