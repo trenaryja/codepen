@@ -1,12 +1,11 @@
 import { Input, ThemePicker, ThemeProvider } from '@trenaryja/ui'
 import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { Root } from 'react-dom/client'
 import { FiChevronRight } from 'react-icons/fi'
 import type { IconType } from 'react-icons/lib'
 import { penIcons } from 'virtual:pen-icons'
 
-const penModules = import.meta.glob('./p/*/index.html', { query: '?raw', import: 'default', eager: false })
+const penModules = import.meta.glob('./p/*/index.html', { query: '?raw', import: 'default' })
 
 const slugFromPath = (path: string) => path.split('/').at(-2) ?? path
 
@@ -27,9 +26,9 @@ const PenCard = ({ slug, href, Icon }: Item) => {
 	useEffect(() => {
 		const el = containerRef.current
 		if (!el) return
-		const obs = new ResizeObserver(([entry]) => setScale(entry!.contentRect.width / IFRAME_W))
-		obs.observe(el)
-		return () => obs.disconnect()
+		const observer = new ResizeObserver(([entry]) => setScale(entry!.contentRect.width / IFRAME_W))
+		observer.observe(el)
+		return () => observer.disconnect()
 	}, [])
 
 	return (
@@ -63,8 +62,7 @@ const PenCard = ({ slug, href, Icon }: Item) => {
 
 const App = () => {
 	const [query, setQuery] = useState('')
-	const q = query.toLowerCase()
-	const filtered = items.filter((item) => item.slug.includes(q))
+	const filtered = items.filter((item) => item.slug.includes(query.toLowerCase()))
 
 	return (
 		<ThemeProvider>
@@ -88,7 +86,4 @@ const App = () => {
 	)
 }
 
-const container = document.getElementById('root')!
-const extended = container as unknown as Record<string, Root>
-extended.__root = extended.__root ?? createRoot(container)
-extended.__root.render(<App />)
+createRoot(document.getElementById('root')!).render(<App />)
