@@ -19,29 +19,6 @@ const SRC = join(ROOT, 'src')
 const PENS_DIR = join(SRC, 'p')
 const TEMPLATES_DIR = join(SRC, 't')
 
-const DEFAULT_META = `import type { PenMeta } from '../../pen-meta.ts'
-
-export default { icon: 'lu/LuCircleDashed' } satisfies PenMeta
-`
-
-// ─────────────────────────────────────────────────────────────────────────────
-// CLI Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-// #region CLI Helpers
-
-const runCLI = (fn: () => Promise<void>): void => {
-	fn().catch((err) => {
-		if (err?.name === 'ExitPromptError') {
-			console.log('\nCancelled.\n')
-			process.exit(0)
-		}
-
-		console.error(err)
-		process.exit(1)
-	})
-}
-
 function fail(message: string): never {
 	cancel(message)
 	process.exit(1)
@@ -64,24 +41,30 @@ function selectPen(pens: string[], message: string): Promise<string> {
 	return select({ message, options: pens.map((p) => ({ label: p, value: p })) }).then(cancelGuard)
 }
 
-// #endregion
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-// #region Helpers
-
 const getDirs = (base: string): string[] =>
 	existsSync(base) ? readdirSync(base).filter((d) => statSync(join(base, d)).isDirectory()) : []
 
 const getPens = () => getDirs(PENS_DIR)
 const getTemplates = () => getDirs(TEMPLATES_DIR)
 
+const DEFAULT_META = `import type { PenMeta } from '../../pen-meta.ts'
+
+export default { icon: 'lu/LuCircleDashed' } satisfies PenMeta
+`
+
+// The files every pen has, each with the content to write when no source supplies it.
+// `panel` names which CodePen panel fills the file; `meta.ts` has no panel, so it is always the default.
+const PEN_FILES = [
+	{ file: 'index.html', panel: 'html', fallback: '' },
+	{ file: 'style.css', panel: 'css', fallback: '/* pen styles */\n' },
+	{ file: 'pen.tsx', panel: 'js', fallback: '// pen\n' },
+	{ file: 'meta.ts', panel: null, fallback: DEFAULT_META },
+] as const
+
 function copyPen(src: string, dest: string): void {
 	mkdirSync(dest, { recursive: true })
 
-	for (const file of ['index.html', 'style.css', 'pen.tsx']) {
+	for (const { file } of PEN_FILES) {
 		const srcFile = join(src, file)
 		const destFile = join(dest, file)
 		if (existsSync(srcFile)) copyFileSync(srcFile, destFile)
@@ -97,18 +80,13 @@ function openInBrowser(url: string): void {
 const escapeHtml = (s: string) =>
 	s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-function esmShToNpm(url: string): string {
-	const spec = url.slice('https://esm.sh/'.length).replace(/\?.*$/, '')
-
-	if (spec.startsWith('@')) {
-		// scoped esm.sh specs are always @scope/name[/subpath]
-		const [scope, nameAndVersion, ...rest] = spec.split('/')
-		return [scope, nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
-	}
-
-	const [nameAndVersion, ...rest] = spec.split('/')
-	return [nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
-}
+// Strips the version pin off the package name, leaving any subpath intact:
+// `@scope/name@1.2.3/sub` → `@scope/name/sub`, `name@1.2.3/sub` → `name/sub`.
+const esmShToNpm = (url: string) =>
+	url
+		.slice('https://esm.sh/'.length)
+		.replace(/\?.*$/, '')
+		.replace(/^((?:@[^/]+\/)?[^/@]+)@[^/]+/, '$1')
 
 const npmPkgRoot = (npmSpec: string) =>
 	npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]!
@@ -196,19 +174,8 @@ function ensureNewPen(slug: string): string {
 
 function writePen(dest: string, panels: { html: string; css: string; js: string }): void {
 	mkdirSync(dest, { recursive: true })
-	writeFileSync(join(dest, 'index.html'), panels.html)
-	writeFileSync(join(dest, 'style.css'), panels.css)
-	writeFileSync(join(dest, 'pen.tsx'), panels.js)
-	writeFileSync(join(dest, 'meta.ts'), DEFAULT_META)
+	for (const { file, panel, fallback } of PEN_FILES) writeFileSync(join(dest, file), panel ? panels[panel] : fallback)
 }
-
-// #endregion
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Commands
-// ─────────────────────────────────────────────────────────────────────────────
-
-// #region Commands
 
 async function cmdNew(slug?: string, template?: string): Promise<void> {
 	const resolvedSlug = slug ?? (await prompt('Pen slug:', (v) => (v?.trim() ? undefined : 'Slug cannot be empty')))
@@ -244,7 +211,7 @@ function cmdList(): void {
 
 // `spawn`, not `spawnSync` — a blocking call would starve the timer below, so the
 // browser could only open after the dev server had already exited.
-function cmdDev(slug?: string): void {
+function cmdDev(slug?: string) {
 	const vite = spawn('bun', ['run', 'dev'], { cwd: ROOT, stdio: 'inherit' })
 	if (slug) setTimeout(() => openInBrowser(`http://localhost:5173/p/${slug}/`), 1500)
 	vite.on('exit', (code) => process.exit(code ?? 1))
@@ -325,14 +292,8 @@ async function importZip(slugFlag?: string, zipFlag?: string): Promise<void> {
 	const result = spawnSync('unzip', ['-o', zipPath.trim(), '-d', dest], { stdio: 'inherit' })
 	if (result.status !== 0) fail('Failed to unzip.')
 
-	for (const [file, fallback] of [
-		['index.html', ''],
-		['style.css', '/* pen styles */\n'],
-		['pen.tsx', '// pen\n'],
-		['meta.ts', DEFAULT_META],
-	] as const) {
+	for (const { file, fallback } of PEN_FILES)
 		if (!existsSync(join(dest, file))) writeFileSync(join(dest, file), fallback)
-	}
 
 	note(`Preview: http://localhost:5173/p/${slug}/`, `Imported to p/${slug}/`)
 }
@@ -418,35 +379,19 @@ function findStaleDeps(referencedPkgs: Set<string>): string[] {
 	return deps.difference(referencedPkgs).values().toArray()
 }
 
-type CheckResult = {
-	fullUrls: Set<string>
-	undeclared: string[]
-	stale: string[]
-}
-
-function runCheck(): CheckResult {
+async function cmdCheck(opts: { fix?: boolean }): Promise<void> {
 	const { fullUrls, referencedPkgs, undeclared } = scanEsmImports()
 	const stale = findStaleDeps(referencedPkgs)
 	syncEsmDeclarations([...fullUrls])
 
-	return { fullUrls, undeclared, stale }
-}
+	if (undeclared.length === 0 && stale.length === 0)
+		return note('Every esm.sh import is a declared dependency, and none are unused.', 'Check')
 
-function formatIssues(undeclared: string[], stale: string[]): string {
-	const lines: string[] = []
-	if (undeclared.length > 0) lines.push(`Imported but not in package.json: ${undeclared.join(', ')}`)
-	if (stale.length > 0) lines.push(`In package.json but imported by no pen: ${stale.join(', ')}`)
-
-	return lines.join('\n')
-}
-
-async function cmdCheck(opts: { fix?: boolean }): Promise<void> {
-	const { fullUrls, undeclared, stale } = runCheck()
-	const hasIssues = undeclared.length > 0 || stale.length > 0
-
-	if (!hasIssues) return note('Every esm.sh import is a declared dependency, and none are unused.', 'Check')
-
-	note(formatIssues(undeclared, stale), 'Issues found')
+	const issues = [
+		undeclared.length > 0 && `Imported but not in package.json: ${undeclared.join(', ')}`,
+		stale.length > 0 && `In package.json but imported by no pen: ${stale.join(', ')}`,
+	].filter(Boolean)
+	note(issues.join('\n'), 'Issues found')
 
 	if (!opts.fix) fail(`Run: penx check --fix`)
 
@@ -488,14 +433,6 @@ async function cmdCheck(opts: { fix?: boolean }): Promise<void> {
 
 	note('All issues resolved.', 'Check')
 }
-
-// #endregion
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Main
-// ─────────────────────────────────────────────────────────────────────────────
-
-// #region Main
 
 async function main() {
 	const program = new Command().name('penx').description('local CodePen manager').version(VERSION)
@@ -583,6 +520,7 @@ async function main() {
 	await program.parseAsync(process.argv)
 }
 
-runCLI(main)
-
-// #endregion
+main().catch((error) => {
+	console.error(error)
+	process.exit(1)
+})
