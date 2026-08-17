@@ -10,7 +10,6 @@ import { defineConfig, transformWithOxc } from 'vite'
 import type { PenMeta } from './src/pen-meta.ts'
 
 const penUrlRe = /^\/(p|t)\/([^#/?]+)\/?(\?.*)?$/
-const isPenDir = (s: string): s is 'p' | 't' => s === 'p' || s === 't'
 
 const DEFAULT_ICON = 'https://trenary.dev/icon.svg'
 const PEN_ICONS_ID = 'virtual:pen-icons'
@@ -79,10 +78,9 @@ async function buildPenIconsModule() {
 }
 
 function penPlugin(): Plugin {
-	async function buildWrapper(slug: string, dir: 'p' | 't') {
+	async function buildWrapper(slug: string, dir: string) {
 		const base = resolve(import.meta.dirname, 'src', dir, slug)
 		const fragment = existsSync(`${base}/index.html`) ? readFileSync(`${base}/index.html`, 'utf-8') : ''
-		const penFile = existsSync(`${base}/pen.ts`) ? 'pen.ts' : 'pen.tsx'
 		const icon = await resolveIcon(base)
 		return `<!DOCTYPE html>
 <html lang="en">
@@ -96,7 +94,7 @@ function penPlugin(): Plugin {
 </head>
 <body>
 ${fragment}
-  <script type="module" src="/src/${dir}/${slug}/${penFile}"></script>
+  <script type="module" src="/src/${dir}/${slug}/pen.tsx"></script>
 </body>
 </html>`
 	}
@@ -112,8 +110,7 @@ ${fragment}
 			order: 'pre',
 			handler(html, ctx) {
 				const match = /\/src\/(p|t)\/([^/]+)\/index\.html$/.exec(ctx.filename)
-				if (!match || !isPenDir(match[1]!)) return html
-				return buildWrapper(match[2]!, match[1])
+				return match ? buildWrapper(match[2]!, match[1]!) : html
 			},
 		},
 
@@ -121,9 +118,9 @@ ${fragment}
 			server.middlewares.use(async (req, res, next) => {
 				const url = req.url ?? ''
 				const match = penUrlRe.exec(url)
-				if (!match || !isPenDir(match[1]!)) return next()
+				if (!match) return next()
 
-				const dir = match[1]
+				const dir = match[1]!
 				const slug = match[2]!
 				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return next()
 
@@ -146,18 +143,13 @@ ${fragment}
 	}
 }
 
-function esmShToNpm(url: string): string {
-	const spec = url.slice('https://esm.sh/'.length).replace(/\?.*$/, '')
-
-	if (spec.startsWith('@')) {
-		// scoped esm.sh specs are always @scope/name[/subpath]
-		const [scope, nameAndVersion, ...rest] = spec.split('/')
-		return [scope, nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
-	}
-
-	const [nameAndVersion, ...rest] = spec.split('/')
-	return [nameAndVersion!.replace(/@.*$/, ''), ...rest].join('/')
-}
+// Strips the version pin off the package name, leaving any subpath intact:
+// `@scope/name@1.2.3/sub` → `@scope/name/sub`, `name@1.2.3/sub` → `name/sub`.
+const esmShToNpm = (url: string) =>
+	url
+		.slice('https://esm.sh/'.length)
+		.replace(/\?.*$/, '')
+		.replace(/^((?:@[^/]+\/)?[^/@]+)@[^/]+/, '$1')
 
 function esmShToLocal(id: string) {
 	const npmSpec = esmShToNpm(id)
@@ -189,25 +181,16 @@ function esmShPlugin(): Plugin {
 	}
 }
 
-function discoverPenEntries(): Record<string, string> {
-	const entries: Record<string, string> = {
-		main: resolve(import.meta.dirname, 'index.html'),
-	}
-
-	for (const dir of ['p', 't'] as const) {
+function discoverPenEntries() {
+	const penEntries = ['p', 't'].flatMap((dir) => {
 		const base = resolve(import.meta.dirname, 'src', dir)
-		if (!existsSync(base)) continue
+		if (!existsSync(base)) return []
+		return readdirSync(base)
+			.map((slug) => [`${dir}/${slug}`, resolve(base, slug, 'index.html')] as const)
+			.filter(([, htmlPath]) => existsSync(htmlPath))
+	})
 
-		for (const slug of readdirSync(base)) {
-			const htmlPath = resolve(base, slug, 'index.html')
-
-			if (existsSync(htmlPath)) {
-				entries[`${dir}/${slug}`] = htmlPath
-			}
-		}
-	}
-
-	return entries
+	return Object.fromEntries([['main', resolve(import.meta.dirname, 'index.html')], ...penEntries])
 }
 
 export default defineConfig({
