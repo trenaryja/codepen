@@ -8,7 +8,7 @@ My own sandbox — a self-hosted gallery of single-page apps at [codepen.trenary
 - **Shareable URLs** — any pen link just works for anyone, no login or auth tokens required.
 - **IDE + tooling** — real TypeScript, linting, formatting, type safety, syntax highlighting, hot reload, git history, etc.
 
-Each pen is exactly 3 files matching CodePen's panel structure — copy-paste interoperable, zero transformation needed.
+Each pen's 3 panel files match CodePen's panel structure — copy-paste interoperable, zero transformation needed. A `meta.ts` sidecar holds anything CodePen has no panel for; it never ships to the browser.
 
 ## Structure
 
@@ -16,7 +16,8 @@ Each pen is exactly 3 files matching CodePen's panel structure — copy-paste in
 p/{slug}/
 ├── index.html   # HTML panel (body fragment)
 ├── style.css    # CSS panel
-└── pen.tsx      # JS panel (ESM URL imports)
+├── pen.tsx      # JS panel (ESM URL imports)
+└── meta.ts      # favicon icon (any `react-icons` name, type-checked)
 ```
 
 Pens use `https://esm.sh/` imports directly — identical to CodePen's JS panel.

@@ -19,6 +19,11 @@ const SRC = join(ROOT, 'src')
 const PENS_DIR = join(SRC, 'p')
 const TEMPLATES_DIR = join(SRC, 't')
 
+const DEFAULT_META = `import type { PenMeta } from '../../pen-meta.ts'
+
+export default { icon: 'lu/LuCircleDashed' } satisfies PenMeta
+`
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,6 +199,7 @@ function writePen(dest: string, panels: { html: string; css: string; js: string 
 	writeFileSync(join(dest, 'index.html'), panels.html)
 	writeFileSync(join(dest, 'style.css'), panels.css)
 	writeFileSync(join(dest, 'pen.tsx'), panels.js)
+	writeFileSync(join(dest, 'meta.ts'), DEFAULT_META)
 }
 
 // #endregion
@@ -323,6 +329,7 @@ async function importZip(slugFlag?: string, zipFlag?: string): Promise<void> {
 		['index.html', ''],
 		['style.css', '/* pen styles */\n'],
 		['pen.tsx', '// pen\n'],
+		['meta.ts', DEFAULT_META],
 	] as const) {
 		if (!existsSync(join(dest, file))) writeFileSync(join(dest, file), fallback)
 	}

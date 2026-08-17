@@ -3,22 +3,24 @@ import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { FiChevronRight } from 'react-icons/fi'
+import type { IconType } from 'react-icons/lib'
+import { penIcons } from 'virtual:pen-icons'
 
 const penModules = import.meta.glob('./p/*/index.html', { query: '?raw', import: 'default', eager: false })
 
 const slugFromPath = (path: string) => path.split('/').at(-2) ?? path
 
-type Item = { slug: string; href: string }
+type Item = { slug: string; href: string; Icon?: IconType }
 
 const items: Item[] = Object.keys(penModules)
 	.map(slugFromPath)
 	.sort((a, b) => a.localeCompare(b))
-	.map((slug) => ({ slug, href: `/p/${slug}/` }))
+	.map((slug) => ({ slug, href: `/p/${slug}/`, Icon: penIcons[slug] }))
 
 const IFRAME_W = 1024
 const IFRAME_H = 768
 
-const PenCard = ({ slug, href }: Item) => {
+const PenCard = ({ slug, href, Icon }: Item) => {
 	const containerRef = useRef<HTMLDivElement>(null)
 	const [scale, setScale] = useState(0)
 
@@ -49,7 +51,10 @@ const PenCard = ({ slug, href }: Item) => {
 				)}
 			</div>
 			<div className='flex items-center justify-between gap-2 p-4 bg-base-300'>
-				<span className='truncate text-sm font-semibold'>{slug}</span>
+				<span className='flex min-w-0 items-center gap-2 text-sm font-semibold'>
+					{Icon && <Icon className='shrink-0 size-4' />}
+					<span className='truncate'>{slug}</span>
+				</span>
 				<FiChevronRight className='opacity-0 transition-opacity group-hover:opacity-100' />
 			</div>
 		</a>
