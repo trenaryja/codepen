@@ -13,7 +13,7 @@ import { ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { createContext, use, useEffect, useReducer, useRef, useState } from 'https://esm.sh/react'
 import type { ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
-import { LuChevronsDownUp, LuChevronsUpDown, LuClock, LuMapPin } from 'https://esm.sh/react-icons/lu'
+import { LuChevronsDownUp, LuChevronsUpDown, LuClock, LuLocateFixed, LuMapPin } from 'https://esm.sh/react-icons/lu'
 import {
 	WiCloudy,
 	WiDayCloudy,
@@ -27,6 +27,7 @@ import {
 	WiSprinkle,
 	WiThunderstorm,
 } from 'https://esm.sh/react-icons/wi'
+import { z } from 'https://esm.sh/zod'
 
 const HOUR = 3_600_000
 const DAY = 86_400_000
@@ -38,16 +39,14 @@ type City = { name: string; country: string; latitude: number; longitude: number
 
 const UTC_CITY: City = { name: 'UTC', country: '', latitude: 0, longitude: 0, timeZone: 'UTC' }
 const isUtc = (city: City) => city.timeZone === 'UTC'
-const DEMO_TRACKS = [
-	{
-		label: 'Home',
-		city: { name: 'New York', country: 'US', latitude: 40.71, longitude: -74.01, timeZone: 'America/New_York' },
-	},
-	{
-		label: 'Nashville',
-		city: { name: 'Nashville', country: 'US', latitude: 36.16, longitude: -86.78, timeZone: 'America/Chicago' },
-	},
-	{ label: 'UTC', city: UTC_CITY },
+
+// Seed board, after the detected city: one westward gap, one whole-hour gap, and one half-hour gap
+// that also crosses the date line of the day — between them they exercise every badge a card can show
+const DEMO_CITIES: City[] = [
+	{ name: 'New York', country: 'US', latitude: 40.71, longitude: -74.01, timeZone: 'America/New_York' },
+	{ name: 'Los Angeles', country: 'US', latitude: 34.05, longitude: -118.24, timeZone: 'America/Los_Angeles' },
+	{ name: 'London', country: 'GB', latitude: 51.51, longitude: -0.13, timeZone: 'Europe/London' },
+	{ name: 'Hyderabad', country: 'IN', latitude: 17.38, longitude: 78.46, timeZone: 'Asia/Kolkata' },
 ]
 
 const round = (value: unknown) => Math.round(Number(value ?? 0))
@@ -87,9 +86,6 @@ const formatTime = (instant: number, timeZone: string, hour12: boolean, seconds:
 		second: seconds ? '2-digit' : undefined,
 		hour12,
 	}).format(instant)
-
-const formatDateLong = (instant: number, timeZone: string) =>
-	getFormatter({ timeZone, weekday: 'short', month: 'short', day: 'numeric' }).format(instant)
 
 const hourLabel = (localHour: number, hour12: boolean) =>
 	hour12 ? `${((localHour + 11) % 12) + 1}${localHour < 12 ? 'a' : 'p'}` : String(localHour).padStart(2, '0')
@@ -247,7 +243,8 @@ type ForecastCell = {
 	precip: number
 }
 
-type ForecastMode = 'daily' | 'hourly'
+const FORECAST_MODES = ['daily', 'hourly'] as const
+type ForecastMode = (typeof FORECAST_MODES)[number]
 
 const FORECAST_FIELDS: Record<ForecastMode, string> = {
 	hourly: 'hourly=temperature_2m,weather_code,precipitation_probability,is_day&forecast_hours=12',
@@ -313,18 +310,18 @@ const TIME_ZONE_ALIASES: Record<string, string> = {
 	'America/Buenos_Aires': 'America/Argentina/Buenos_Aires',
 }
 const unalias = (timeZone: string | undefined) => (timeZone ? (TIME_ZONE_ALIASES[timeZone] ?? timeZone) : undefined)
-const homeTimeZone = unalias(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC'
-const fallbackHome: City = {
-	name: homeTimeZone.split('/').at(-1)?.replaceAll('_', ' ') ?? homeTimeZone,
+const localTimeZone = unalias(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC'
+const fallbackCity: City = {
+	name: localTimeZone.split('/').at(-1)?.replaceAll('_', ' ') ?? localTimeZone,
 	country: '',
 	latitude: 20,
-	longitude: (zoneOffset(homeTimeZone, Date.now()) / HOUR) * 15,
-	timeZone: homeTimeZone,
+	longitude: (zoneOffset(localTimeZone, Date.now()) / HOUR) * 15,
+	timeZone: localTimeZone,
 }
 
 // The IANA zone resolves immediately; IP geolocation refines it to a real city.
-const useDetectedHome = () => {
-	const [detected, setDetected] = useState(fallbackHome)
+const useDetectedCity = () => {
+	const [detected, setDetected] = useState(fallbackCity)
 	const [pending, setPending] = useState(true)
 	useEffect(() => {
 		let cancelled = false
@@ -339,9 +336,9 @@ const useDetectedHome = () => {
 						name: data.city,
 						country: data.country_code ?? '',
 						latitude: data.latitude,
-						longitude: data.longitude ?? fallbackHome.longitude,
+						longitude: data.longitude ?? fallbackCity.longitude,
 						// ipwho.is nests the zone under timezone.id; ipapi.co returns it flat
-						timeZone: unalias(data.timezone?.id ?? data.timezone) ?? homeTimeZone,
+						timeZone: unalias(data.timezone?.id ?? data.timezone) ?? localTimeZone,
 					})
 					break
 				} catch {
@@ -430,22 +427,36 @@ const useCitySearch = (query: string) => {
 const VIEWS = ['list', 'bands'] as const
 type View = (typeof VIEWS)[number]
 
-type Track = { id: string; label: string; city: City }
+// A place is a city plus the name you gave it — the label is yours, the city is the geocoder's
+type Place = { id: string; label: string; city: City }
 
-type Preferences = {
-	hour12: boolean
-	fahrenheit: boolean
-	showSeconds: boolean
-	forecastMode: ForecastMode
-	homeOverride: City | null
-}
+const citySchema = z.object({
+	name: z.string(),
+	country: z.string(),
+	latitude: z.number(),
+	longitude: z.number(),
+	timeZone: z.string(),
+})
 
-type Stored = Partial<Preferences> & { tracks?: { label: string; city: City }[]; view?: View }
+// Bumping the version invalidates every stored board — there is no migration path by design
+const storedSchema = z.object({
+	version: z.literal(1),
+	places: z.array(z.object({ label: z.string(), city: citySchema })),
+	hour12: z.boolean(),
+	fahrenheit: z.boolean(),
+	showSeconds: z.boolean(),
+	forecastMode: z.enum(FORECAST_MODES),
+	view: z.enum(VIEWS),
+})
+type Stored = z.infer<typeof storedSchema>
+
+type Preferences = Pick<Stored, 'fahrenheit' | 'forecastMode' | 'hour12' | 'showSeconds'>
 
 // Everything below the App reads the same view state, so it rides context instead of props
-type Settings = Omit<Preferences, 'homeOverride'> & {
+type Settings = Preferences & {
 	instant: number
-	home: City
+	// the top place: every gap, day badge and date on screen is measured from its zone
+	reference: City
 	weather: Record<string, Weather>
 	weatherReady: boolean
 	scrubToWall: (timeZone: string, candidates: number[]) => void
@@ -456,13 +467,33 @@ type Settings = Omit<Preferences, 'homeOverride'> & {
 const SettingsContext = createContext<Settings>(null!)
 const useSettings = () => use(SettingsContext)
 
-const loadStored = (): Stored | null => {
+const loadStored = () => {
 	try {
-		return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null')
+		const parsed = storedSchema.safeParse(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null'))
+		return parsed.success ? parsed.data : null
 	} catch {
 		return null
 	}
 }
+
+const toPlaces = (entries: { label: string; city: City }[]) =>
+	entries.map((entry) => ({ id: crypto.randomUUID(), label: entry.label, city: entry.city }))
+
+// Entry 0 starts as the zone-derived guess and is re-run with the IP-detected city once that lands (see App)
+const seedEntries = (first: City) =>
+	[first, ...DEMO_CITIES.filter((city) => city.timeZone !== localTimeZone)].map((city) => ({
+		label: city.name,
+		city,
+	}))
+
+// quietest defaults win: no seconds ticking, and the 7-cell daily strip over the 12-cell hourly one
+const DEFAULTS = {
+	hour12: LOCALE_HOUR12,
+	fahrenheit: LOCALE_FAHRENHEIT,
+	showSeconds: false,
+	forecastMode: 'daily',
+	view: 'list',
+} satisfies Omit<Stored, 'places' | 'version'>
 
 // A display button that swaps in place for a daisy input sized to match its own type scale
 const Editable = ({
@@ -623,21 +654,21 @@ const ForecastPanel = ({ city }: { city: City }) => {
 	)
 }
 
-const TrackCard = ({
-	track,
+const PlaceCard = ({
+	place,
 	expanded,
 	onToggle,
 	onEditLocation,
 }: {
-	track: Track
+	place: Place
 	expanded: boolean
 	onToggle: () => void
 	onEditLocation: () => void
 }) => {
-	const { instant, home, rename, remove } = useSettings()
-	const { city, id, label } = track
-	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(home.timeZone, instant)
-	const delta = dayDelta(city.timeZone, home.timeZone, instant)
+	const { instant, reference, rename, remove } = useSettings()
+	const { city, id, label } = place
+	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(reference.timeZone, instant)
+	const delta = dayDelta(city.timeZone, reference.timeZone, instant)
 	const expandable = !isUtc(city)
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
 	return (
@@ -719,9 +750,9 @@ const bandGradient = (city: City, start: number) =>
 // The whole row is the band: meta rides on top of the gradient, so bars get the full width
 // and the row auto-sizes to its content before growing into the leftover screen
 const BandRow = ({ label, city, start }: { label: string; city: City; start: number }) => {
-	const { instant, home, hour12, showSeconds } = useSettings()
-	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(home.timeZone, instant)
-	const delta = dayDelta(city.timeZone, home.timeZone, instant)
+	const { instant, reference, hour12, showSeconds } = useSettings()
+	const gap = zoneOffset(city.timeZone, instant) - zoneOffset(reference.timeZone, instant)
+	const delta = dayDelta(city.timeZone, reference.timeZone, instant)
 	const firstTick = Math.ceil(localMs(city.timeZone, start) / LABEL_STEP) * LABEL_STEP
 	return (
 		<div
@@ -758,24 +789,46 @@ const BandRow = ({ label, city, start }: { label: string; city: City; start: num
 	)
 }
 
+// How far you've travelled and the way back. Nothing to say at rest: the board is one turn of the clock,
+// so every card already carries its own offset and its own today/tomorrow — no calendar date required
+const InstantStrip = ({
+	now,
+	scrubbed,
+	onSettle,
+}: {
+	now: number
+	scrubbed: number | null
+	onSettle: (target: number | null) => void
+}) => {
+	const { instant } = useSettings()
+	if (scrubbed === null) return null
+	return (
+		<div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm opacity-70 sm:text-base'>
+			<span className='font-mono'>{formatSignedGap(instant - now)}</span>
+			<button type='button' className='btn btn-xs' onClick={() => onSettle(null)}>
+				↺ now
+			</button>
+		</div>
+	)
+}
+
 const BandsView = ({
-	roster,
+	places,
 	now,
 	scrubbed,
 	onScrub,
 	onSettle,
 }: {
-	roster: Track[]
+	places: Place[]
 	now: number
 	scrubbed: number | null
 	onScrub: (instant: number) => void
 	onSettle: (target: number | null) => void
 }) => {
-	const { instant, home } = useSettings()
+	const { instant } = useSettings()
 	const surfaceRef = useRef<HTMLDivElement>(null)
 	// ±12h around now, floored to the scrub grain so bars and labels don't creep a hair every tick
 	const start = Math.floor(now / QUARTER_HOUR) * QUARTER_HOUR - DAY / 2
-	const rows = [{ id: 'home', label: home.name, city: home }, ...roster]
 
 	const instantAt = (clientX: number) => {
 		const { left, width } = surfaceRef.current!.getBoundingClientRect()
@@ -784,16 +837,9 @@ const BandsView = ({
 
 	return (
 		<main className='mx-auto flex w-full max-w-6xl grow flex-col p-3 sm:p-4'>
-			<div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 pb-4 text-sm opacity-70 sm:text-base'>
-				<span>{formatDateLong(instant, home.timeZone)}</span>
-				{scrubbed !== null && (
-					<>
-						<span className='font-mono'>{formatSignedGap(instant - now)}</span>
-						<button type='button' className='btn btn-xs' onClick={() => onSettle(null)}>
-							↺ now
-						</button>
-					</>
-				)}
+			{/* the row is reserved whether or not it has anything to say, so the bars don't jump on drag */}
+			<div className='flex h-9 items-center justify-center'>
+				<InstantStrip now={now} scrubbed={scrubbed} onSettle={onSettle} />
 			</div>
 			{/* Rows share the leftover height; the container is the drag surface so one line
 			    crosses every bar, gaps included. Keyboard scrubbing stays on the global arrow keys */}
@@ -809,8 +855,8 @@ const BandsView = ({
 				}}
 				onPointerUp={(event) => onSettle(Math.round(instantAt(event.clientX) / QUARTER_HOUR) * QUARTER_HOUR)}
 			>
-				{rows.map((row) => (
-					<BandRow key={row.id} label={row.label} city={row.city} start={start} />
+				{places.map((place) => (
+					<BandRow key={place.id} label={place.label} city={place.city} start={start} />
 				))}
 				<div
 					className='pointer-events-none absolute inset-y-0 border-l border-base-content/40'
@@ -821,39 +867,50 @@ const BandsView = ({
 	)
 }
 
-type SearchMode = { kind: 'add' | 'home' } | { kind: 'track'; id: string }
+type SearchMode = { kind: 'add' } | { kind: 'place'; id: string }
 
 const App = () => {
 	const stored = useRef(loadStored()).current
 	const [now, setNow] = useState(() => Date.now())
 	const [scrubbed, setScrubbed] = useState<number | null>(null)
-	const [roster, setRoster] = useState<Track[]>(() =>
-		(stored?.tracks ?? DEMO_TRACKS.filter((entry) => entry.city.timeZone !== homeTimeZone))
-			.filter((entry) => entry.city?.timeZone)
-			.map((entry, index) => ({ id: `track-${index}`, label: entry.label, city: entry.city })),
-	)
-	const [hour12, setHour12] = useState(stored?.hour12 ?? LOCALE_HOUR12)
-	const [fahrenheit, setFahrenheit] = useState(stored?.fahrenheit ?? LOCALE_FAHRENHEIT)
-	// quietest defaults win: no seconds ticking, and the 7-cell daily strip over the 12-cell hourly one
-	const [showSeconds, setShowSeconds] = useState(stored?.showSeconds ?? false)
-	const [forecastMode, setForecastMode] = useState<ForecastMode>(stored?.forecastMode ?? 'daily')
-	const [homeOverride, setHomeOverride] = useState<City | null>(stored?.homeOverride ?? null)
+	const [places, setPlaces] = useState<Place[]>(() => toPlaces(stored ? stored.places : seedEntries(fallbackCity)))
+	const [hour12, setHour12] = useState(stored?.hour12 ?? DEFAULTS.hour12)
+	const [fahrenheit, setFahrenheit] = useState(stored?.fahrenheit ?? DEFAULTS.fahrenheit)
+	const [showSeconds, setShowSeconds] = useState(stored?.showSeconds ?? DEFAULTS.showSeconds)
+	const [forecastMode, setForecastMode] = useState<ForecastMode>(stored?.forecastMode ?? DEFAULTS.forecastMode)
 	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
 	const [query, setQuery] = useState('')
 	const [expandedIds, setExpandedIds] = useState<string[]>([])
-	// find, not includes/cast — a stale stored value from a removed view falls back to list
-	const [view, setView] = useState<View>(VIEWS.find((entry) => entry === stored?.view) ?? 'list')
+	const [view, setView] = useState<View>(stored?.view ?? DEFAULTS.view)
 
-	const { detected, pending: homePending } = useDetectedHome()
-	const home = homeOverride ?? detected
+	const { detected, pending: detectPending } = useDetectedCity()
+	// The seed's first entry holds fallbackCity itself, so identity alone says "still the zone-derived guess":
+	// retargeting that card replaces the object, and detection then leaves it alone. Adjusting state during
+	// render (not in an effect) is the React-sanctioned shape for this, same as useCitySearch above.
+	const [appliedDetection, setAppliedDetection] = useState(detected)
+
+	if (!stored && appliedDetection !== detected) {
+		setAppliedDetection(detected)
+		setPlaces(
+			places.map((place) =>
+				place.city === fallbackCity
+					? { ...place, label: place.label === place.city.name ? detected.name : place.label, city: detected }
+					: place,
+			),
+		)
+	}
+
+	const reference = places[0]?.city ?? fallbackCity
 	const instant = scrubbed ?? now
-	const homeExpanded = expandedIds.includes('home')
 	const { matches, searching } = useCitySearch(query)
-	const { weather, ready: weatherReady } = useWeather([home, ...roster.map((track) => track.city)], fahrenheit)
+	const { weather, ready: weatherReady } = useWeather(
+		places.map((place) => place.city),
+		fahrenheit,
+	)
 
-	const stateRef = useRef({ now, instant, searchOpen: false, homeTimeZone: home.timeZone })
+	const stateRef = useRef({ now, instant, searchOpen: false, referenceTimeZone: reference.timeZone })
 	useEffect(() => {
-		stateRef.current = { now, instant, searchOpen: searchMode !== null, homeTimeZone: home.timeZone }
+		stateRef.current = { now, instant, searchOpen: searchMode !== null, referenceTimeZone: reference.timeZone }
 	})
 
 	useEffect(() => {
@@ -861,25 +918,22 @@ const App = () => {
 		return () => clearInterval(id)
 	}, [])
 
-	// persist (skip the initial render so an untouched demo roster stays ephemeral)
-	const persistReadyRef = useRef(false)
+	// persist — but a board still identical to the seed stays ephemeral, so a first visit (and the render where
+	// IP detection swaps in the real city) leaves storage untouched until you actually change something
 	useEffect(() => {
-		if (!persistReadyRef.current) {
-			persistReadyRef.current = true
-			return
-		}
-
 		const payload: Stored = {
-			tracks: roster.map(({ label, city }) => ({ label, city })),
+			version: 1,
+			places: places.map(({ label, city }) => ({ label, city })),
 			hour12,
 			fahrenheit,
 			showSeconds,
 			forecastMode,
-			homeOverride,
 			view,
 		}
+		const pristine: Stored = { version: 1, places: seedEntries(detected), ...DEFAULTS }
+		if (!stored && JSON.stringify(payload) === JSON.stringify(pristine)) return
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-	}, [roster, hour12, fahrenheit, showSeconds, forecastMode, homeOverride, view])
+	}, [stored, detected, places, hour12, fahrenheit, showSeconds, forecastMode, view])
 
 	// ── scrub ──
 	const animationRef = useRef(0)
@@ -907,7 +961,7 @@ const App = () => {
 		setQuery('')
 	}
 
-	// arrows walk 15-min boundaries of home wall time (⌘/ctrl = hours), n = back to now,
+	// arrows walk 15-min boundaries of the reference zone's wall time (⌘/ctrl = hours), n = back to now,
 	// esc closes search — or clears the scrub. Registered once: it only touches setters and refs.
 	useEffect(() => {
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -919,7 +973,7 @@ const App = () => {
 			const step = event.metaKey || event.ctrlKey ? HOUR : QUARTER_HOUR
 			const forward = event.key === 'ArrowRight'
 			const base = scrubTargetRef.current ?? stateRef.current.instant
-			const local = localMs(stateRef.current.homeTimeZone, base)
+			const local = localMs(stateRef.current.referenceTimeZone, base)
 			// off a boundary walks to the nearest one in that direction; on one, a full step
 			const target = forward ? Math.floor(local / step + 1) * step : Math.ceil(local / step - 1) * step
 			animateTo(base + target - local)
@@ -929,7 +983,7 @@ const App = () => {
 		return () => window.removeEventListener('keydown', onKeyDown)
 	}, [])
 
-	// ── roster actions ──
+	// ── place actions ──
 	// pre-fill retarget searches with the current city so a typo or misclick is a two-keystroke fix
 	const openSearch = (mode: SearchMode, prefill = '') => {
 		setSearchMode(mode)
@@ -937,28 +991,27 @@ const App = () => {
 	}
 
 	const pickCity = (city: City) => {
-		if (searchMode?.kind === 'home') setHomeOverride(city)
-		else if (searchMode?.kind === 'track')
-			setRoster(
-				roster.map((track) =>
-					track.id === searchMode.id
+		if (searchMode?.kind === 'place')
+			setPlaces(
+				places.map((place) =>
+					place.id === searchMode.id
 						? {
-								...track,
+								...place,
 								city,
 								// a label that was just echoing the old city follows the move; a person's name stays
-								label: track.label.toLowerCase() === track.city.name.toLowerCase() ? city.name : track.label,
+								label: place.label.toLowerCase() === place.city.name.toLowerCase() ? city.name : place.label,
 							}
-						: track,
+						: place,
 				),
 			)
-		else setRoster([...roster, { id: crypto.randomUUID(), label: city.name, city }])
+		else setPlaces([...places, { id: crypto.randomUUID(), label: city.name, city }])
 		closeSearch()
 	}
 
 	const toggleExpanded = (id: string) =>
 		setExpandedIds(expandedIds.includes(id) ? expandedIds.filter((entry) => entry !== id) : [...expandedIds, id])
 
-	const expandableIds = ['home', ...roster.filter((track) => !isUtc(track.city)).map((track) => track.id)]
+	const expandableIds = places.filter((place) => !isUtc(place.city)).map((place) => place.id)
 	const allExpanded = expandableIds.every((id) => expandedIds.includes(id))
 
 	// dnd-kit: distance threshold keeps plain clicks (expand, buttons) from starting a drag
@@ -969,23 +1022,23 @@ const App = () => {
 
 	const onDragEnd = ({ active, over }: DragEndEvent) => {
 		if (!over || active.id === over.id) return
-		const from = roster.findIndex((track) => track.id === active.id)
-		const to = roster.findIndex((track) => track.id === over.id)
-		if (from !== -1 && to !== -1) setRoster(arrayMove(roster, from, to))
+		const from = places.findIndex((place) => place.id === active.id)
+		const to = places.findIndex((place) => place.id === over.id)
+		if (from !== -1 && to !== -1) setPlaces(arrayMove(places, from, to))
 	}
 
 	// eslint-disable-next-line @eslint-react/no-unstable-context-value -- React Compiler memoizes this value; manual useMemo is banned here
 	const settings: Settings = {
 		instant,
-		home,
+		reference,
 		hour12,
 		showSeconds,
 		fahrenheit,
 		forecastMode,
 		weather,
 		weatherReady,
-		rename: (id, label) => setRoster(roster.map((track) => (track.id === id ? { ...track, label } : track))),
-		remove: (id) => setRoster(roster.filter((track) => track.id !== id)),
+		rename: (id, label) => setPlaces(places.map((place) => (place.id === id ? { ...place, label } : place))),
+		remove: (id) => setPlaces(places.filter((place) => place.id !== id)),
 		scrubToWall: (timeZone, candidates) => {
 			const current = (localMs(timeZone, stateRef.current.instant) % DAY) / 60_000
 			// wrap each candidate into the nearest ±12h so "9am" never scrubs the long way round
@@ -1050,56 +1103,29 @@ const App = () => {
 					</header>
 
 					{view === 'bands' && (
-						<BandsView roster={roster} now={now} scrubbed={scrubbed} onScrub={setScrubbed} onSettle={animateTo} />
+						<BandsView places={places} now={now} scrubbed={scrubbed} onScrub={setScrubbed} onSettle={animateTo} />
 					)}
 
 					{view === 'list' && (
 						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-3 pb-28 sm:p-4 sm:pb-28'>
-							{/* eslint-disable-next-line jsx-a11y/click-events-have-key-events -- expand surface, like the cards below it; keyboard users expand via the header's expand-all button */}
-							<div
-								className='flex cursor-pointer flex-col items-center gap-1 py-6 sm:py-8'
-								onClick={expandOnClick(() => toggleExpanded('home'))}
-							>
-								<EditableTime
-									timeZone={home.timeZone}
-									className='text-5xl font-extralight tracking-tight sm:text-7xl'
-								/>
-								<div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm opacity-70 sm:text-base'>
-									<span>{formatDateLong(instant, home.timeZone)}</span>
-									<WeatherChip city={home} />
-									{!homeOverride && homePending ? (
-										<span className='skeleton text-transparent'>{fallbackHome.name}</span>
-									) : (
-										<button
-											type='button'
-											title='not where you are? set your location'
-											className='hover:opacity-75'
-											onClick={() => openSearch({ kind: 'home' }, home.name)}
-										>
-											{home.name}
-										</button>
-									)}
-									{scrubbed !== null && (
-										<button type='button' className='btn btn-xs' onClick={() => animateTo(null)}>
-											↺ now
-										</button>
-									)}
-								</div>
-								{homeExpanded && <ForecastPanel city={home} />}
-							</div>
+							{/* at rest the cards say everything the date would; it only matters once you've time-travelled */}
+							<InstantStrip now={now} scrubbed={scrubbed} onSettle={animateTo} />
 							<DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-								<SortableContext items={roster.map((track) => track.id)} strategy={verticalListSortingStrategy}>
-									{roster.map((track) => (
-										<TrackCard
-											key={track.id}
-											track={track}
-											expanded={expandedIds.includes(track.id)}
-											onToggle={() => toggleExpanded(track.id)}
-											onEditLocation={() => openSearch({ kind: 'track', id: track.id }, track.city.name)}
+								<SortableContext items={places.map((place) => place.id)} strategy={verticalListSortingStrategy}>
+									{places.map((place) => (
+										<PlaceCard
+											key={place.id}
+											place={place}
+											expanded={expandedIds.includes(place.id)}
+											onToggle={() => toggleExpanded(place.id)}
+											onEditLocation={() => openSearch({ kind: 'place', id: place.id }, place.city.name)}
 										/>
 									))}
 								</SortableContext>
 							</DndContext>
+							{!places.length && (
+								<p className='py-12 text-center opacity-60'>No places yet — add one to start the board.</p>
+							)}
 						</main>
 					)}
 
@@ -1122,7 +1148,8 @@ const App = () => {
 						</footer>
 					)}
 
-					{view === 'list' && (
+					{/* bands has no card affordances, but an empty board still needs a way back in */}
+					{(view === 'list' || !places.length) && (
 						<div className='fab'>
 							<button
 								type='button'
@@ -1141,7 +1168,7 @@ const App = () => {
 								<label className='input w-full'>
 									<input
 										className='grow'
-										placeholder={searchMode.kind === 'home' ? 'where are you actually?' : 'search any city…'}
+										placeholder='search any city…'
 										value={query}
 										autoFocus
 										onFocus={(event) => event.target.select()}
@@ -1153,19 +1180,22 @@ const App = () => {
 									{searching && <span className='loading loading-spinner loading-sm' />}
 								</label>
 								<ul className='menu w-full'>
-									{searchMode.kind === 'home' && homeOverride && (
-										<li>
-											<button
-												type='button'
-												onClick={() => {
-													setHomeOverride(null)
-													closeSearch()
-												}}
-											>
-												use auto-detected ({detected.name})
-											</button>
-										</li>
-									)}
+									{/* wherever you are, as one press — the same IP lookup that seeds the board on a first visit */}
+									<li>
+										<button
+											type='button'
+											className='flex items-baseline justify-between'
+											disabled={detectPending}
+											onClick={() => pickCity(detected)}
+										>
+											<span className='flex items-baseline gap-2'>
+												<LuLocateFixed className='self-center' />
+												here
+												{!detectPending && <span className='text-xs opacity-50'>{detected.name}</span>}
+											</span>
+											{detectPending && <span className='loading loading-spinner loading-xs' />}
+										</button>
+									</li>
 									{matches.map((city) => (
 										<li key={`${city.name}-${city.latitude}-${city.longitude}`}>
 											<button
