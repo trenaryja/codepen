@@ -1,19 +1,19 @@
+import type { DragEndEvent } from 'https://esm.sh/@dnd-kit/core'
 import {
 	closestCenter,
 	DndContext,
-	PointerSensor,
+	MouseSensor,
 	TouchSensor,
 	useSensor,
 	useSensors,
 } from 'https://esm.sh/@dnd-kit/core'
-import type { DragEndEvent } from 'https://esm.sh/@dnd-kit/core'
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from 'https://esm.sh/@dnd-kit/sortable'
 import { CSS } from 'https://esm.sh/@dnd-kit/utilities'
 import { ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { parseAsString, parseAsStringLiteral, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
-import { createContext, use, useEffect, useReducer, useRef, useState } from 'https://esm.sh/react'
 import type { ReactNode } from 'https://esm.sh/react'
+import { createContext, use, useEffect, useReducer, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuChevronsDownUp, LuChevronsUpDown, LuClock, LuLocateFixed, LuMapPin } from 'https://esm.sh/react-icons/lu'
 import {
@@ -754,7 +754,7 @@ const PlaceCard = ({
 			style={{ transform: CSS.Translate.toString(transform), transition }}
 			{...attributes}
 			{...listeners}
-			className={`card group cursor-grab bg-base-200 active:cursor-grabbing ${isDragging ? 'z-10 opacity-60' : ''}`}
+			className={`card group cursor-grab touch-manipulation select-none bg-base-200 active:cursor-grabbing ${isDragging ? 'z-10 opacity-60' : ''}`}
 			onClick={expandOnClick(() => expandable && onToggle())}
 		>
 			<div className='card-body gap-2 px-4 py-3 sm:px-5 sm:py-4'>
@@ -1110,9 +1110,11 @@ const App = () => {
 	const expandableIds = places.filter((place) => !isUtc(place.city)).map((place) => place.id)
 	const allExpanded = expandableIds.every((id) => expandedIds.includes(id))
 
-	// dnd-kit: distance threshold keeps plain clicks (expand, buttons) from starting a drag
+	// Mouse, not Pointer: PointerSensor claims touch too, and with the card free to scroll the browser
+	// wins that race and cancels every drag — so on a phone reordering never started. Mouse leaves touch
+	// to the TouchSensor, where a long press means drag and a plain swipe still scrolls the board
 	const sensors = useSensors(
-		useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+		useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
 		useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
 	)
 
