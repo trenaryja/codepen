@@ -866,7 +866,9 @@ const BandRow = ({ label, city, start }: { label: string; city: City; start: num
 }
 
 // How far you've travelled and the way back. Nothing to say at rest: the board is one turn of the clock,
-// so every card already carries its own offset and its own today/tomorrow — no calendar date required
+// so every card already carries its own offset and its own today/tomorrow — no calendar date required.
+// It stays mounted and merely hides, so the row it reserves is its own content's height and a scrub
+// shoves nothing below it. `invisible` over `opacity-0` so the hidden button can't be clicked or tabbed to
 const InstantStrip = ({
 	now,
 	scrubbed,
@@ -877,9 +879,10 @@ const InstantStrip = ({
 	onSettle: (target: number | null) => void
 }) => {
 	const { instant } = useSettings()
-	if (scrubbed === null) return null
 	return (
-		<div className='flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-sm opacity-70 sm:text-base'>
+		<div
+			className={`flex items-center justify-center gap-3 text-sm sm:text-base ${scrubbed === null ? 'invisible' : 'opacity-70'}`}
+		>
 			<span className='font-mono'>{formatSignedGap(instant - now)}</span>
 			<button type='button' className='btn btn-xs' onClick={() => onSettle(null)}>
 				↺ now
@@ -913,10 +916,7 @@ const BandsView = ({
 
 	return (
 		<main className='mx-auto flex w-full max-w-6xl grow flex-col p-3 sm:p-4'>
-			{/* the row is reserved whether or not it has anything to say, so the bars don't jump on drag */}
-			<div className='flex h-9 items-center justify-center'>
-				<InstantStrip now={now} scrubbed={scrubbed} onSettle={onSettle} />
-			</div>
+			<InstantStrip now={now} scrubbed={scrubbed} onSettle={onSettle} />
 			{/* Rows share the leftover height; the container is the drag surface so one line
 			    crosses every bar, gaps included. Keyboard scrubbing stays on the global arrow keys */}
 			<div
@@ -1206,7 +1206,6 @@ const App = () => {
 
 					{view === 'list' && (
 						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-3 pb-28 sm:p-4 sm:pb-28'>
-							{/* at rest the cards say everything the date would; it only matters once you've time-travelled */}
 							<InstantStrip now={now} scrubbed={scrubbed} onSettle={animateTo} />
 							<DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
 								<SortableContext items={places.map((place) => place.id)} strategy={verticalListSortingStrategy}>
