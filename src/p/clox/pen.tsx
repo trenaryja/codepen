@@ -10,6 +10,8 @@ import type { DragEndEvent } from 'https://esm.sh/@dnd-kit/core'
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from 'https://esm.sh/@dnd-kit/sortable'
 import { CSS } from 'https://esm.sh/@dnd-kit/utilities'
 import { ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { parseAsString, parseAsStringLiteral, useQueryState } from 'https://esm.sh/nuqs'
+import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
 import { createContext, use, useEffect, useReducer, useRef, useState } from 'https://esm.sh/react'
 import type { ReactNode } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -311,8 +313,13 @@ const TIME_ZONE_ALIASES: Record<string, string> = {
 }
 const unalias = (timeZone: string | undefined) => (timeZone ? (TIME_ZONE_ALIASES[timeZone] ?? timeZone) : undefined)
 const localTimeZone = unalias(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC'
+
+// 'America/Argentina/Buenos_Aires' → 'Buenos Aires': the city a zone is named after, close enough that a
+// board seeded from the zone alone still reads like a place
+const prettifyZone = (timeZone: string) => timeZone.split('/').at(-1)!.replaceAll('_', ' ')
+
 const fallbackCity: City = {
-	name: localTimeZone.split('/').at(-1)?.replaceAll('_', ' ') ?? localTimeZone,
+	name: prettifyZone(localTimeZone),
 	country: '',
 	latitude: 20,
 	longitude: (zoneOffset(localTimeZone, Date.now()) / HOUR) * 15,
@@ -486,6 +493,67 @@ const seedEntries = (first: City) =>
 		city,
 	}))
 
+// ── the board as a URL ──
+// A shared board has to survive being pasted into a chat window, so every field earns its place: the zone's
+// region is a digit, coordinates round to the ~11 km the weather grid works at anyway, and the name and
+// label are written only when they aren't already implied by the field before them. Entries are joined by
+// `;`, their fields by `,`, and a label follows `!` — nuqs leaves all three unescaped.
+//
+//   ?cities=4Kolkata,17.4,78.5,Hyderabad;1New_York,40.7,-74;7London,51.5,-0.1!Priya
+//
+// The digit indexes this list, so it is frozen: appending is safe, reordering breaks every link ever shared.
+const ZONE_REGIONS = [
+	'Africa',
+	'America',
+	'Antarctica',
+	'Arctic',
+	'Asia',
+	'Atlantic',
+	'Australia',
+	'Europe',
+	'Indian',
+	'Pacific',
+]
+// supportedValuesOf lists the 418 region/city zones and nothing else, so plain UTC has to be added back
+const ZONES = new Set([...Intl.supportedValuesOf('timeZone'), UTC_CITY.timeZone])
+
+type Entry = { label: string; city: City }
+
+const encodeEntry = ({ label, city }: Entry) => {
+	const [region = '', ...rest] = city.timeZone.split('/')
+	const index = ZONE_REGIONS.indexOf(region)
+	// a zone with no region, or one from a region this list has never heard of, is written whole
+	const zone = rest.length && index !== -1 ? `${index}${rest.join('/')}` : city.timeZone
+	const coordinates = [city.latitude, city.longitude].map((value) => Number(value.toFixed(1)))
+	const name = city.name === prettifyZone(city.timeZone) ? '' : `,${city.name}`
+	return `${zone},${coordinates.join(',')}${name}${label === city.name ? '' : `!${label}`}`
+}
+
+const decodeEntry = (entry: string): Entry | null => {
+	// the label is whatever follows the first `!`, so it may hold commas and exclamation marks of its own
+	const bang = entry.indexOf('!')
+	const label = bang === -1 ? '' : entry.slice(bang + 1)
+	const [zoneField = '', ...fields] = (bang === -1 ? entry : entry.slice(0, bang)).split(',')
+	const [, index, tail] = /^(\d)(.+)/.exec(zoneField) ?? []
+	const timeZone = index === undefined ? zoneField : `${ZONE_REGIONS[Number(index)] ?? ''}/${tail}`
+	const latitude = Number(fields[0])
+	const longitude = Number(fields[1])
+	if (!ZONES.has(timeZone) || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+	const written = fields[2] ?? ''
+	const name = written === '' ? prettifyZone(timeZone) : written
+	return { label: label === '' ? name : label, city: { name, country: '', latitude, longitude, timeZone } }
+}
+
+// One bad entry drops rather than taking the board down with it; a board with nothing left is no board
+const decodeBoard = (cities: string | null) => {
+	const entries = (cities ?? '')
+		.split(';')
+		.filter(Boolean)
+		.map(decodeEntry)
+		.filter((entry) => entry !== null)
+	return entries.length ? entries : null
+}
+
 // quietest defaults win: no seconds ticking, and the 7-cell daily strip over the 12-cell hourly one
 const DEFAULTS = {
 	hour12: LOCALE_HOUR12,
@@ -494,6 +562,12 @@ const DEFAULTS = {
 	forecastMode: 'daily',
 	view: 'list',
 } satisfies Omit<Stored, 'places' | 'version'>
+
+// One shape, one key order, so two payloads can be compared as strings
+const toStored = (
+	places: Entry[],
+	{ hour12, fahrenheit, showSeconds, forecastMode, view }: Omit<Stored, 'places' | 'version'>,
+): Stored => ({ version: 1, places, hour12, fahrenheit, showSeconds, forecastMode, view })
 
 // A display button that swaps in place for a daisy input sized to match its own type scale
 const Editable = ({
@@ -871,9 +945,21 @@ type SearchMode = { kind: 'add' } | { kind: 'place'; id: string }
 
 const App = () => {
 	const stored = useRef(loadStored()).current
+	// The board and the view are shareable, so they ride in the URL; the rest are your preferences and stay
+	// on this device. Replace, not push — thirty scrubs shouldn't cost thirty presses of the back button
+	const [cities, setCities] = useQueryState('cities', parseAsString.withOptions({ history: 'replace' }))
+	const [viewParam, setViewParam] = useQueryState(
+		'view',
+		parseAsStringLiteral(VIEWS).withOptions({ history: 'replace' }),
+	)
+	// A link's board is read once, at mount: from here on the URL mirrors state rather than driving it
+	const urlEntries = useRef(decodeBoard(cities)).current
+
 	const [now, setNow] = useState(() => Date.now())
 	const [scrubbed, setScrubbed] = useState<number | null>(null)
-	const [places, setPlaces] = useState<Place[]>(() => toPlaces(stored ? stored.places : seedEntries(fallbackCity)))
+	const [places, setPlaces] = useState<Place[]>(() =>
+		toPlaces(urlEntries ?? stored?.places ?? seedEntries(fallbackCity)),
+	)
 	const [hour12, setHour12] = useState(stored?.hour12 ?? DEFAULTS.hour12)
 	const [fahrenheit, setFahrenheit] = useState(stored?.fahrenheit ?? DEFAULTS.fahrenheit)
 	const [showSeconds, setShowSeconds] = useState(stored?.showSeconds ?? DEFAULTS.showSeconds)
@@ -881,7 +967,7 @@ const App = () => {
 	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
 	const [query, setQuery] = useState('')
 	const [expandedIds, setExpandedIds] = useState<string[]>([])
-	const [view, setView] = useState<View>(stored?.view ?? DEFAULTS.view)
+	const [view, setView] = useState<View>(viewParam ?? stored?.view ?? DEFAULTS.view)
 
 	const { detected, pending: detectPending } = useDetectedCity()
 	// The seed's first entry holds fallbackCity itself, so identity alone says "still the zone-derived guess":
@@ -889,7 +975,7 @@ const App = () => {
 	// render (not in an effect) is the React-sanctioned shape for this, same as useCitySearch above.
 	const [appliedDetection, setAppliedDetection] = useState(detected)
 
-	if (!stored && appliedDetection !== detected) {
+	if (!stored && !urlEntries && appliedDetection !== detected) {
 		setAppliedDetection(detected)
 		setPlaces(
 			places.map((place) =>
@@ -918,22 +1004,29 @@ const App = () => {
 		return () => clearInterval(id)
 	}, [])
 
-	// persist — but a board still identical to the seed stays ephemeral, so a first visit (and the render where
-	// IP detection swaps in the real city) leaves storage untouched until you actually change something
+	// What the session started from: a link's board, then your saved one, then the seed. Both mirrors below
+	// stay quiet until the state differs from it — so a first visit stays ephemeral (including the render
+	// where IP detection fills in the real city, which is the pen acting, not you), and a link you opened and
+	// left alone neither dirties the address bar nor overwrites the board you already had saved
+	const entries = places.map(({ label, city }) => ({ label, city }))
+	const initialEntries = urlEntries ?? stored?.places ?? seedEntries(detected)
+
+	const payload = JSON.stringify(toStored(entries, { hour12, fahrenheit, showSeconds, forecastMode, view }))
+	const initialPayload = JSON.stringify(toStored(initialEntries, stored ?? DEFAULTS))
 	useEffect(() => {
-		const payload: Stored = {
-			version: 1,
-			places: places.map(({ label, city }) => ({ label, city })),
-			hour12,
-			fahrenheit,
-			showSeconds,
-			forecastMode,
-			view,
-		}
-		const pristine: Stored = { version: 1, places: seedEntries(detected), ...DEFAULTS }
-		if (!stored && JSON.stringify(payload) === JSON.stringify(pristine)) return
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-	}, [stored, detected, places, hour12, fahrenheit, showSeconds, forecastMode, view])
+		if (payload !== initialPayload) localStorage.setItem(STORAGE_KEY, payload)
+	}, [payload, initialPayload])
+
+	const encoded = entries.map(encodeEntry).join(';')
+	const initialEncoded = initialEntries.map(encodeEntry).join(';')
+	useEffect(() => {
+		// once the URL carries a board it keeps carrying one, right down to the empty board that clears it
+		if (encoded !== initialEncoded || cities) setCities(encoded || null)
+	}, [encoded, initialEncoded, cities, setCities])
+
+	useEffect(() => {
+		setViewParam(view === DEFAULTS.view ? null : view)
+	}, [view, setViewParam])
 
 	// ── scrub ──
 	const animationRef = useRef(0)
@@ -1223,4 +1316,8 @@ const App = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(
+	<NuqsAdapter>
+		<App />
+	</NuqsAdapter>,
+)
