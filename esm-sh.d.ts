@@ -82,7 +82,6 @@ declare module 'https://esm.sh/qrcode' {
 }
 
 declare module 'https://esm.sh/react' {
-	// eslint-disable-next-line @typescript-eslint/no-require-imports -- import-assignment is the only way to alias a whole module for `export =` in a declare module
 	import React = require('react')
 
 	export = React

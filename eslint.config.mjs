@@ -5,6 +5,13 @@ export default [
 	// Agent skill scripts import outside package.json (bun --install=fallback) and sit outside the tsconfig
 	{ ignores: ['.claude/**'] },
 	{
+		// Ambient declaration files describe shapes, they don't run. Import-assignment
+		// (`import X = require('x')`) is the only syntax that re-exports an `export =`
+		// module from inside a `declare module`, so the ESM-only rule can't apply here.
+		files: ['**/*.d.ts'],
+		rules: { '@typescript-eslint/no-require-imports': 'off' },
+	},
+	{
 		// Pens must keep `import React from 'react'` as an unused *value* import —
 		// CodePen has no automatic JSX transform, so the import must survive verbatim.
 		files: ['src/p/**/pen.tsx', 'src/t/**/pen.tsx'],
