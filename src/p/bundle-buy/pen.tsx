@@ -38,7 +38,8 @@ type Solution = {
 
 type ImpliedValue = { itemId: string; value: number }
 
-const uid = () => crypto.randomUUID().slice(0, 8)
+const uid = () =>
+	Array.from(crypto.getRandomValues(new Uint8Array(4)), (byte) => byte.toString(16).padStart(2, '0')).join('')
 
 function hydrate(input: ScenarioImport): Scenario {
 	const items: Item[] = input.items.map((i) => ({ id: uid(), displayName: i.name, variable: i.symbol }))
@@ -266,7 +267,7 @@ const PRESET_SCENARIOS: ScenarioImport[] = [
 	},
 ]
 
-const EMPTY_SCENARIO: Scenario = { id: crypto.randomUUID(), name: 'New Scenario', items: [], bundles: [] }
+const EMPTY_SCENARIO: Scenario = { id: uid(), name: 'New Scenario', items: [], bundles: [] }
 const fmt = (n: number) => `$${n.toFixed(2)}`
 
 function buildAiPrompt(example: ScenarioImport): string {

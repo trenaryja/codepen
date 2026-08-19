@@ -483,8 +483,11 @@ const loadStored = () => {
 	}
 }
 
+const uid = () =>
+	Array.from(crypto.getRandomValues(new Uint8Array(8)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+
 const toPlaces = (entries: { label: string; city: City }[]) =>
-	entries.map((entry) => ({ id: crypto.randomUUID(), label: entry.label, city: entry.city }))
+	entries.map((entry) => ({ id: uid(), label: entry.label, city: entry.city }))
 
 // Entry 0 starts as the zone-derived guess and is re-run with the IP-detected city once that lands (see App)
 const seedEntries = (first: City) =>
@@ -1100,7 +1103,7 @@ const App = () => {
 						: place,
 				),
 			)
-		else setPlaces([...places, { id: crypto.randomUUID(), label: city.name, city }])
+		else setPlaces([...places, { id: uid(), label: city.name, city }])
 		closeSearch()
 	}
 
