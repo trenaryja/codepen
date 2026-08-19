@@ -1,6 +1,6 @@
 import { useClipboard, useLocalStorage } from 'https://esm.sh/@mantine/hooks'
 import { Button, Field, Input, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import React, { useState } from 'https://esm.sh/react'
+import { useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	LuChevronDown,
@@ -713,12 +713,14 @@ function AllCombinationsTable({
 							return (
 								<tr key={combo.counts.join('-')} className={isOptimal ? 'bg-success/15 font-bold' : ''}>
 									<td className='text-right opacity-50'>#{index + 1}</td>
-									{bundles.map((b, j) => (
-										<td key={b.id} className='text-center font-mono'>
-											{/* eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- a zero count intentionally renders the dimmed 0 */}
-											{combo.counts[j] || <span className='opacity-20'>0</span>}
-										</td>
-									))}
+									{bundles.map((b, j) => {
+										const count = combo.counts[j] ?? 0
+										return (
+											<td key={b.id} className='text-center font-mono'>
+												{count === 0 ? <span className='opacity-20'>0</span> : count}
+											</td>
+										)
+									})}
 									{items.map((item) => (
 										<td key={item.id} className='text-center font-mono'>
 											{combo.totals[item.id]}

@@ -10,7 +10,7 @@ import {
 	useTheme,
 } from 'https://esm.sh/@trenaryja/ui'
 import mapboxgl from 'https://esm.sh/mapbox-gl'
-import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
+import { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	FaBorderAll,
@@ -47,6 +47,8 @@ type MapStyle = keyof typeof STYLES
 type Format = 'jpg' | 'png'
 
 type TileBounds = { north: number; south: number; east: number; west: number }
+
+type Piece = { url: string; dx: number; dy: number }
 
 const ZERO_BOUNDS: TileBounds = { north: 0, south: 0, east: 0, west: 0 }
 const DEFAULT_MAP_STYLE: Record<'dark' | 'light', MapStyle> = { dark: 'dark-v11', light: 'light-v11' }
@@ -207,6 +209,20 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 		const totalTiles = cols * rows
 		let totalSize = 0
 
+		const loadTile = async (piece: Piece, ctx: OffscreenCanvasRenderingContext2D, chunkLabel: string) => {
+			const res = await fetch(piece.url, { signal, cache: 'force-cache' })
+			if (!res.ok) throw new Error(`Tile fetch failed: ${res.status}`)
+			const img = await createImageBitmap(await res.blob())
+			ctx.drawImage(img, piece.dx * TILE_SIZE, piece.dy * TILE_SIZE)
+			img.close()
+			totalLoaded++
+			toast.loading('Downloading tiles...', {
+				id,
+				cancel: cancelAction,
+				description: `${Math.round((totalLoaded / totalTiles) * 100)}% (${totalLoaded}/${totalTiles})${chunkLabel}`,
+			})
+		}
+
 		for (let cy = 0; cy < chunksY; cy++) {
 			for (let cx = 0; cx < chunksX; cx++) {
 				signal.throwIfAborted()
@@ -224,7 +240,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 				const ctx = canvas.getContext('2d')
 				if (!ctx) throw new Error('Could not create canvas context')
 
-				const pieces: { url: string; dx: number; dy: number }[] = []
+				const pieces: Piece[] = []
 
 				for (let x = 0; x < colsInChunk; x++) {
 					for (let y = 0; y < rowsInChunk; y++) {
@@ -240,22 +256,7 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 
 				for (let i = 0; i < pieces.length; i += TILE_BATCH_SIZE) {
 					signal.throwIfAborted()
-					await Promise.all(
-						// eslint-disable-next-line @typescript-eslint/no-loop-func -- each batch is awaited before the next, so the totalLoaded closure runs sequentially
-						pieces.slice(i, i + TILE_BATCH_SIZE).map(async (p) => {
-							const res = await fetch(p.url, { signal, cache: 'force-cache' })
-							if (!res.ok) throw new Error(`Tile fetch failed: ${res.status}`)
-							const img = await createImageBitmap(await res.blob())
-							ctx.drawImage(img, p.dx * TILE_SIZE, p.dy * TILE_SIZE)
-							img.close()
-							totalLoaded++
-							toast.loading('Downloading tiles...', {
-								id,
-								cancel: cancelAction,
-								description: `${Math.round((totalLoaded / totalTiles) * 100)}% (${totalLoaded}/${totalTiles})${chunkLabel}`,
-							})
-						}),
-					)
+					await Promise.all(pieces.slice(i, i + TILE_BATCH_SIZE).map((piece) => loadTile(piece, ctx, chunkLabel)))
 				}
 
 				toast.loading(`Encoding image...${chunkLabel}`, { id, cancel: cancelAction, description: format.toUpperCase() })

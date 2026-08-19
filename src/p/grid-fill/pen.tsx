@@ -204,8 +204,7 @@ const availableSizes = (W: number, H: number) => {
 			sizes.push(size)
 		}
 
-	// eslint-disable-next-line @eslint-react/globals -- R.sort is Remeda's immutable sort, not Array#sort on a global
-	return R.sort(sizes, byFamily)
+	return sizes.toSorted(byFamily)
 }
 
 const solve = ({ W, H }: { W: number; H: number }) => {
@@ -444,6 +443,7 @@ const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 		middleware: [offset(6), flip(), shift({ padding: 8 })],
 		whileElementsMounted: autoUpdate,
 	})
+	const { setReference, setFloating } = refs
 	const hover = useHover(context, { mouseOnly: true, delay: { open: 120, close: 0 } })
 	const focus = useFocus(context)
 	const dismiss = useDismiss(context)
@@ -468,7 +468,7 @@ const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 		<>
 			{onToggle ? (
 				<button
-					ref={refs.setReference}
+					ref={setReference}
 					type='button'
 					aria-disabled={disabled}
 					{...getReferenceProps({ onClick: disabled ? undefined : onToggle })}
@@ -477,16 +477,14 @@ const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 					{inner}
 				</button>
 			) : (
-				// eslint-disable-next-line react-hooks/refs -- floating-ui's refs.setReference is a stable callback ref; this is its documented usage
-				<span ref={refs.setReference} {...getReferenceProps()} className={className}>
+				<span ref={setReference} {...getReferenceProps()} className={className}>
 					{inner}
 				</span>
 			)}
 			{open && (
 				<FloatingPortal>
 					<div
-						// eslint-disable-next-line react-hooks/refs -- floating-ui's refs.setFloating is a stable callback ref; this is its documented usage
-						ref={refs.setFloating}
+						ref={setFloating}
 						style={floatingStyles}
 						{...getFloatingProps()}
 						className='bg-base-300 text-base-content text-xs rounded-md p-2 max-w-xs shadow-lg z-50 pointer-events-none'
@@ -791,8 +789,7 @@ const Root = () => {
 	const viewBoxHeight = gridH + 2 * SVG_PADDING
 	const originX = SVG_PADDING
 	const originY = SVG_PADDING
-	// eslint-disable-next-line @eslint-react/globals -- R.sort is Remeda's immutable sort, not Array#sort on a global
-	const keys = R.sort(R.unique(layout.map((bin) => bin.key)), byFamily)
+	const keys = R.unique(layout.map((bin) => bin.key)).toSorted(byFamily)
 	const baseOf = (size: string) =>
 		interpolateColors(keys.length > 1 ? keys.indexOf(size) / (keys.length - 1) : 0, STOPS)
 	const filtersActive = filters.tags.size > 0 || filters.favoriteOnly || filters.constraints.length > 0

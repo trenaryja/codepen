@@ -1,3 +1,4 @@
+import { useElementSize } from 'https://esm.sh/@mantine/hooks'
 import { css, ThemePicker, ThemeProvider, toast, Toaster } from 'https://esm.sh/@trenaryja/ui'
 import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -466,38 +467,16 @@ function getSongKeyMap(song: ParsedSong, notes: NoteConfig[], noteToKey: Record<
 	return { toKey, toNote }
 }
 
-function usePianoWidth(ref: React.RefObject<HTMLDivElement | null>) {
-	const [width, setWidth] = useState(MAX_WHITE_COUNT)
-
-	useEffect(() => {
-		const element = ref.current
-		if (!element) return
-
-		const update = () => {
-			const count = Math.floor(element.clientWidth / (MIN_KEY_WIDTH_REM * REM_PX))
-			// eslint-disable-next-line @eslint-react/set-state-in-effect -- initial key count needs a DOM measurement, only possible after mount
-			setWidth(Math.max(1, Math.min(count, MAX_WHITE_COUNT)))
-		}
-
-		update()
-		const resizeObserver = new ResizeObserver(update)
-		resizeObserver.observe(element)
-		return () => resizeObserver.disconnect()
-	}, [ref])
-
-	return width
-}
-
 function Root() {
 	const audioContextRef = useRef<AudioContext | null>(null)
-	const pianoContainerRef = useRef<HTMLDivElement | null>(null)
+	const { ref: pianoContainerRef, width: pianoWidth } = useElementSize<HTMLDivElement>()
 	const [activeKeys, setActiveKeys] = useState<Set<string>>(() => new Set())
 	const [songIndex, setSongIndex] = useState(0)
 	const [songPosition, setSongPosition] = useState(0)
 	const [chordProgress, setChordProgress] = useState<Set<string>>(() => new Set())
 	const chordRef = useRef<Set<string>>(new Set())
 
-	const whiteCount = usePianoWidth(pianoContainerRef)
+	const whiteCount = pianoWidth ? Math.floor(pianoWidth / (MIN_KEY_WIDTH_REM * REM_PX)) : MAX_WHITE_COUNT
 	const { black, blackPositions, firstNote, handleWheel, lastNote, noteToKey, notes, white } =
 		useVisibleNotes(whiteCount)
 

@@ -1,6 +1,6 @@
 import { RadioGroup, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import { useEffect, useMemo, useRef, useState } from 'https://esm.sh/react'
 import type { ReactNode } from 'https://esm.sh/react'
+import { useEffect, useMemo, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 
 const FONTS: Record<string, string> = {
@@ -23,6 +23,7 @@ function cssFont(size: number, family: string, weight = 400) {
 }
 
 function measure(text: string, font: string) {
+	// eslint-disable-next-line @eslint-react/globals -- set-font-then-measureText is the canvas measurement API
 	measureCtx.font = font
 	return measureCtx.measureText(text)
 }
@@ -346,13 +347,11 @@ function computeLayout(
 	height: number,
 ): Layout {
 	const font = cssFont(Math.round((fontSize * height) / BASE_HEIGHT), family, fontWeight)
-	// eslint-disable-next-line @eslint-react/globals -- module-level measuring canvas; setting font before measureText is how the canvas measurement API works
-	measureCtx.font = font
-	const metrics = measureCtx.measureText(sample)
-	const capHeight = measureCtx.measureText('H').actualBoundingBoxAscent
-	const xHeight = measureCtx.measureText('x').actualBoundingBoxAscent
-	const descenderDepth = measureCtx.measureText('p').actualBoundingBoxDescent
-	const ascenderHeight = measureCtx.measureText('hd').actualBoundingBoxAscent
+	const metrics = measure(sample, font)
+	const capHeight = measure('H', font).actualBoundingBoxAscent
+	const xHeight = measure('x', font).actualBoundingBoxAscent
+	const descenderDepth = measure('p', font).actualBoundingBoxDescent
+	const ascenderHeight = measure('hd', font).actualBoundingBoxAscent
 	const { fontBoundingBoxAscent: fontAscent, fontBoundingBoxDescent: fontDescent, width: advance } = metrics
 	const charX = (width - advance) / 2
 	const baselineY = (height - fontAscent - fontDescent) / 2 + fontAscent
