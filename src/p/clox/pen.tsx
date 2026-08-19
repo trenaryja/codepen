@@ -1054,7 +1054,7 @@ const App = () => {
 		setQuery('')
 	}
 
-	// arrows walk 15-min boundaries of the reference zone's wall time (⌘/ctrl = hours), n = back to now,
+	// arrows walk 15-min boundaries of the reference zone's wall time (shift = hours), n = back to now,
 	// esc closes search — or clears the scrub. Registered once: it only touches setters and refs.
 	useEffect(() => {
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -1062,8 +1062,9 @@ const App = () => {
 			if (event.target instanceof HTMLElement && event.target.closest('input')) return
 			if (event.key === 'n') return animateTo(null)
 			if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
-			event.preventDefault() // ⌘← is history-back in macOS browsers
-			const step = event.metaKey || event.ctrlKey ? HOUR : QUARTER_HOUR
+			if (event.metaKey || event.ctrlKey || event.altKey) return // leave history-back and desktop-switch alone
+			event.preventDefault() // bare arrows would scroll the page
+			const step = event.shiftKey ? HOUR : QUARTER_HOUR
 			const forward = event.key === 'ArrowRight'
 			const base = scrubTargetRef.current ?? stateRef.current.instant
 			const local = localMs(stateRef.current.referenceTimeZone, base)
@@ -1226,7 +1227,7 @@ const App = () => {
 						<footer className='mt-auto flex items-center justify-center gap-4 p-4 text-xs opacity-40'>
 							{[
 								['15m', '←', '→'],
-								['1h', '⌘/ctrl', '←', '→'],
+								['1h', '⇧', '←', '→'],
 								['now', 'n'],
 							].map(([label, ...keys]) => (
 								<span key={label} className='flex items-center gap-1'>
