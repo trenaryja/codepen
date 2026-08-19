@@ -764,8 +764,10 @@ const PlaceCard = ({
 							<Editable
 								display={label}
 								edit={label}
-								commit={(draft) => draft.trim() && rename(id, draft.trim())}
+								// clearing the field is how you un-rename: the city name back in `label` *is* the unlabeled state
+								commit={(draft) => rename(id, draft.trim() || city.name)}
 								title='rename'
+								placeholder={city.name}
 								className='text-lg font-medium sm:text-xl'
 							/>
 							<button
