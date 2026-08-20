@@ -22,6 +22,10 @@ declare module 'https://esm.sh/@mantine/hooks' {
 	export * from '@mantine/hooks'
 }
 
+declare module 'https://esm.sh/@t3-oss/env-core' {
+	export * from '@t3-oss/env-core'
+}
+
 declare module 'https://esm.sh/@tanstack/react-table@8' {
 	export * from '@tanstack/react-table'
 }

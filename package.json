@@ -19,6 +19,7 @@
 		"@dnd-kit/utilities": "^3.2.2",
 		"@floating-ui/react": "^0.27.20",
 		"@mantine/hooks": "^9.5.1",
+		"@t3-oss/env-core": "^0.13.11",
 		"@tanstack/react-virtual": "^3.14.9",
 		"@trenaryja/ui": "^0.0.1-37",
 		"advanced-cropper": "^0.17.1",

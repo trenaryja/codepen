@@ -26,9 +26,10 @@ import {
 	FaMinus,
 	FaPlus,
 } from 'https://esm.sh/react-icons/fa'
+import { env } from './env'
 
-// Set via VITE_MAPBOX_TOKEN env var — see .env locally, Vercel env vars for deploys
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+// Set via .env.local locally, Vercel env vars for deploys — see .env.example
+mapboxgl.accessToken = env.VITE_MAPBOX_TOKEN
 
 const TILE_SIZE = 1024
 const TILE_BATCH_SIZE = 12
