@@ -29,6 +29,7 @@ import {
 	WiSprinkle,
 	WiThunderstorm,
 } from 'https://esm.sh/react-icons/wi'
+import * as R from 'https://esm.sh/remeda'
 import { z } from 'https://esm.sh/zod'
 
 const HOUR = 3_600_000
@@ -80,7 +81,9 @@ const zoneOffset = (timeZone: string, instant: number) => {
 // Shifting the instant by the zone's offset makes UTC rendering read as that zone's wall clock
 const localMs = (timeZone: string, instant: number) => instant + zoneOffset(timeZone, instant)
 
-const formatTime = (instant: number, timeZone: string, hour12: boolean, seconds: boolean) =>
+type TimeFormat = { instant: number; timeZone: string; hour12: boolean; seconds: boolean }
+
+const formatTime = ({ instant, timeZone, hour12, seconds }: TimeFormat) =>
 	getFormatter({
 		timeZone,
 		hour: 'numeric',
@@ -115,23 +118,35 @@ const formatSignedGap = (milliseconds: number) => {
 	return `${totalMinutes < 0 ? '-' : '+'}${hours}h${minutes ? ` ${minutes}m` : ''}`
 }
 
+// a Map, not an object: the key is whatever you typed, and "constructor" is not a time of day
+const NAMED_TIMES = new Map([
+	['noon', [720]],
+	['midnight', [0]],
+])
+
+// A meridiem folds the written hour into 24h and settles the answer to one candidate
+const MERIDIEM_HOUR: Record<string, (hour: number) => number> = {
+	a: (hour) => (hour === 12 ? 0 : hour),
+	p: (hour) => (hour < 12 ? hour + 12 : hour),
+}
+
 // Accepts "9", "9:30", "930", "0930", "9.30", "9 30", "9p", "9:30 pm", "noon", "midnight".
 // Without a meridiem, 1–12 returns both wall-clock candidates; the scrubber jumps to whichever is nearest.
 // A leading zero ("09", "0930") or an hour ≥ 13 reads as explicit 24h and stays single.
 const parseWallTime = (raw: string): number[] | null => {
 	const text = raw.trim().toLowerCase()
-	if (text === 'noon') return [720]
-	if (text === 'midnight') return [0]
+	const named = NAMED_TIMES.get(text)
+	if (named) return named
 	const match = /^(\d{1,2})(?:[ .:]?(\d{2}))?\s*(?:(a|p)\.?m?\.?)?$/.exec(text)
 	if (!match) return null
-	let hour = Number(match[1])
+	const hourField = match[1]!
+	const hour = Number(hourField)
 	const minute = Number(match[2] ?? 0)
 	if (hour > 23 || minute > 59) return null
-	const meridiem = match[3]
-	if (meridiem === 'p' && hour < 12) hour += 12
-	if (meridiem === 'a' && hour === 12) hour = 0
-	const explicit24 = match[1]!.length === 2 && match[1]!.startsWith('0')
-	if (meridiem || explicit24 || hour === 0 || hour > 12) return [hour * 60 + minute]
+	const fold = MERIDIEM_HOUR[match[3] ?? '']
+	if (fold) return [fold(hour) * 60 + minute]
+	// a leading zero ("09", "0930") or an hour outside 1–12 reads as explicit 24h and stays single
+	if (hourField.startsWith('0') || hour === 0 || hour > 12) return [hour * 60 + minute]
 	return [(hour % 12) * 60 + minute, ((hour % 12) + 12) * 60 + minute]
 }
 
@@ -483,11 +498,8 @@ const loadStored = () => {
 	}
 }
 
-const uid = () =>
-	Array.from(crypto.getRandomValues(new Uint8Array(8)), (byte) => byte.toString(16).padStart(2, '0')).join('')
-
 const toPlaces = (entries: { label: string; city: City }[]) =>
-	entries.map((entry) => ({ id: uid(), label: entry.label, city: entry.city }))
+	entries.map((entry) => ({ id: R.randomString(21), label: entry.label, city: entry.city }))
 
 // Entry 0 starts as the zone-derived guess and is re-run with the IP-detected city once that lands (see App)
 const seedEntries = (first: City) =>
@@ -571,6 +583,160 @@ const toStored = (
 	places: Entry[],
 	{ hour12, fahrenheit, showSeconds, forecastMode, view }: Omit<Stored, 'places' | 'version'>,
 ): Stored => ({ version: 1, places, hour12, fahrenheit, showSeconds, forecastMode, view })
+
+const initialPreferences = (stored: Stored | null): Preferences => ({
+	hour12: stored?.hour12 ?? DEFAULTS.hour12,
+	fahrenheit: stored?.fahrenheit ?? DEFAULTS.fahrenheit,
+	showSeconds: stored?.showSeconds ?? DEFAULTS.showSeconds,
+	forecastMode: stored?.forecastMode ?? DEFAULTS.forecastMode,
+})
+
+// What the session starts from — read once, at mount. `seeded` means neither a link nor a saved board
+// supplied it, which is the only case IP detection is allowed to rewrite.
+const readOrigin = (cities: string | null, viewParam: View | null) => {
+	const stored = loadStored()
+	const urlEntries = decodeBoard(cities)
+	return {
+		stored,
+		urlEntries,
+		seeded: !stored && !urlEntries,
+		preferences: initialPreferences(stored),
+		view: viewParam ?? stored?.view ?? DEFAULTS.view,
+	}
+}
+
+type Origin = ReturnType<typeof readOrigin>
+
+// A link's board, then your saved one, then the seed
+const startEntries = ({ stored, urlEntries }: Origin, first: City) => urlEntries ?? stored?.places ?? seedEntries(first)
+
+// The seed's first entry holds fallbackCity itself, so identity alone says "still the zone-derived guess":
+// retargeting that card replaces the object, and detection then leaves it alone.
+const applyDetection = (places: Place[], detected: City) =>
+	places.map((place) =>
+		place.city === fallbackCity
+			? { ...place, label: place.label === place.city.name ? detected.name : place.label, city: detected }
+			: place,
+	)
+
+// Both mirrors stay quiet until the state differs from what the session started with — so a first visit stays
+// ephemeral (including the render where IP detection fills in the real city, which is the pen acting, not
+// you), and a link you opened and left alone neither dirties the address bar nor overwrites your saved board
+const usePersistence = ({
+	origin,
+	places,
+	detected,
+	preferences,
+	view,
+	cities,
+	setCities,
+}: {
+	origin: Origin
+	places: Place[]
+	detected: City
+	preferences: Preferences
+	view: View
+	cities: string | null
+	setCities: (cities: string | null) => void
+}) => {
+	const entries = places.map(({ label, city }) => ({ label, city }))
+	const initialEntries = startEntries(origin, detected)
+
+	const payload = JSON.stringify(toStored(entries, { ...preferences, view }))
+	const initialPayload = JSON.stringify(toStored(initialEntries, origin.stored ?? DEFAULTS))
+	const hasWrittenRef = useRef(false)
+	useEffect(() => {
+		// once this session has written, it keeps writing, so putting a setting back re-syncs the saved board
+		if (payload === initialPayload && !hasWrittenRef.current) return
+		hasWrittenRef.current = true
+		localStorage.setItem(STORAGE_KEY, payload)
+	}, [payload, initialPayload])
+
+	const encoded = entries.map(encodeEntry).join(';')
+	const initialEncoded = initialEntries.map(encodeEntry).join(';')
+	useEffect(() => {
+		// once the URL carries a board it keeps carrying one, right down to the empty board that clears it
+		if (encoded !== initialEncoded || cities) setCities(encoded || null)
+	}, [encoded, initialEncoded, cities, setCities])
+}
+
+type ScrubberInput = {
+	now: number
+	instant: number
+	referenceTimeZone: string
+	searchOpen: boolean
+	onScrub: (instant: number | null) => void
+	onCloseSearch: () => void
+}
+
+// How the instant moves: a 300ms ease to wherever you asked for. Arrows walk 15-min boundaries of the
+// reference zone's wall time (shift = hours), n = back to now, esc closes search — or clears the scrub.
+// The keydown listener registers once and an animation outlives the render that started it, so both read
+// live props out of a ref rather than out of a closure.
+const useScrubber = ({ now, instant, referenceTimeZone, searchOpen, onScrub, onCloseSearch }: ScrubberInput) => {
+	const stateRef = useRef({ now, instant, searchOpen, referenceTimeZone, onScrub, onCloseSearch })
+	useEffect(() => {
+		stateRef.current = { now, instant, searchOpen, referenceTimeZone, onScrub, onCloseSearch }
+	})
+
+	const animationRef = useRef(0)
+	// where the last scrub is headed — arrow walks step from here, not the mid-animation instant
+	const scrubTargetRef = useRef<number | null>(null)
+
+	// everything the animation needs already lives in a ref, so one instance serves every render —
+	// which is what lets the keydown listener below register once
+	const animateRef = useRef((target: number | null) => {
+		scrubTargetRef.current = target
+		cancelAnimationFrame(animationRef.current)
+		const from = stateRef.current.instant
+		const start = performance.now()
+
+		const step = (frameTime: number) => {
+			const t = Math.min(1, (frameTime - start) / 300)
+			const goal = target ?? stateRef.current.now
+			stateRef.current.onScrub(t < 1 ? from + (goal - from) * (1 - (1 - t) ** 3) : target)
+			if (t < 1) animationRef.current = requestAnimationFrame(step)
+		}
+
+		animationRef.current = requestAnimationFrame(step)
+	})
+
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			const animateTo = animateRef.current
+			if (event.key === 'Escape')
+				return stateRef.current.searchOpen ? stateRef.current.onCloseSearch() : animateTo(null)
+			if (event.target instanceof HTMLElement && event.target.closest('input')) return
+			if (event.key === 'n') return animateTo(null)
+			if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
+			if (event.metaKey || event.ctrlKey || event.altKey) return // leave history-back and desktop-switch alone
+			event.preventDefault() // bare arrows would scroll the page
+			const step = event.shiftKey ? HOUR : QUARTER_HOUR
+			const forward = event.key === 'ArrowRight'
+			const base = scrubTargetRef.current ?? stateRef.current.instant
+			const local = localMs(stateRef.current.referenceTimeZone, base)
+			// off a boundary walks to the nearest one in that direction; on one, a full step
+			const target = forward ? Math.floor(local / step + 1) * step : Math.ceil(local / step - 1) * step
+			animateTo(base + target - local)
+		}
+
+		window.addEventListener('keydown', onKeyDown)
+		return () => window.removeEventListener('keydown', onKeyDown)
+	}, [])
+
+	const animateTo = (target: number | null) => animateRef.current(target)
+
+	const scrubToWall = (timeZone: string, candidates: number[]) => {
+		const current = (localMs(timeZone, stateRef.current.instant) % DAY) / 60_000
+		// wrap each candidate into the nearest ±12h so "9am" never scrubs the long way round
+		const nearest = candidates
+			.map((minutes) => ((minutes - current + 2160) % 1440) - 720)
+			.reduce((best, delta) => (Math.abs(delta) < Math.abs(best) ? delta : best))
+		animateTo(stateRef.current.instant + nearest * 60_000)
+	}
+
+	return { animateTo, scrubToWall }
+}
 
 // A display button that swaps in place for a daisy input sized to match its own type scale
 const Editable = ({
@@ -658,7 +824,7 @@ const EditableTime = ({ timeZone, className }: { timeZone: string; className?: s
 				}}
 			/>
 			<Editable
-				display={formatTime(instant, timeZone, hour12, showSeconds)}
+				display={formatTime({ instant, timeZone, hour12, seconds: showSeconds })}
 				edit=''
 				commit={(draft) => {
 					const candidates = parseWallTime(draft)
@@ -749,7 +915,6 @@ const PlaceCard = ({
 	const expandable = !isUtc(city)
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
 	return (
-		// eslint-disable-next-line jsx-a11y/click-events-have-key-events -- drag-reorder + expand surface; the div can't be a button (nested-interactive), and the header's expand-all button is the keyboard path
 		<div
 			ref={setNodeRef}
 			// Translate, not Transform — Transform includes a scale that stretches cards when
@@ -759,6 +924,15 @@ const PlaceCard = ({
 			{...listeners}
 			className={`card group cursor-grab touch-manipulation select-none bg-base-200 active:cursor-grabbing ${isDragging ? 'z-10 opacity-60' : ''}`}
 			onClick={expandOnClick(() => expandable && onToggle())}
+			// useSortable's attributes already make the card focusable and announce it as a button; this is
+			// what makes it operable. The currentTarget check is the keyboard twin of expandOnClick's guard —
+			// a nested button or input gets its own Enter, and the press must not also toggle the card.
+			onKeyDown={(event) => {
+				if (event.key !== 'Enter' && event.key !== ' ') return
+				if (event.target !== event.currentTarget) return
+				event.preventDefault()
+				if (expandable) onToggle()
+			}}
 		>
 			<div className='card-body gap-2 px-4 py-3 sm:px-5 sm:py-4'>
 				<div className='flex items-center gap-2 sm:gap-3'>
@@ -850,7 +1024,7 @@ const BandRow = ({ label, city, start }: { label: string; city: City; start: num
 				<div className='flex items-baseline gap-2 whitespace-nowrap font-mono'>
 					<span className='text-xs opacity-60 sm:text-sm'>{formatSignedGap(gap)}</span>
 					<span className='text-xl font-extralight tracking-tight sm:text-2xl'>
-						{formatTime(instant, city.timeZone, hour12, showSeconds)}
+						{formatTime({ instant, timeZone: city.timeZone, hour12, seconds: showSeconds })}
 					</span>
 				</div>
 			</div>
@@ -948,8 +1122,256 @@ const BandsView = ({
 
 type SearchMode = { kind: 'add' } | { kind: 'place'; id: string }
 
+type Toggle = { key: string; content: ReactNode; label?: string; onClick: () => void }
+
+const BoardHeader = ({
+	view,
+	onView,
+	places,
+	preferences,
+	onPreferences,
+	expandedIds,
+	onExpandedIds,
+}: {
+	view: View
+	onView: (view: View) => void
+	places: Place[]
+	preferences: Preferences
+	onPreferences: (patch: Partial<Preferences>) => void
+	expandedIds: string[]
+	onExpandedIds: (ids: string[]) => void
+}) => {
+	const { hour12, fahrenheit, showSeconds, forecastMode } = preferences
+	const expandableIds = places.filter((place) => !isUtc(place.city)).map((place) => place.id)
+	const allExpanded = expandableIds.every((id) => expandedIds.includes(id))
+
+	// weather/forecast toggles only matter where weather shows — the list's cards
+	const toggles: Toggle[] = [
+		...(view === 'list'
+			? [
+					{
+						key: 'expand',
+						content: allExpanded ? <LuChevronsDownUp /> : <LuChevronsUpDown />,
+						label: `${allExpanded ? 'collapse' : 'expand'} all cards`,
+						onClick: () => onExpandedIds(allExpanded ? [] : expandableIds),
+					},
+					{
+						key: 'mode',
+						content: forecastMode,
+						onClick: () => onPreferences({ forecastMode: forecastMode === 'hourly' ? 'daily' : 'hourly' }),
+					},
+					{
+						key: 'unit',
+						content: `°${fahrenheit ? 'F' : 'C'}`,
+						onClick: () => onPreferences({ fahrenheit: !fahrenheit }),
+					},
+				]
+			: []),
+		{
+			key: 'seconds',
+			content: showSeconds ? ':ss' : ':—',
+			onClick: () => onPreferences({ showSeconds: !showSeconds }),
+		},
+		{ key: 'cycle', content: hour12 ? '12h' : '24h', onClick: () => onPreferences({ hour12: !hour12 }) },
+	]
+
+	// shrink-0 keeps the tablist from being squeezed into a two-line stack; the toggle
+	// group wraps whole, and its ml-auto keeps it right-aligned on the line it lands on
+	return (
+		<header className='flex flex-wrap items-center gap-2 px-4 py-3'>
+			<div role='tablist' className='tabs tabs-border tabs-sm mr-auto shrink-0'>
+				{VIEWS.map((entry) => (
+					<button
+						key={entry}
+						type='button'
+						role='tab'
+						aria-selected={entry === view}
+						className={`tab ${entry === view ? 'tab-active' : ''}`}
+						onClick={() => onView(entry)}
+					>
+						{entry}
+					</button>
+				))}
+			</div>
+			<div className='ml-auto flex items-center gap-1 sm:gap-2'>
+				<ThemePicker variant='modal' />
+				{toggles.map(({ key, content, label, onClick }) => (
+					<button key={key} type='button' aria-label={label} className='btn btn-ghost btn-xs' onClick={onClick}>
+						{content}
+					</button>
+				))}
+			</div>
+		</header>
+	)
+}
+
+const ListView = ({
+	places,
+	now,
+	scrubbed,
+	expandedIds,
+	onSettle,
+	onExpandedIds,
+	onReorder,
+	onEditLocation,
+}: {
+	places: Place[]
+	now: number
+	scrubbed: number | null
+	expandedIds: string[]
+	onSettle: (target: number | null) => void
+	onExpandedIds: (ids: string[]) => void
+	onReorder: (places: Place[]) => void
+	onEditLocation: (place: Place) => void
+}) => {
+	// Mouse, not Pointer: PointerSensor claims touch too, and with the card free to scroll the browser
+	// wins that race and cancels every drag — so on a phone reordering never started. Mouse leaves touch
+	// to the TouchSensor, where a long press means drag and a plain swipe still scrolls the board
+	const sensors = useSensors(
+		useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+		useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+	)
+
+	const onDragEnd = ({ active, over }: DragEndEvent) => {
+		if (!over || active.id === over.id) return
+		const from = places.findIndex((place) => place.id === active.id)
+		const to = places.findIndex((place) => place.id === over.id)
+		if (from !== -1 && to !== -1) onReorder(arrayMove(places, from, to))
+	}
+
+	const toggleExpanded = (id: string) =>
+		onExpandedIds(expandedIds.includes(id) ? expandedIds.filter((entry) => entry !== id) : [...expandedIds, id])
+
+	return (
+		<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-3 pb-28 sm:p-4 sm:pb-28'>
+			<InstantStrip now={now} scrubbed={scrubbed} onSettle={onSettle} />
+			<DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+				<SortableContext items={places.map((place) => place.id)} strategy={verticalListSortingStrategy}>
+					{places.map((place) => (
+						<PlaceCard
+							key={place.id}
+							place={place}
+							expanded={expandedIds.includes(place.id)}
+							onToggle={() => toggleExpanded(place.id)}
+							onEditLocation={() => onEditLocation(place)}
+						/>
+					))}
+				</SortableContext>
+			</DndContext>
+			{!places.length && <p className='py-12 text-center opacity-60'>No places yet — add one to start the board.</p>}
+		</main>
+	)
+}
+
+// keyboard hints only make sense where a keyboard is likely
+const KeyboardHints = () => {
+	if (!FINE_POINTER) return null
+	return (
+		<footer className='mt-auto flex items-center justify-center gap-4 p-4 text-xs opacity-40'>
+			{[
+				['15m', '←', '→'],
+				['1h', '⇧', '←', '→'],
+				['now', 'n'],
+			].map(([label, ...keys]) => (
+				<span key={label} className='flex items-center gap-1'>
+					{keys.map((key) => (
+						<kbd key={key} className='kbd kbd-xs'>
+							{key}
+						</kbd>
+					))}
+					{label}
+				</span>
+			))}
+		</footer>
+	)
+}
+
+// bands has no card affordances, but an empty board still needs a way back in
+const AddPlaceButton = ({ shown, onClick }: { shown: boolean; onClick: () => void }) => {
+	if (!shown) return null
+	return (
+		<div className='fab'>
+			<button type='button' aria-label='add a place' className='btn btn-circle btn-xl shadow-lg' onClick={onClick}>
+				＋
+			</button>
+		</div>
+	)
+}
+
+const SearchDialog = ({
+	query,
+	onQuery,
+	now,
+	hour12,
+	detected,
+	detectPending,
+	onPick,
+	onClose,
+}: {
+	query: string
+	onQuery: (query: string) => void
+	now: number
+	hour12: boolean
+	detected: City
+	detectPending: boolean
+	onPick: (city: City) => void
+	onClose: () => void
+}) => {
+	const { matches, searching } = useCitySearch(query)
+	return (
+		<div className='modal modal-open modal-bottom sm:modal-middle'>
+			<div className='modal-box flex flex-col gap-2'>
+				<label className='input w-full'>
+					<input
+						className='grow'
+						placeholder='search any city…'
+						value={query}
+						autoFocus
+						onFocus={(event) => event.target.select()}
+						onChange={(event) => onQuery(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === 'Enter' && matches[0]) onPick(matches[0])
+						}}
+					/>
+					{searching && <span className='loading loading-spinner loading-sm' />}
+				</label>
+				<ul className='menu w-full'>
+					{/* wherever you are, as one press — the same IP lookup that seeds the board on a first visit */}
+					<li>
+						<button
+							type='button'
+							className='flex items-baseline justify-between'
+							disabled={detectPending}
+							onClick={() => onPick(detected)}
+						>
+							<span className='flex items-baseline gap-2'>
+								<LuLocateFixed className='self-center' />
+								here
+								{!detectPending && <span className='text-xs opacity-50'>{detected.name}</span>}
+							</span>
+							{detectPending && <span className='loading loading-spinner loading-xs' />}
+						</button>
+					</li>
+					{matches.map((city) => (
+						<li key={`${city.name}-${city.latitude}-${city.longitude}`}>
+							<button type='button' className='flex items-baseline justify-between' onClick={() => onPick(city)}>
+								<span>
+									{city.name} <span className='text-xs opacity-50'>{city.country}</span>
+								</span>
+								<span className='font-mono text-xs opacity-60'>
+									{formatTime({ instant: now, timeZone: city.timeZone, hour12, seconds: false })}
+								</span>
+							</button>
+						</li>
+					))}
+				</ul>
+			</div>
+			<button type='button' className='modal-backdrop' aria-label='close' onClick={onClose} />
+		</div>
+	)
+}
+
 const App = () => {
-	const stored = useRef(loadStored()).current
 	// The board and the view are shareable, so they ride in the URL; the rest are your preferences and stay
 	// on this device. Replace, not push — thirty scrubs shouldn't cost thirty presses of the back button
 	const [cities, setCities] = useQueryState('cities', parseAsString.withOptions({ history: 'replace' }))
@@ -958,50 +1380,46 @@ const App = () => {
 		parseAsStringLiteral(VIEWS).withOptions({ history: 'replace' }),
 	)
 	// A link's board is read once, at mount: from here on the URL mirrors state rather than driving it
-	const urlEntries = useRef(decodeBoard(cities)).current
+	const origin = useRef(readOrigin(cities, viewParam)).current
 
 	const [now, setNow] = useState(() => Date.now())
 	const [scrubbed, setScrubbed] = useState<number | null>(null)
-	const [places, setPlaces] = useState<Place[]>(() =>
-		toPlaces(urlEntries ?? stored?.places ?? seedEntries(fallbackCity)),
-	)
-	const [hour12, setHour12] = useState(stored?.hour12 ?? DEFAULTS.hour12)
-	const [fahrenheit, setFahrenheit] = useState(stored?.fahrenheit ?? DEFAULTS.fahrenheit)
-	const [showSeconds, setShowSeconds] = useState(stored?.showSeconds ?? DEFAULTS.showSeconds)
-	const [forecastMode, setForecastMode] = useState<ForecastMode>(stored?.forecastMode ?? DEFAULTS.forecastMode)
+	const [places, setPlaces] = useState(() => toPlaces(startEntries(origin, fallbackCity)))
+	const [preferences, setPreferences] = useState(origin.preferences)
+	const [view, setView] = useState(origin.view)
 	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
 	const [query, setQuery] = useState('')
 	const [expandedIds, setExpandedIds] = useState<string[]>([])
-	const [view, setView] = useState<View>(viewParam ?? stored?.view ?? DEFAULTS.view)
 
 	const { detected, pending: detectPending } = useDetectedCity()
-	// The seed's first entry holds fallbackCity itself, so identity alone says "still the zone-derived guess":
-	// retargeting that card replaces the object, and detection then leaves it alone. Adjusting state during
-	// render (not in an effect) is the React-sanctioned shape for this, same as useCitySearch above.
+	// Adjusting state during render (not in an effect) is the React-sanctioned shape for this,
+	// same as useCitySearch above
 	const [appliedDetection, setAppliedDetection] = useState(detected)
 
-	if (!stored && !urlEntries && appliedDetection !== detected) {
+	if (origin.seeded && appliedDetection !== detected) {
 		setAppliedDetection(detected)
-		setPlaces(
-			places.map((place) =>
-				place.city === fallbackCity
-					? { ...place, label: place.label === place.city.name ? detected.name : place.label, city: detected }
-					: place,
-			),
-		)
+		setPlaces(applyDetection(places, detected))
 	}
 
 	const reference = places[0]?.city ?? fallbackCity
 	const instant = scrubbed ?? now
-	const { matches, searching } = useCitySearch(query)
 	const { weather, ready: weatherReady } = useWeather(
 		places.map((place) => place.city),
-		fahrenheit,
+		preferences.fahrenheit,
 	)
 
-	const stateRef = useRef({ now, instant, searchOpen: false, referenceTimeZone: reference.timeZone })
-	useEffect(() => {
-		stateRef.current = { now, instant, searchOpen: searchMode !== null, referenceTimeZone: reference.timeZone }
+	const closeSearch = () => {
+		setSearchMode(null)
+		setQuery('')
+	}
+
+	const { animateTo, scrubToWall } = useScrubber({
+		now,
+		instant,
+		referenceTimeZone: reference.timeZone,
+		searchOpen: searchMode !== null,
+		onScrub: setScrubbed,
+		onCloseSearch: closeSearch,
 	})
 
 	useEffect(() => {
@@ -1009,80 +1427,12 @@ const App = () => {
 		return () => clearInterval(id)
 	}, [])
 
-	// What the session started from: a link's board, then your saved one, then the seed. Both mirrors below
-	// stay quiet until the state differs from it — so a first visit stays ephemeral (including the render
-	// where IP detection fills in the real city, which is the pen acting, not you), and a link you opened and
-	// left alone neither dirties the address bar nor overwrites the board you already had saved
-	const entries = places.map(({ label, city }) => ({ label, city }))
-	const initialEntries = urlEntries ?? stored?.places ?? seedEntries(detected)
-
-	const payload = JSON.stringify(toStored(entries, { hour12, fahrenheit, showSeconds, forecastMode, view }))
-	const initialPayload = JSON.stringify(toStored(initialEntries, stored ?? DEFAULTS))
-	useEffect(() => {
-		if (payload !== initialPayload) localStorage.setItem(STORAGE_KEY, payload)
-	}, [payload, initialPayload])
-
-	const encoded = entries.map(encodeEntry).join(';')
-	const initialEncoded = initialEntries.map(encodeEntry).join(';')
-	useEffect(() => {
-		// once the URL carries a board it keeps carrying one, right down to the empty board that clears it
-		if (encoded !== initialEncoded || cities) setCities(encoded || null)
-	}, [encoded, initialEncoded, cities, setCities])
+	usePersistence({ origin, places, detected, preferences, view, cities, setCities })
 
 	useEffect(() => {
 		setViewParam(view === DEFAULTS.view ? null : view)
 	}, [view, setViewParam])
 
-	// ── scrub ──
-	const animationRef = useRef(0)
-	// where the last scrub is headed — arrow walks step from here, not the mid-animation instant
-	const scrubTargetRef = useRef<number | null>(null)
-
-	const animateTo = (target: number | null) => {
-		scrubTargetRef.current = target
-		cancelAnimationFrame(animationRef.current)
-		const from = stateRef.current.instant
-		const start = performance.now()
-
-		const step = (frameTime: number) => {
-			const t = Math.min(1, (frameTime - start) / 300)
-			const goal = target ?? stateRef.current.now
-			setScrubbed(t < 1 ? from + (goal - from) * (1 - (1 - t) ** 3) : target)
-			if (t < 1) animationRef.current = requestAnimationFrame(step)
-		}
-
-		animationRef.current = requestAnimationFrame(step)
-	}
-
-	const closeSearch = () => {
-		setSearchMode(null)
-		setQuery('')
-	}
-
-	// arrows walk 15-min boundaries of the reference zone's wall time (shift = hours), n = back to now,
-	// esc closes search — or clears the scrub. Registered once: it only touches setters and refs.
-	useEffect(() => {
-		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') return stateRef.current.searchOpen ? closeSearch() : animateTo(null)
-			if (event.target instanceof HTMLElement && event.target.closest('input')) return
-			if (event.key === 'n') return animateTo(null)
-			if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
-			if (event.metaKey || event.ctrlKey || event.altKey) return // leave history-back and desktop-switch alone
-			event.preventDefault() // bare arrows would scroll the page
-			const step = event.shiftKey ? HOUR : QUARTER_HOUR
-			const forward = event.key === 'ArrowRight'
-			const base = scrubTargetRef.current ?? stateRef.current.instant
-			const local = localMs(stateRef.current.referenceTimeZone, base)
-			// off a boundary walks to the nearest one in that direction; on one, a full step
-			const target = forward ? Math.floor(local / step + 1) * step : Math.ceil(local / step - 1) * step
-			animateTo(base + target - local)
-		}
-
-		window.addEventListener('keydown', onKeyDown)
-		return () => window.removeEventListener('keydown', onKeyDown)
-	}, [])
-
-	// ── place actions ──
 	// pre-fill retarget searches with the current city so a typo or misclick is a two-keystroke fix
 	const openSearch = (mode: SearchMode, prefill = '') => {
 		setSearchMode(mode)
@@ -1103,219 +1453,65 @@ const App = () => {
 						: place,
 				),
 			)
-		else setPlaces([...places, { id: uid(), label: city.name, city }])
+		else setPlaces([...places, { id: R.randomString(21), label: city.name, city }])
 		closeSearch()
 	}
 
-	const toggleExpanded = (id: string) =>
-		setExpandedIds(expandedIds.includes(id) ? expandedIds.filter((entry) => entry !== id) : [...expandedIds, id])
-
-	const expandableIds = places.filter((place) => !isUtc(place.city)).map((place) => place.id)
-	const allExpanded = expandableIds.every((id) => expandedIds.includes(id))
-
-	// Mouse, not Pointer: PointerSensor claims touch too, and with the card free to scroll the browser
-	// wins that race and cancels every drag — so on a phone reordering never started. Mouse leaves touch
-	// to the TouchSensor, where a long press means drag and a plain swipe still scrolls the board
-	const sensors = useSensors(
-		useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
-		useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
-	)
-
-	const onDragEnd = ({ active, over }: DragEndEvent) => {
-		if (!over || active.id === over.id) return
-		const from = places.findIndex((place) => place.id === active.id)
-		const to = places.findIndex((place) => place.id === over.id)
-		if (from !== -1 && to !== -1) setPlaces(arrayMove(places, from, to))
-	}
-
-	// eslint-disable-next-line @eslint-react/no-unstable-context-value -- React Compiler memoizes this value; manual useMemo is banned here
 	const settings: Settings = {
+		...preferences,
 		instant,
 		reference,
-		hour12,
-		showSeconds,
-		fahrenheit,
-		forecastMode,
 		weather,
 		weatherReady,
+		scrubToWall,
 		rename: (id, label) => setPlaces(places.map((place) => (place.id === id ? { ...place, label } : place))),
 		remove: (id) => setPlaces(places.filter((place) => place.id !== id)),
-		scrubToWall: (timeZone, candidates) => {
-			const current = (localMs(timeZone, stateRef.current.instant) % DAY) / 60_000
-			// wrap each candidate into the nearest ±12h so "9am" never scrubs the long way round
-			const nearest = candidates
-				.map((minutes) => ((minutes - current + 2160) % 1440) - 720)
-				.reduce((best, delta) => (Math.abs(delta) < Math.abs(best) ? delta : best))
-			animateTo(stateRef.current.instant + nearest * 60_000)
-		},
 	}
-
-	// weather/forecast toggles only matter where weather shows — the list's cards
-	const toggles = [
-		...(view === 'list'
-			? [
-					{
-						key: 'expand',
-						content: allExpanded ? <LuChevronsDownUp /> : <LuChevronsUpDown />,
-						label: `${allExpanded ? 'collapse' : 'expand'} all cards`,
-						onClick: () => setExpandedIds(allExpanded ? [] : expandableIds),
-					},
-					{
-						key: 'mode',
-						content: forecastMode,
-						onClick: () => setForecastMode(forecastMode === 'hourly' ? 'daily' : 'hourly'),
-					},
-					{ key: 'unit', content: `°${fahrenheit ? 'F' : 'C'}`, onClick: () => setFahrenheit(!fahrenheit) },
-				]
-			: []),
-		{ key: 'seconds', content: showSeconds ? ':ss' : ':—', onClick: () => setShowSeconds(!showSeconds) },
-		{ key: 'cycle', content: hour12 ? '12h' : '24h', onClick: () => setHour12(!hour12) },
-	]
 
 	return (
 		<ThemeProvider>
 			<SettingsContext value={settings}>
 				<div className='flex min-h-dvh flex-col'>
-					{/* shrink-0 keeps the tablist from being squeezed into a two-line stack; the toggle
-					    group wraps whole, and its ml-auto keeps it right-aligned on the line it lands on */}
-					<header className='flex flex-wrap items-center gap-2 px-4 py-3'>
-						<div role='tablist' className='tabs tabs-border tabs-sm mr-auto shrink-0'>
-							{VIEWS.map((entry) => (
-								<button
-									key={entry}
-									type='button'
-									role='tab'
-									aria-selected={entry === view}
-									className={`tab ${entry === view ? 'tab-active' : ''}`}
-									onClick={() => setView(entry)}
-								>
-									{entry}
-								</button>
-							))}
-						</div>
-						<div className='ml-auto flex items-center gap-1 sm:gap-2'>
-							<ThemePicker variant='modal' />
-							{toggles.map(({ key, content, label, onClick }) => (
-								<button key={key} type='button' aria-label={label} className='btn btn-ghost btn-xs' onClick={onClick}>
-									{content}
-								</button>
-							))}
-						</div>
-					</header>
+					<BoardHeader
+						view={view}
+						onView={setView}
+						places={places}
+						preferences={preferences}
+						onPreferences={(patch) => setPreferences({ ...preferences, ...patch })}
+						expandedIds={expandedIds}
+						onExpandedIds={setExpandedIds}
+					/>
 
-					{view === 'bands' && (
+					{view === 'bands' ? (
 						<BandsView places={places} now={now} scrubbed={scrubbed} onScrub={setScrubbed} onSettle={animateTo} />
+					) : (
+						<ListView
+							places={places}
+							now={now}
+							scrubbed={scrubbed}
+							expandedIds={expandedIds}
+							onSettle={animateTo}
+							onExpandedIds={setExpandedIds}
+							onReorder={setPlaces}
+							onEditLocation={(place) => openSearch({ kind: 'place', id: place.id }, place.city.name)}
+						/>
 					)}
 
-					{view === 'list' && (
-						<main className='mx-auto flex w-full max-w-xl flex-col gap-3 p-3 pb-28 sm:p-4 sm:pb-28'>
-							<InstantStrip now={now} scrubbed={scrubbed} onSettle={animateTo} />
-							<DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-								<SortableContext items={places.map((place) => place.id)} strategy={verticalListSortingStrategy}>
-									{places.map((place) => (
-										<PlaceCard
-											key={place.id}
-											place={place}
-											expanded={expandedIds.includes(place.id)}
-											onToggle={() => toggleExpanded(place.id)}
-											onEditLocation={() => openSearch({ kind: 'place', id: place.id }, place.city.name)}
-										/>
-									))}
-								</SortableContext>
-							</DndContext>
-							{!places.length && (
-								<p className='py-12 text-center opacity-60'>No places yet — add one to start the board.</p>
-							)}
-						</main>
-					)}
+					<KeyboardHints />
 
-					{FINE_POINTER && (
-						<footer className='mt-auto flex items-center justify-center gap-4 p-4 text-xs opacity-40'>
-							{[
-								['15m', '←', '→'],
-								['1h', '⇧', '←', '→'],
-								['now', 'n'],
-							].map(([label, ...keys]) => (
-								<span key={label} className='flex items-center gap-1'>
-									{keys.map((key) => (
-										<kbd key={key} className='kbd kbd-xs'>
-											{key}
-										</kbd>
-									))}
-									{label}
-								</span>
-							))}
-						</footer>
-					)}
-
-					{/* bands has no card affordances, but an empty board still needs a way back in */}
-					{(view === 'list' || !places.length) && (
-						<div className='fab'>
-							<button
-								type='button'
-								aria-label='add a place'
-								className='btn btn-circle btn-xl shadow-lg'
-								onClick={() => openSearch({ kind: 'add' })}
-							>
-								＋
-							</button>
-						</div>
-					)}
+					<AddPlaceButton shown={view === 'list' || !places.length} onClick={() => openSearch({ kind: 'add' })} />
 
 					{searchMode !== null && (
-						<div className='modal modal-open modal-bottom sm:modal-middle'>
-							<div className='modal-box flex flex-col gap-2'>
-								<label className='input w-full'>
-									<input
-										className='grow'
-										placeholder='search any city…'
-										value={query}
-										autoFocus
-										onFocus={(event) => event.target.select()}
-										onChange={(event) => setQuery(event.target.value)}
-										onKeyDown={(event) => {
-											if (event.key === 'Enter' && matches[0]) pickCity(matches[0])
-										}}
-									/>
-									{searching && <span className='loading loading-spinner loading-sm' />}
-								</label>
-								<ul className='menu w-full'>
-									{/* wherever you are, as one press — the same IP lookup that seeds the board on a first visit */}
-									<li>
-										<button
-											type='button'
-											className='flex items-baseline justify-between'
-											disabled={detectPending}
-											onClick={() => pickCity(detected)}
-										>
-											<span className='flex items-baseline gap-2'>
-												<LuLocateFixed className='self-center' />
-												here
-												{!detectPending && <span className='text-xs opacity-50'>{detected.name}</span>}
-											</span>
-											{detectPending && <span className='loading loading-spinner loading-xs' />}
-										</button>
-									</li>
-									{matches.map((city) => (
-										<li key={`${city.name}-${city.latitude}-${city.longitude}`}>
-											<button
-												type='button'
-												className='flex items-baseline justify-between'
-												onClick={() => pickCity(city)}
-											>
-												<span>
-													{city.name} <span className='text-xs opacity-50'>{city.country}</span>
-												</span>
-												<span className='font-mono text-xs opacity-60'>
-													{formatTime(now, city.timeZone, hour12, false)}
-												</span>
-											</button>
-										</li>
-									))}
-								</ul>
-							</div>
-							<button type='button' className='modal-backdrop' aria-label='close' onClick={closeSearch} />
-						</div>
+						<SearchDialog
+							query={query}
+							onQuery={setQuery}
+							now={now}
+							hour12={preferences.hour12}
+							detected={detected}
+							detectPending={detectPending}
+							onPick={pickCity}
+							onClose={closeSearch}
+						/>
 					)}
 				</div>
 			</SettingsContext>

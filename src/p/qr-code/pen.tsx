@@ -188,6 +188,7 @@ type RenderArgs = { cells: Cell[][]; moduleCount: number; p: P; svg: any }
 
 const renderClassic = ({ svg, cells }: RenderArgs) => {
 	svg
+		.append('g')
 		.selectAll('rect')
 		.data(cells.flat().filter((cell: Cell) => cell.dark))
 		.join('rect')

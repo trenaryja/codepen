@@ -2,8 +2,13 @@ import { defineConfig } from '@trenaryja/config/eslint'
 
 export default [
 	...defineConfig(),
-	// Agent skill scripts import outside package.json (bun --install=fallback) and sit outside the tsconfig
-	{ ignores: ['.claude/**'] },
+	{
+		// The React Compiler runs over the whole build (vite.config.ts), so it owns memoization.
+		// Telling eslint-react that switches off the rules that would otherwise demand a manual
+		// useMemo/useCallback this repo bans — no-unstable-context-value and no-unstable-default-props.
+		// Belongs in `@trenaryja/config` alongside the compiler mandate, not here.
+		settings: { 'react-x': { compilationMode: 'all' } },
+	},
 	{
 		// Ambient declaration files describe shapes, they don't run. Import-assignment
 		// (`import X = require('x')`) is the only syntax that re-exports an `export =`
@@ -12,29 +17,10 @@ export default [
 		rules: { '@typescript-eslint/no-require-imports': 'off' },
 	},
 	{
-		// Pens must keep `import React from 'react'` as an unused *value* import —
-		// CodePen has no automatic JSX transform, so the import must survive verbatim.
-		files: ['src/p/**/pen.tsx', 'src/t/**/pen.tsx'],
-		rules: {
-			'unused-imports/no-unused-imports': 'off',
-			'@typescript-eslint/no-unused-vars': 'off',
-			'@typescript-eslint/consistent-type-imports': 'off',
-		},
-	},
-	{
-		// Pens are single-file-by-design apps (CodePen portability), so size caps
-		// fight the format; the bitwise/plusplus/await-in-loop styles are core to
-		// their codec and animation code. Correctness rules stay on.
+		// Bitwise, `++`, and sequential awaits are core to the pens' codec and animation
+		// code. These three are already off upstream; drop this block once
+		// `@trenaryja/config` publishes past 0.0.1.
 		files: ['src/p/**', 'src/t/**'],
-		rules: {
-			complexity: 'off',
-			'max-depth': 'off',
-			'max-lines-per-function': 'off',
-			'max-params': 'off',
-			'max-statements': 'off',
-			'no-await-in-loop': 'off',
-			'no-bitwise': 'off',
-			'no-plusplus': 'off',
-		},
+		rules: { 'no-await-in-loop': 'off', 'no-bitwise': 'off', 'no-plusplus': 'off' },
 	},
 ]

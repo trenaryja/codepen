@@ -95,11 +95,10 @@ const playAlarm = ({ alarmSound, alarmVolume, alarmRepeat }: Settings) => {
 }
 
 const notify = (title: string, body: string) => {
-	// eslint-disable-next-line no-new -- constructing a Notification is how the Web Notifications API fires one
-	if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body })
+	if ('Notification' in window && Notification.permission === 'granted') void new Notification(title, { body })
 }
 
-const useTimer = (settings: Settings) => {
+const useTimer = (settings: Settings, onComplete: (completedMode: TimerMode) => void) => {
 	const [state, setState] = useLocalStorage<{
 		isRunning: boolean
 		mode: TimerMode
@@ -108,6 +107,8 @@ const useTimer = (settings: Settings) => {
 		targetEndTime: number | null
 	}>({
 		key: 'pomo-timer',
+		// read during render, not in an effect: client-only SPA, so there's no SSR markup to mismatch
+		getInitialValueInEffect: false,
 		defaultValue: {
 			isRunning: false,
 			mode: 'pomodoro',
@@ -127,7 +128,6 @@ const useTimer = (settings: Settings) => {
 	})
 
 	const completedRef = useRef(false)
-	const onCompleteRef = useRef<(() => void) | null>(null)
 
 	const transition = (fromMode: TimerMode, count: number) => {
 		const next = nextMode(fromMode, count, settings.longBreakInterval)
@@ -157,29 +157,22 @@ const useTimer = (settings: Settings) => {
 		else stopTick()
 		return stopTick
 	}, [state.isRunning, startTick, stopTick])
+
 	const completeTimer = useEffectEvent(() => {
-		transition(state.mode, state.pomodoroCount)
-		onCompleteRef.current?.()
+		const completedMode = state.mode
+		transition(completedMode, state.pomodoroCount)
+		onComplete(completedMode)
 	})
+
 	useEffect(() => {
-		if (!state.isRunning || displayMs > 0 || completedRef.current) return
+		if (displayMs > 0) {
+			completedRef.current = false
+			return
+		}
+		if (!state.isRunning || completedRef.current) return
 		completedRef.current = true
 		completeTimer()
-		const t = setTimeout(() => {
-			completedRef.current = false
-		}, 500)
-		return () => clearTimeout(t)
 	}, [displayMs, state.isRunning])
-	const syncDisplayFromClock = useEffectEvent(() => {
-		if (state.isRunning && state.targetEndTime) {
-			const remaining = state.targetEndTime - Date.now()
-			// eslint-disable-next-line @eslint-react/set-state-in-effect -- mount-only resync of the countdown from the persisted wall-clock target
-			setDisplayMs(remaining > 0 ? remaining : 0)
-		}
-	})
-	useEffect(() => {
-		syncDisplayFromClock()
-	}, [])
 
 	const start = () => {
 		const ms = displayMs > 0 ? displayMs : msFor(state.mode, settings)
@@ -195,6 +188,17 @@ const useTimer = (settings: Settings) => {
 		setDisplayMs(ms)
 	}
 
+	const activeDurationMs = msFor(state.mode, settings)
+	const lastDurationRef = useRef(activeDurationMs)
+	const resetToDuration = useEffectEvent(() => reset())
+
+	useEffect(() => {
+		// pause() parks partial time in remainingMs, so only a real duration edit may overwrite it
+		if (lastDurationRef.current === activeDurationMs) return
+		lastDurationRef.current = activeDurationMs
+		if (!state.isRunning) resetToDuration()
+	}, [activeDurationMs, state.isRunning])
+
 	const skip = () => {
 		completedRef.current = false
 		transition(state.mode, state.pomodoroCount)
@@ -207,7 +211,7 @@ const useTimer = (settings: Settings) => {
 		completedRef.current = false
 	}
 
-	return { displayMs, onCompleteRef, pause, reset, skip, start, state, switchMode }
+	return { displayMs, pause, reset, skip, start, state, switchMode }
 }
 
 function SettingsModal({
@@ -325,17 +329,17 @@ function SettingsModal({
 }
 
 function Root() {
-	const [settings, setSettings] = useLocalStorage<Settings>({ key: 'pomo-settings', defaultValue: DEFAULTS })
+	const [settings, setSettings] = useLocalStorage<Settings>({
+		key: 'pomo-settings',
+		getInitialValueInEffect: false,
+		defaultValue: DEFAULTS,
+	})
 	const [settingsOpen, setSettingsOpen] = useState(false)
-	const { displayMs, onCompleteRef, pause, reset, skip, start, state, switchMode } = useTimer(settings)
-
-	useEffect(() => {
-		onCompleteRef.current = () => {
-			playAlarm(settings)
-			if (settings.notificationsEnabled)
-				notify(`${LABELS[state.mode]} complete!`, state.mode === 'pomodoro' ? 'Time for a break!' : 'Back to work!')
-			toast(`${LABELS[state.mode]} complete!`)
-		}
+	const { displayMs, pause, reset, skip, start, state, switchMode } = useTimer(settings, (completedMode) => {
+		playAlarm(settings)
+		if (settings.notificationsEnabled)
+			notify(`${LABELS[completedMode]} complete!`, completedMode === 'pomodoro' ? 'Time for a break!' : 'Back to work!')
+		toast(`${LABELS[completedMode]} complete!`)
 	})
 
 	useEffect(() => {

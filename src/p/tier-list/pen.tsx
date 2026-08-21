@@ -137,30 +137,25 @@ const tierListSchema = z.preprocess(
 )
 type TierList = z.infer<typeof tierListSchema>
 
-// Not `crypto.randomUUID` — that one is secure-context only, so a plain-http preview
-// (phone hitting this over the LAN) would throw here at module scope and render nothing
-const randomId = () =>
-	Array.from(crypto.getRandomValues(new Uint8Array(8)), (byte) => byte.toString(16).padStart(2, '0')).join('')
-
 const defaultTierList: TierList = tierListSchema.parse({
 	title: 'My Tier List',
 	tiers: [
-		{ id: randomId(), label: 'S', color: '#f0b100' },
-		{ id: randomId(), label: 'A', color: '#fb2c36' },
-		{ id: randomId(), label: 'B', color: '#ff6900' },
-		{ id: randomId(), label: 'C', color: '#00c950' },
-		{ id: randomId(), label: 'D', color: '#2b7fff' },
-		{ id: randomId(), label: 'F', color: '#ad46ff' },
+		{ id: R.randomString(21), label: 'S', color: '#f0b100' },
+		{ id: R.randomString(21), label: 'A', color: '#fb2c36' },
+		{ id: R.randomString(21), label: 'B', color: '#ff6900' },
+		{ id: R.randomString(21), label: 'C', color: '#00c950' },
+		{ id: R.randomString(21), label: 'D', color: '#2b7fff' },
+		{ id: R.randomString(21), label: 'F', color: '#ad46ff' },
 	],
 	items: [
-		{ id: randomId(), label: 'Example 1' },
-		{ id: randomId(), label: 'Example 2' },
-		{ id: randomId(), label: 'Example 3' },
-		{ id: randomId(), label: 'Example 4' },
-		{ id: randomId(), label: 'Example 5' },
-		{ id: randomId(), label: 'Example 6' },
-		{ id: randomId(), label: 'Example 7' },
-		{ id: randomId(), label: 'Example 8' },
+		{ id: R.randomString(21), label: 'Example 1' },
+		{ id: R.randomString(21), label: 'Example 2' },
+		{ id: R.randomString(21), label: 'Example 3' },
+		{ id: R.randomString(21), label: 'Example 4' },
+		{ id: R.randomString(21), label: 'Example 5' },
+		{ id: R.randomString(21), label: 'Example 6' },
+		{ id: R.randomString(21), label: 'Example 7' },
+		{ id: R.randomString(21), label: 'Example 8' },
 	],
 })
 
@@ -175,6 +170,108 @@ const deserializeTierList = (value: string | undefined) => {
 		return defaultTierList
 	}
 }
+
+type ItemPlacement = { itemId: string; containerId: string; index?: number }
+
+type ItemReorder = { containerId: string; itemId: string; overItemId: string }
+
+// Pure derivations and state transitions over a TierList. Keeping them at module scope
+// leaves the provider as wiring only, and lets the drag layer reuse the same derivations.
+const unassignedItemsOf = (list: TierList) => {
+	const assigned = new Set(list.tiers.flatMap((tier) => tier.itemIds))
+	return list.items.filter((item) => !assigned.has(item.id))
+}
+
+const tierItemsOf = (list: TierList, tierId: string) => {
+	const tier = list.tiers.find((candidate) => candidate.id === tierId)
+	if (!tier) return []
+	return tier.itemIds
+		.map((itemId) => list.items.find((item) => item.id === itemId))
+		.filter((item): item is Item => item !== undefined)
+}
+
+const withTierUpdated = (list: TierList, updated: Tier) => ({
+	...list,
+	tiers: list.tiers.map((tier) => (tier.id === updated.id ? updated : tier)),
+})
+
+const withTierInserted = (list: TierList, index: number, inserted: Tier) => ({
+	...list,
+	tiers: [...list.tiers.slice(0, index), inserted, ...list.tiers.slice(index)],
+})
+
+// The last row is never removable — a tier list with no rows has nothing to drop onto
+const withTierDeleted = (list: TierList, tierId: string) =>
+	list.tiers.length > 1 ? { ...list, tiers: list.tiers.filter((tier) => tier.id !== tierId) } : list
+
+const withTiersReordered = (list: TierList, activeId: UniqueIdentifier, overId: UniqueIdentifier) => {
+	const fromIndex = list.tiers.findIndex((tier) => tier.id === String(activeId))
+	const toIndex = list.tiers.findIndex((tier) => tier.id === String(overId))
+	if (fromIndex === -1 || toIndex === -1) return list
+	return { ...list, tiers: arrayMove(list.tiers, fromIndex, toIndex) }
+}
+
+const withItemMoved = (list: TierList, { itemId, containerId, index }: ItemPlacement) => {
+	const moved = list.items.find((candidate) => candidate.id === itemId)
+	if (!moved) return list
+
+	const tiersWithoutItem = list.tiers.map((tier) => ({
+		...tier,
+		itemIds: tier.itemIds.filter((id) => id !== itemId),
+	}))
+
+	if (containerId === BANK_ID) {
+		// Bank order is derived from the items array; insert before the bank item at `index`
+		const assigned = new Set(tiersWithoutItem.flatMap((tier) => tier.itemIds))
+		const bankItems = list.items.filter((candidate) => !assigned.has(candidate.id) && candidate.id !== itemId)
+		const insertBefore = index != null ? bankItems[index] : undefined
+		const remaining = list.items.filter((candidate) => candidate.id !== itemId)
+		const insertAt = insertBefore
+			? remaining.findIndex((candidate) => candidate.id === insertBefore.id)
+			: remaining.length
+		return {
+			...list,
+			tiers: tiersWithoutItem,
+			items: [...remaining.slice(0, insertAt), moved, ...remaining.slice(insertAt)],
+		}
+	}
+
+	const tiers = tiersWithoutItem.map((tier) => {
+		if (tier.id !== containerId) return tier
+		const insertAt = index != null ? Math.min(index, tier.itemIds.length) : tier.itemIds.length
+		return { ...tier, itemIds: [...tier.itemIds.slice(0, insertAt), itemId, ...tier.itemIds.slice(insertAt)] }
+	})
+	return { ...list, tiers }
+}
+
+const withItemReordered = (list: TierList, { containerId, itemId, overItemId }: ItemReorder) => {
+	if (containerId === BANK_ID) {
+		const fromIndex = list.items.findIndex((item) => item.id === itemId)
+		const toIndex = list.items.findIndex((item) => item.id === overItemId)
+		if (fromIndex === -1 || toIndex === -1) return list
+		return { ...list, items: arrayMove(list.items, fromIndex, toIndex) }
+	}
+
+	const tiers = list.tiers.map((tier) => {
+		if (tier.id !== containerId) return tier
+		const fromIndex = tier.itemIds.indexOf(itemId)
+		const toIndex = tier.itemIds.indexOf(overItemId)
+		if (fromIndex === -1 || toIndex === -1) return tier
+		return { ...tier, itemIds: arrayMove(tier.itemIds, fromIndex, toIndex) }
+	})
+	return { ...list, tiers }
+}
+
+const withItemUpdated = (list: TierList, updated: Item) => ({
+	...list,
+	items: list.items.map((item) => (item.id === updated.id ? updated : item)),
+})
+
+const withItemDeleted = (list: TierList, itemId: string) => ({
+	...list,
+	items: list.items.filter((item) => item.id !== itemId),
+	tiers: list.tiers.map((tier) => ({ ...tier, itemIds: tier.itemIds.filter((id) => id !== itemId) })),
+})
 
 type TierListContextValue = {
 	tierList: TierList
@@ -216,136 +313,51 @@ const TierListProvider = ({ children }: { children: ReactNode }) => {
 
 	const setSettings = (settings: TierListSettings) => setTierList((previous) => ({ ...previous, settings }))
 
-	const handleTierUpdate = (updated: Tier) =>
-		setTierList((previous) => ({
-			...previous,
-			tiers: previous.tiers.map((tier) => (tier.id === updated.id ? updated : tier)),
-		}))
+	const handleTierUpdate = (updated: Tier) => setTierList((previous) => withTierUpdated(previous, updated))
 
 	const handleTierInsert = (index: number, initial: Partial<Tier> = {}) => {
 		const newTier: Tier = {
-			id: initial.id ?? randomId(),
+			id: initial.id ?? R.randomString(21),
 			label: initial.label ?? 'X',
 			color: initial.color,
 			itemIds: initial.itemIds ?? [],
 			imageUrl: initial.imageUrl,
 		}
-		setTierList((previous) => ({
-			...previous,
-			tiers: [...previous.tiers.slice(0, index), newTier, ...previous.tiers.slice(index)],
-		}))
+		setTierList((previous) => withTierInserted(previous, index, newTier))
 		return newTier
 	}
 
-	const handleTierDelete = (tierId: string) =>
-		setTierList((previous) =>
-			previous.tiers.length > 1
-				? { ...previous, tiers: previous.tiers.filter((tier) => tier.id !== tierId) }
-				: previous,
-		)
+	const handleTierDelete = (tierId: string) => setTierList((previous) => withTierDeleted(previous, tierId))
 
 	const handleTierDrop = (activeId: UniqueIdentifier, overId?: UniqueIdentifier) => {
 		if (!overId) return
-		setTierList((previous) => {
-			const fromIndex = previous.tiers.findIndex((tier) => tier.id === String(activeId))
-			const toIndex = previous.tiers.findIndex((tier) => tier.id === String(overId))
-			if (fromIndex === -1 || toIndex === -1) return previous
-			return { ...previous, tiers: arrayMove(previous.tiers, fromIndex, toIndex) }
-		})
+		setTierList((previous) => withTiersReordered(previous, activeId, overId))
 	}
 
-	const handleItemMove = (itemId: string, containerId: string, index?: number) => {
-		setTierList((previous) => {
-			const item = previous.items.find((candidate) => candidate.id === itemId)
-			if (!item) return previous
+	const handleItemMove = (itemId: string, containerId: string, index?: number) =>
+		setTierList((previous) => withItemMoved(previous, { itemId, containerId, index }))
 
-			const tiersWithoutItem = previous.tiers.map((tier) => ({
-				...tier,
-				itemIds: tier.itemIds.filter((id) => id !== itemId),
-			}))
-
-			if (containerId === BANK_ID) {
-				// Bank order is derived from the items array; insert before the bank item at `index`
-				const assigned = new Set(tiersWithoutItem.flatMap((tier) => tier.itemIds))
-				const bankItems = previous.items.filter((candidate) => !assigned.has(candidate.id) && candidate.id !== itemId)
-				const insertBefore = index != null ? bankItems[index] : undefined
-				const remaining = previous.items.filter((candidate) => candidate.id !== itemId)
-				const insertAt = insertBefore
-					? remaining.findIndex((candidate) => candidate.id === insertBefore.id)
-					: remaining.length
-				return {
-					...previous,
-					tiers: tiersWithoutItem,
-					items: [...remaining.slice(0, insertAt), item, ...remaining.slice(insertAt)],
-				}
-			}
-
-			const tiers = tiersWithoutItem.map((tier) => {
-				if (tier.id !== containerId) return tier
-				const insertAt = index != null ? Math.min(index, tier.itemIds.length) : tier.itemIds.length
-				return { ...tier, itemIds: [...tier.itemIds.slice(0, insertAt), itemId, ...tier.itemIds.slice(insertAt)] }
-			})
-			return { ...previous, tiers }
-		})
-	}
-
-	const handleItemReorder = (containerId: string, itemId: string, overItemId: string) => {
-		setTierList((previous) => {
-			if (containerId === BANK_ID) {
-				const fromIndex = previous.items.findIndex((item) => item.id === itemId)
-				const toIndex = previous.items.findIndex((item) => item.id === overItemId)
-				if (fromIndex === -1 || toIndex === -1) return previous
-				return { ...previous, items: arrayMove(previous.items, fromIndex, toIndex) }
-			}
-
-			const tiers = previous.tiers.map((tier) => {
-				if (tier.id !== containerId) return tier
-				const fromIndex = tier.itemIds.indexOf(itemId)
-				const toIndex = tier.itemIds.indexOf(overItemId)
-				if (fromIndex === -1 || toIndex === -1) return tier
-				return { ...tier, itemIds: arrayMove(tier.itemIds, fromIndex, toIndex) }
-			})
-			return { ...previous, tiers }
-		})
-	}
+	const handleItemReorder = (containerId: string, itemId: string, overItemId: string) =>
+		setTierList((previous) => withItemReordered(previous, { containerId, itemId, overItemId }))
 
 	const handleItemInsert = () => {
-		const newItem: Item = { id: randomId(), label: 'New Item' }
+		const newItem: Item = { id: R.randomString(21), label: 'New Item' }
 		setTierList((previous) => ({ ...previous, items: [...previous.items, newItem] }))
 		return newItem
 	}
 
-	const handleItemUpdate = (updated: Item) =>
-		setTierList((previous) => ({
-			...previous,
-			items: previous.items.map((item) => (item.id === updated.id ? updated : item)),
-		}))
+	const handleItemUpdate = (updated: Item) => setTierList((previous) => withItemUpdated(previous, updated))
 
-	const handleItemDelete = (itemId: string) =>
-		setTierList((previous) => ({
-			...previous,
-			items: previous.items.filter((item) => item.id !== itemId),
-			tiers: previous.tiers.map((tier) => ({ ...tier, itemIds: tier.itemIds.filter((id) => id !== itemId) })),
-		}))
+	const handleItemDelete = (itemId: string) => setTierList((previous) => withItemDeleted(previous, itemId))
 
 	const handleTitleUpdate = (title: string) => setTierList((previous) => ({ ...previous, title }))
 
-	const getItemsForTier = (tierId: string) => {
-		const tier = tierList.tiers.find((candidate) => candidate.id === tierId)
-		if (!tier) return []
-		return tier.itemIds
-			.map((itemId) => tierList.items.find((item) => item.id === itemId))
-			.filter((item): item is Item => item !== undefined)
-	}
+	const getItemsForTier = (tierId: string) => tierItemsOf(tierList, tierId)
 
-	const getUnassignedItems = () => {
-		const assigned = new Set(tierList.tiers.flatMap((tier) => tier.itemIds))
-		return tierList.items.filter((item) => !assigned.has(item.id))
-	}
+	const getUnassignedItems = () => unassignedItemsOf(tierList)
 
 	return (
 		<TierListContext
-			// eslint-disable-next-line @eslint-react/no-unstable-context-value -- React Compiler memoizes this value; manual useMemo is banned here
 			value={{
 				tierList,
 				settings: tierList.settings,
@@ -415,7 +427,6 @@ type EditEntityFormProps = {
 	close: () => void
 }
 
-// Tiers and items edit the same three fields, so they share one form
 const EditEntityForm = ({ noun, entity, deleteDisabled, onSave, onDelete, close }: EditEntityFormProps) => {
 	const [label, setLabel] = useState(entity.label)
 	const [color, setColor] = useState(entity.color)
@@ -848,53 +859,42 @@ const isAfterOverItem = (active: Active, over: Over) => {
 	return centerX > over.rect.left + over.rect.width / 2
 }
 
-const Index = () => {
-	const {
-		tierList,
-		settings,
-		handleTitleUpdate,
-		handleItemMove,
-		handleItemReorder,
-		handleItemInsert,
-		setEditingItemId,
-		getUnassignedItems,
-		handleTierDrop,
-	} = useTierList()
+const isTierId = (list: TierList, id: UniqueIdentifier) => list.tiers.some((tier) => tier.id === id)
+
+const isContainerId = (list: TierList, id: UniqueIdentifier) => id === BANK_ID || isTierId(list, id)
+
+const getContainerItemIds = (list: TierList, containerId: string) =>
+	containerId === BANK_ID
+		? unassignedItemsOf(list).map((item) => item.id)
+		: (list.tiers.find((tier) => tier.id === containerId)?.itemIds ?? [])
+
+const findContainerId = (list: TierList, id: UniqueIdentifier) => {
+	if (isContainerId(list, id)) return String(id)
+	const tier = list.tiers.find((candidate) => candidate.itemIds.includes(String(id)))
+	if (tier) return tier.id
+	return list.items.some((item) => item.id === id) ? BANK_ID : undefined
+}
+
+const useTierListDragAndDrop = () => {
+	const { tierList, handleItemMove, handleItemReorder, handleTierDrop } = useTierList()
 	const [activeItem, setActiveItem] = useState<Item | null>(null)
 	const [activeTier, setActiveTier] = useState<Tier | null>(null)
-	const { setNodeRef } = useDroppable({ id: BANK_ID })
 	const lastOverIdRef = useRef<UniqueIdentifier | null>(null)
 	const recentlyMovedToNewContainerRef = useRef(false)
-	const unassignedItems = getUnassignedItems()
 
 	const sensors = useSensors(
 		useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
 		useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
 	)
 
-	const isTierId = (id: UniqueIdentifier) => tierList.tiers.some((tier) => tier.id === id)
-	const isContainerId = (id: UniqueIdentifier) => id === BANK_ID || isTierId(id)
-
-	const getContainerItemIds = (containerId: string) =>
-		containerId === BANK_ID
-			? unassignedItems.map((item) => item.id)
-			: (tierList.tiers.find((tier) => tier.id === containerId)?.itemIds ?? [])
-
-	const findContainerId = (id: UniqueIdentifier) => {
-		if (isContainerId(id)) return String(id)
-		const tier = tierList.tiers.find((candidate) => candidate.itemIds.includes(String(id)))
-		if (tier) return tier.id
-		return tierList.items.some((item) => item.id === id) ? BANK_ID : undefined
-	}
-
 	// Adapted from dnd-kit's MultipleContainers example: tiers sort against tiers only;
 	// items prefer what's under the pointer, and pointing at a container's empty space
 	// snaps to the closest item inside it so the whole row is a drop target.
 	const collisionDetection: CollisionDetection = (args) => {
-		if (isTierId(args.active.id))
+		if (isTierId(tierList, args.active.id))
 			return closestCenter({
 				...args,
-				droppableContainers: args.droppableContainers.filter((container) => isTierId(container.id)),
+				droppableContainers: args.droppableContainers.filter((container) => isTierId(tierList, container.id)),
 			})
 
 		const pointerCollisions = pointerWithin(args)
@@ -908,8 +908,8 @@ const Index = () => {
 			return lastOverIdRef.current ? [{ id: lastOverIdRef.current }] : []
 		}
 
-		if (isContainerId(overId)) {
-			const containerItemIds = getContainerItemIds(String(overId))
+		if (isContainerId(tierList, overId)) {
+			const containerItemIds = getContainerItemIds(tierList, String(overId))
 
 			if (containerItemIds.length > 0) {
 				const closestItem = closestCenter({
@@ -947,13 +947,13 @@ const Index = () => {
 	// Move items between containers while dragging so the drop lands where the preview shows
 	const handleDragOver = (event: DragOverEvent) => {
 		const { active, over } = event
-		if (!over || isTierId(active.id)) return
+		if (!over || isTierId(tierList, active.id)) return
 
-		const activeContainer = findContainerId(active.id)
-		const overContainer = findContainerId(over.id)
+		const activeContainer = findContainerId(tierList, active.id)
+		const overContainer = findContainerId(tierList, over.id)
 		if (!activeContainer || !overContainer || activeContainer === overContainer) return
 
-		const overItemIds = getContainerItemIds(overContainer)
+		const overItemIds = getContainerItemIds(tierList, overContainer)
 		const overIndex = overItemIds.indexOf(String(over.id))
 		const newIndex = overIndex === -1 ? overItemIds.length : overIndex + (isAfterOverItem(active, over) ? 1 : 0)
 
@@ -972,63 +972,96 @@ const Index = () => {
 		setActiveTier(null)
 		if (!over) return
 
-		if (isTierId(active.id)) return handleTierDrop(active.id, over.id)
+		if (isTierId(tierList, active.id)) return handleTierDrop(active.id, over.id)
 
 		// Cross-container moves already happened in onDragOver; only same-container reorders remain
-		const containerId = findContainerId(active.id)
+		const containerId = findContainerId(tierList, active.id)
 		const overIsItem = tierList.items.some((item) => item.id === over.id)
 		if (!containerId || !overIsItem || over.id === active.id) return
-		if (findContainerId(over.id) === containerId) handleItemReorder(containerId, String(active.id), String(over.id))
+		if (findContainerId(tierList, over.id) === containerId)
+			handleItemReorder(containerId, String(active.id), String(over.id))
 	}
+
+	return {
+		activeItem,
+		activeTier,
+		dndContextProps: {
+			sensors,
+			collisionDetection,
+			measuring: { droppable: { strategy: MeasuringStrategy.Always } },
+			onDragStart: handleDragStart,
+			onDragOver: handleDragOver,
+			onDragEnd: handleDragEnd,
+		},
+	}
+}
+
+const TierListHeader = () => {
+	const { tierList, handleTitleUpdate } = useTierList()
+	return (
+		<div className='flex items-center gap-2'>
+			<input
+				className='input font-bold grow'
+				value={tierList.title}
+				onChange={(event) => handleTitleUpdate(event.target.value)}
+			/>
+			<ThemePicker />
+			<EditSettingsDialog />
+			<ExportButton />
+			<ImportDialog />
+		</div>
+	)
+}
+
+const TierRowList = () => {
+	const { tierList } = useTierList()
+	return (
+		<SortableContext items={tierList.tiers.map((tier) => tier.id)} strategy={rectSortingStrategy}>
+			<div className='border-collapse'>
+				{tierList.tiers.map((tier) => (
+					<TierRow key={tier.id} tier={tier} />
+				))}
+			</div>
+		</SortableContext>
+	)
+}
+
+const ItemBank = () => {
+	const { settings, getUnassignedItems, handleItemInsert, setEditingItemId } = useTierList()
+	const { setNodeRef } = useDroppable({ id: BANK_ID })
+	const unassignedItems = getUnassignedItems()
+	return (
+		<SortableContext items={unassignedItems.map((item) => item.id)} strategy={rectSortingStrategy}>
+			<div ref={setNodeRef} className='rounded-box border border-current/25 border-dashed p-4 flex flex-wrap gap-2'>
+				{unassignedItems.map((item) => (
+					<TierItem key={item.id} item={item} />
+				))}
+				<button
+					type='button'
+					onClick={() => setEditingItemId(handleItemInsert().id)}
+					className={cn(
+						'btn btn-ghost border border-current/25 border-dashed grid place-items-center',
+						shapeClasses[settings.itemShape],
+						'size-16 sm:size-20',
+					)}
+				>
+					<LuPlus />
+				</button>
+			</div>
+		</SortableContext>
+	)
+}
+
+const Index = () => {
+	const { activeItem, activeTier, dndContextProps } = useTierListDragAndDrop()
 
 	return (
 		<div className='full-bleed-container min-h-screen gap-y-6 p-4 content-start'>
-			<div className='flex items-center gap-2'>
-				<input
-					className='input font-bold grow'
-					value={tierList.title}
-					onChange={(event) => handleTitleUpdate(event.target.value)}
-				/>
-				<ThemePicker />
-				<EditSettingsDialog />
-				<ExportButton />
-				<ImportDialog />
-			</div>
+			<TierListHeader />
 
-			<DndContext
-				sensors={sensors}
-				collisionDetection={collisionDetection}
-				measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
-				onDragStart={handleDragStart}
-				onDragOver={handleDragOver}
-				onDragEnd={handleDragEnd}
-			>
-				<SortableContext items={tierList.tiers.map((tier) => tier.id)} strategy={rectSortingStrategy}>
-					<div className='border-collapse'>
-						{tierList.tiers.map((tier) => (
-							<TierRow key={tier.id} tier={tier} />
-						))}
-					</div>
-				</SortableContext>
-
-				<SortableContext items={unassignedItems.map((item) => item.id)} strategy={rectSortingStrategy}>
-					<div ref={setNodeRef} className='rounded-box border border-current/25 border-dashed p-4 flex flex-wrap gap-2'>
-						{unassignedItems.map((item) => (
-							<TierItem key={item.id} item={item} />
-						))}
-						<button
-							type='button'
-							onClick={() => setEditingItemId(handleItemInsert().id)}
-							className={cn(
-								'btn btn-ghost border border-current/25 border-dashed grid place-items-center',
-								shapeClasses[settings.itemShape],
-								'size-16 sm:size-20',
-							)}
-						>
-							<LuPlus />
-						</button>
-					</div>
-				</SortableContext>
+			<DndContext {...dndContextProps}>
+				<TierRowList />
+				<ItemBank />
 
 				<DragOverlay>
 					{activeTier ? (

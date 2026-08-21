@@ -2,6 +2,10 @@ import {
 	Button,
 	cn,
 	daisyThemeMap,
+	Field,
+	gcd,
+	Input,
+	Modal,
 	RadioGroup,
 	Select,
 	ThemeProvider,
@@ -30,6 +34,8 @@ const TILE_SIZE = 1024
 const TILE_BATCH_SIZE = 12
 const BYTES_PER_PIXEL = { png: 0.45, jpg: 0.23 } as const
 const DEFAULT_ZOOM = 12
+const MIN_ZOOM = 1
+const MAX_ZOOM = 22
 
 const STYLES = {
 	'streets-v12': 'Streets',
@@ -48,7 +54,28 @@ type Format = 'jpg' | 'png'
 
 type TileBounds = { north: number; south: number; east: number; west: number }
 
+/** The map's visible corners in degrees. Zoom-independent, so it is what the component stores. */
+type GeoBounds = { north: number; south: number; east: number; west: number }
+
 type Piece = { url: string; dx: number; dy: number }
+
+/** The tile rectangle currently framed by the map, at the zoom level it is read at. */
+type MapRegion = { bounds: TileBounds; zoom: number }
+
+/** Everything needed to address a Mapbox raster tile. */
+type TileSource = MapRegion & { style: MapStyle }
+
+type DownloadRequest = TileSource & { format: Format; filename?: string }
+
+/** One output file's slice of the grid: where it starts and how many tiles it covers. */
+type ChunkPlacement = {
+	chunkX: number
+	chunkY: number
+	startCol: number
+	startRow: number
+	colsInChunk: number
+	rowsInChunk: number
+}
 
 const ZERO_BOUNDS: TileBounds = { north: 0, south: 0, east: 0, west: 0 }
 const DEFAULT_MAP_STYLE: Record<'dark' | 'light', MapStyle> = { dark: 'dark-v11', light: 'light-v11' }
@@ -98,9 +125,8 @@ const tile2lat = (y: number, zoom: number) =>
 	(Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** zoom))) * 180) / Math.PI
 
 const getRatio = (w: number, h: number) => {
-	const gcd = (a: number, b: number): number => (!b ? a : gcd(b, a % b))
-	const d = gcd(w, h)
-	return `${w}:${h}${d !== 1 ? ` (${w / d}:${h / d})` : ''}`
+	const divisor = gcd(w, h)
+	return `${w}:${h}${divisor !== 1 ? ` (${w / divisor}:${h / divisor})` : ''}`
 }
 
 const formatBytes = (bytes: number) => {
@@ -115,16 +141,24 @@ const boundsToGrid = (bounds: TileBounds) => ({
 	rows: Math.abs(bounds.north - bounds.south) + 1,
 })
 
-const getTileBounds = (map: mapboxgl.Map, zoom = Math.floor(map.getZoom())): TileBounds => {
-	const b = map.getBounds()
-	if (!b) return ZERO_BOUNDS
+const getGeoBounds = (map: mapboxgl.Map): GeoBounds | null => {
+	const geoBounds = map.getBounds()
+	if (!geoBounds) return null
 	return {
-		north: lat2tile(b.getNorth(), zoom),
-		south: lat2tile(b.getSouth(), zoom),
-		east: lng2tile(b.getEast(), zoom),
-		west: lng2tile(b.getWest(), zoom),
+		north: geoBounds.getNorth(),
+		south: geoBounds.getSouth(),
+		east: geoBounds.getEast(),
+		west: geoBounds.getWest(),
 	}
 }
+
+/** Which tiles cover a geographic box at a given zoom. Pure, so the same box re-projects for free. */
+const toTileBounds = ({ north, south, east, west }: GeoBounds, zoom: number): TileBounds => ({
+	north: lat2tile(north, zoom),
+	south: lat2tile(south, zoom),
+	east: lng2tile(east, zoom),
+	west: lng2tile(west, zoom),
+})
 
 const chunkGrid = (cols: number, rows: number) => {
 	const chunkCols = Math.max(1, Math.min(CANVAS_MAX_TILES_PER_DIM, cols))
@@ -132,7 +166,56 @@ const chunkGrid = (cols: number, rows: number) => {
 	return { chunkCols, chunkRows, chunksX: Math.ceil(cols / chunkCols), chunksY: Math.ceil(rows / chunkRows) }
 }
 
-const syncTileGrid = (map: mapboxgl.Map, show: boolean, bounds: TileBounds, zoom: number) => {
+/** Flattens the grid into one placement per output file, in row-major order. */
+const planChunks = (cols: number, rows: number) => {
+	const { chunkCols, chunkRows, chunksX, chunksY } = chunkGrid(cols, rows)
+	const chunks = Array.from({ length: chunksY }, (_chunkRow, chunkY) =>
+		Array.from({ length: chunksX }, (_chunkColumn, chunkX) => ({
+			chunkX,
+			chunkY,
+			startCol: chunkX * chunkCols,
+			startRow: chunkY * chunkRows,
+			colsInChunk: Math.min(chunkCols, cols - chunkX * chunkCols),
+			rowsInChunk: Math.min(chunkRows, rows - chunkY * chunkRows),
+		})),
+	).flat()
+	return { chunks, chunksX, chunksY }
+}
+
+const chunkPieces = ({ bounds, zoom, style }: TileSource, chunk: ChunkPlacement) =>
+	Array.from({ length: chunk.colsInChunk }, (_column, dx) =>
+		Array.from({ length: chunk.rowsInChunk }, (_row, dy) => {
+			const tileX = bounds.west + chunk.startCol + dx
+			const tileY = bounds.north + chunk.startRow + dy
+			return {
+				url: `https://api.mapbox.com/styles/v1/mapbox/${style}/tiles/${zoom}/${tileX}/${tileY}@2x?access_token=${mapboxgl.accessToken}`,
+				dx,
+				dy,
+			}
+		}),
+	).flat()
+
+const encodeChunk = async (canvas: OffscreenCanvas, format: Format, chunk: ChunkPlacement) => {
+	const type = format === 'jpg' ? 'image/jpeg' : 'image/png'
+
+	try {
+		return await canvas.convertToBlob({ type, ...(format === 'jpg' && { quality: 0.92 }) })
+	} catch (error) {
+		throw new Error(
+			`convertToBlob failed for chunk r${chunk.chunkY}c${chunk.chunkX} (${canvas.width}x${canvas.height}px). ` +
+				`Detected limits: ${CANVAS_MAX_TILES_PER_DIM * TILE_SIZE}px/dim, ${CANVAS_MAX_TILE_AREA} tile area. ` +
+				`${error instanceof Error ? error.message : error}`,
+		)
+	}
+}
+
+const saveBlob = (blob: Blob, name: string) => {
+	const url = URL.createObjectURL(blob)
+	Object.assign(document.createElement('a'), { download: name, href: url }).click()
+	URL.revokeObjectURL(url)
+}
+
+const syncTileGrid = (map: mapboxgl.Map, show: boolean, { bounds, zoom }: MapRegion) => {
 	const source = map.getSource<mapboxgl.GeoJSONSource>('tile-grid')
 
 	if (!show) {
@@ -188,13 +271,13 @@ const getPosition = () =>
 		.then((p) => [p.coords.longitude, p.coords.latitude] satisfies [number, number])
 		.catch(() => [-74.006, 40.7128] satisfies [number, number])
 
-const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, style: MapStyle, filename?: string) => {
+const downloadMap = async ({ bounds, zoom, format, style, filename }: DownloadRequest) => {
 	const controller = new AbortController()
 	const { signal } = controller
 
 	const { cols, rows } = boundsToGrid(bounds)
-	const { chunkCols, chunkRows, chunksX, chunksY } = chunkGrid(cols, rows)
-	const totalChunks = chunksX * chunksY
+	const { chunks, chunksX, chunksY } = planChunks(cols, rows)
+	const totalChunks = chunks.length
 	const multiFile = totalChunks > 1
 
 	const ext = `.${format}`
@@ -206,8 +289,8 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 
 	try {
 		let totalLoaded = 0
-		const totalTiles = cols * rows
 		let totalSize = 0
+		const totalTiles = cols * rows
 
 		const loadTile = async (piece: Piece, ctx: OffscreenCanvasRenderingContext2D, chunkLabel: string) => {
 			const res = await fetch(piece.url, { signal, cache: 'force-cache' })
@@ -223,80 +306,165 @@ const downloadMap = async (bounds: TileBounds, zoom: number, format: Format, sty
 			})
 		}
 
-		for (let cy = 0; cy < chunksY; cy++) {
-			for (let cx = 0; cx < chunksX; cx++) {
+		for (const [index, chunk] of chunks.entries()) {
+			signal.throwIfAborted()
+
+			const chunkLabel = multiFile ? ` (part ${index + 1}/${totalChunks})` : ''
+			const canvas = new OffscreenCanvas(chunk.colsInChunk * TILE_SIZE, chunk.rowsInChunk * TILE_SIZE)
+			const ctx = canvas.getContext('2d')
+			if (!ctx) throw new Error('Could not create canvas context')
+
+			const pieces = chunkPieces({ bounds, zoom, style }, chunk)
+
+			for (let i = 0; i < pieces.length; i += TILE_BATCH_SIZE) {
 				signal.throwIfAborted()
-
-				const startCol = cx * chunkCols
-				const startRow = cy * chunkRows
-				const colsInChunk = Math.min(chunkCols, cols - startCol)
-				const rowsInChunk = Math.min(chunkRows, rows - startRow)
-
-				const canvasWidth = colsInChunk * TILE_SIZE
-				const canvasHeight = rowsInChunk * TILE_SIZE
-				const chunkLabel = multiFile ? ` (part ${cy * chunksX + cx + 1}/${totalChunks})` : ''
-
-				const canvas = new OffscreenCanvas(canvasWidth, canvasHeight)
-				const ctx = canvas.getContext('2d')
-				if (!ctx) throw new Error('Could not create canvas context')
-
-				const pieces: Piece[] = []
-
-				for (let x = 0; x < colsInChunk; x++) {
-					for (let y = 0; y < rowsInChunk; y++) {
-						const tileX = bounds.west + startCol + x
-						const tileY = bounds.north + startRow + y
-						pieces.push({
-							url: `https://api.mapbox.com/styles/v1/mapbox/${style}/tiles/${zoom}/${tileX}/${tileY}@2x?access_token=${mapboxgl.accessToken}`,
-							dx: x,
-							dy: y,
-						})
-					}
-				}
-
-				for (let i = 0; i < pieces.length; i += TILE_BATCH_SIZE) {
-					signal.throwIfAborted()
-					await Promise.all(pieces.slice(i, i + TILE_BATCH_SIZE).map((piece) => loadTile(piece, ctx, chunkLabel)))
-				}
-
-				toast.loading(`Encoding image...${chunkLabel}`, { id, cancel: cancelAction, description: format.toUpperCase() })
-
-				const type = format === 'jpg' ? 'image/jpeg' : 'image/png'
-				let blob: Blob
-
-				try {
-					blob = await canvas.convertToBlob({ type, ...(format === 'jpg' && { quality: 0.92 }) })
-				} catch (blobErr) {
-					throw new Error(
-						`convertToBlob failed for chunk r${cy}c${cx} (${canvasWidth}x${canvasHeight}px). ` +
-							`Detected limits: ${CANVAS_MAX_TILES_PER_DIM * TILE_SIZE}px/dim, ${CANVAS_MAX_TILE_AREA} tile area. ` +
-							`${blobErr instanceof Error ? blobErr.message : blobErr}`,
-					)
-				}
-
-				totalSize += blob.size
-
-				const name = multiFile ? `${stem}_r${cy}c${cx}${ext}` : `${stem}${ext}`
-				const url = URL.createObjectURL(blob)
-				Object.assign(document.createElement('a'), { download: name, href: url }).click()
-				URL.revokeObjectURL(url)
+				await Promise.all(pieces.slice(i, i + TILE_BATCH_SIZE).map((piece) => loadTile(piece, ctx, chunkLabel)))
 			}
+
+			toast.loading(`Encoding image...${chunkLabel}`, { id, cancel: cancelAction, description: format.toUpperCase() })
+			const blob = await encodeChunk(canvas, format, chunk)
+			totalSize += blob.size
+			saveBlob(blob, multiFile ? `${stem}_r${chunk.chunkY}c${chunk.chunkX}${ext}` : `${stem}${ext}`)
 		}
 
-		const desc = multiFile
+		const description = multiFile
 			? `${totalChunks} files, ${chunksX}x${chunksY} grid (${formatBytes(totalSize)})`
 			: `${stem}${ext} (${formatBytes(totalSize)})`
-		toast.success('Download complete', { id, description: desc })
+		toast.success('Download complete', { id, description })
 		return totalSize
-	} catch (e) {
+	} catch (error) {
 		if (signal.aborted) {
 			toast.dismiss(id)
 			return
 		}
 
-		toast.error('Download failed', { id, description: e instanceof Error ? e.message : 'Unknown error' })
-		throw e
+		toast.error('Download failed', { id, description: error instanceof Error ? error.message : 'Unknown error' })
+		throw error
 	}
+}
+
+/** Zoom, north-west corner and grid size — enough to tell two exports of the same area apart. */
+const defaultFilename = ({ map, bounds, zoom, format }: MapRegion & { map: mapboxgl.Map | null; format: Format }) => {
+	const northWest = map?.getBounds()?.getNorthWest()
+	if (!northWest) return null
+	const { cols, rows } = boundsToGrid(bounds)
+	return `map_z${zoom}_[${northWest.lat.toFixed(4)}_${northWest.lng.toFixed(4)}]_${cols}x${rows}.${format}`
+}
+
+type DownloadButtonProps = TileSource & { map: mapboxgl.Map | null; format: Format }
+
+const DownloadButton = ({ map, bounds, zoom, format, style }: DownloadButtonProps) => {
+	const [downloading, setDownloading] = useState(false)
+	// Non-null is also what opens the dialog: there is no draft filename unless one is being edited
+	const [draft, setDraft] = useState<string | null>(null)
+
+	const save = async (filename: string) => {
+		setDraft(null)
+		setDownloading(true)
+
+		try {
+			await downloadMap({ bounds, zoom, format, style, filename })
+		} finally {
+			setDownloading(false)
+		}
+	}
+
+	return (
+		<>
+			<Button
+				className='btn-square'
+				disabled={downloading}
+				title='Download'
+				onClick={() => setDraft(defaultFilename({ map, bounds, zoom, format }))}
+			>
+				{downloading ? <span className='loading loading-spinner loading-xs' /> : <FaDownload />}
+			</Button>
+			<Modal open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
+				<form
+					className='grid gap-4'
+					onSubmit={(event) => {
+						event.preventDefault()
+						const filename = draft?.trim()
+						if (filename) void save(filename)
+					}}
+				>
+					<Field label='Filename'>
+						<Input
+							className='w-full'
+							autoFocus
+							value={draft ?? ''}
+							onChange={(event) => setDraft(event.target.value)}
+						/>
+					</Field>
+					<Button type='submit' className='btn-primary' disabled={!draft?.trim()}>
+						Download
+					</Button>
+				</form>
+			</Modal>
+		</>
+	)
+}
+
+const LocateButton = ({ map }: { map: mapboxgl.Map | null }) => (
+	<Button
+		className='btn-square'
+		title='Go to current location'
+		onClick={() => getPosition().then((center) => map?.flyTo({ center }))}
+	>
+		<FaCrosshairs />
+	</Button>
+)
+
+type ZoomControlProps = { zoom: number; locked: boolean; onToggleLock: () => void; onStep: (delta: number) => void }
+
+const ZoomControl = ({ zoom, locked, onToggleLock, onStep }: ZoomControlProps) => (
+	<div className='join'>
+		<Button className='btn-square join-item' onClick={() => onStep(-1)}>
+			<FaMinus />
+		</Button>
+		<Button className='join-item gap-1' onClick={onToggleLock}>
+			{locked ? <FaLock /> : <FaLockOpen />}
+			<span className='font-mono'>{zoom}</span>
+		</Button>
+		<Button className='btn-square join-item' onClick={() => onStep(1)}>
+			<FaPlus />
+		</Button>
+	</div>
+)
+
+type StyleSelectProps = { value: MapStyle; onChange: (style: MapStyle) => void }
+
+const StyleSelect = ({ value, onChange }: StyleSelectProps) => (
+	<Select className='w-fit' value={value} onChange={(e) => onChange(e.target.value as MapStyle)}>
+		{Object.entries(STYLES).map(([styleId, label]) => (
+			<option key={styleId} value={styleId}>
+				{label}
+			</option>
+		))}
+	</Select>
+)
+
+const MapStats = ({ bounds, format }: { bounds: TileBounds; format: Format }) => {
+	const { cols, rows } = boundsToGrid(bounds)
+	const tileCount = cols * rows
+	const { chunksX, chunksY } = chunkGrid(cols, rows)
+	const totalChunks = chunksX * chunksY
+
+	return (
+		<div className='flex items-center justify-center gap-4 font-mono text-xs opacity-75'>
+			{totalChunks === 1 && tileCount > 100 && format === 'png' && (
+				<FaExclamationTriangle className='text-warning cursor-help' title='Large map — JPG will export faster' />
+			)}
+			<span>{getRatio(cols, rows)}</span>
+			<span>{tileCount} tiles</span>
+			<span>~{formatBytes(tileCount * TILE_SIZE ** 2 * BYTES_PER_PIXEL[format])}</span>
+			{totalChunks > 1 && (
+				<span>
+					{totalChunks} downloads ({chunksX}x{chunksY})
+				</span>
+			)}
+		</div>
+	)
 }
 
 const MapPrinter = () => {
@@ -307,59 +475,81 @@ const MapPrinter = () => {
 			: 'dark'
 
 	const containerRef = useRef<HTMLDivElement>(null)
-	const mapRef = useRef<mapboxgl.Map | null>(null)
-	const [bounds, setBounds] = useState(ZERO_BOUNDS)
+	// State, not a ref: the toolbar renders from the map, and the listeners below can only be wired
+	// once it exists — both of which need a render to happen when it appears.
+	const [map, setMap] = useState<mapboxgl.Map | null>(null)
+	const [geoBounds, setGeoBounds] = useState<GeoBounds | null>(null)
 	const [currentZoom, setCurrentZoom] = useState(DEFAULT_ZOOM)
 	const [zoomLocked, setZoomLocked] = useState(false)
 	const [lockedZoom, setLockedZoom] = useState(DEFAULT_ZOOM)
 	const [format, setFormat] = useState<Format>('png')
 	const [style, setStyle] = useState<MapStyle>(() => DEFAULT_MAP_STYLE[colorScheme])
-	const [downloading, setDownloading] = useState(false)
 	const [showGrid, setShowGrid] = useState(false)
 
-	// Reads showGrid at style.load time, not at map-creation time
-	const onStyleLoad = useEffectEvent((map: mapboxgl.Map) => {
-		const z = Math.floor(map.getZoom())
-		syncTileGrid(map, showGrid, getTileBounds(map, z), z)
+	const zoom = zoomLocked ? lockedZoom : currentZoom
+	// The stored box is zoom-independent, so the locked and unlocked cases are the same projection
+	const effectiveBounds = geoBounds ? toTileBounds(geoBounds, zoom) : ZERO_BOUNDS
+
+	// Reads showGrid and the export zoom at style.load time, not at map-creation time
+	const onStyleLoad = useEffectEvent(() => {
+		if (!map) return
+		syncTileGrid(map, showGrid, { bounds: effectiveBounds, zoom })
 	})
 
-	const createMap = useEffectEvent((container: HTMLDivElement) => {
-		getPosition().then((center) => {
-			const map = new mapboxgl.Map({
+	// Reads the chosen style at creation time; later changes go through the restyle effect below
+	const createMap = useEffectEvent(
+		(container: HTMLDivElement, center: mapboxgl.LngLatLike) =>
+			new mapboxgl.Map({
 				container,
 				style: `mapbox://styles/mapbox/${style}`,
 				attributionControl: false,
 				zoom: DEFAULT_ZOOM,
 				center,
-			})
-			mapRef.current = map
-
-			const sync = () => {
-				const z = Math.floor(map.getZoom())
-				// eslint-disable-next-line @eslint-react/set-state-in-effect -- sync runs from mapbox moveend/load listeners, not the effect body
-				setCurrentZoom(z)
-				// eslint-disable-next-line @eslint-react/set-state-in-effect -- sync runs from mapbox moveend/load listeners, not the effect body
-				setBounds(getTileBounds(map, z))
-			}
-
-			map.on('moveend', sync)
-			map.on('load', sync)
-			map.on('style.load', () => onStyleLoad(map))
-		})
-	})
+			}),
+	)
 
 	useEffect(() => {
 		const container = containerRef.current
 		if (!container) return
-		createMap(container)
+
+		let created: mapboxgl.Map | null = null
+		let cancelled = false
+
+		getPosition().then((center) => {
+			if (cancelled) return
+			created = createMap(container, center)
+			// Seeded here, not left to `load`: with the style cached the map can finish loading before the
+			// listener effect below attaches, and `load` does not fire twice.
+			setGeoBounds(getGeoBounds(created))
+			setMap(created)
+		})
 
 		return () => {
-			mapRef.current?.remove()
-			mapRef.current = null
+			cancelled = true
+			created?.remove()
 		}
 	}, [])
 
-	// Track the theme as it changes, then restyle the map in the effect below
+	useEffect(() => {
+		if (!map) return
+
+		const sync = () => {
+			setCurrentZoom(Math.floor(map.getZoom()))
+			setGeoBounds(getGeoBounds(map))
+		}
+
+		map.on('moveend', sync)
+		map.on('load', sync)
+		map.on('style.load', onStyleLoad)
+
+		return () => {
+			map.off('moveend', sync)
+			map.off('load', sync)
+			map.off('style.load', onStyleLoad)
+		}
+	}, [map])
+
+	// Track the theme as it changes; `style` is the one source of truth the map is synced from
 	const [prevColorScheme, setPrevColorScheme] = useState(colorScheme)
 
 	if (prevColorScheme !== colorScheme) {
@@ -368,24 +558,22 @@ const MapPrinter = () => {
 	}
 
 	useEffect(() => {
-		mapRef.current?.setStyle(`mapbox://styles/mapbox/${DEFAULT_MAP_STYLE[colorScheme]}`)
-	}, [colorScheme])
+		map?.setStyle(`mapbox://styles/mapbox/${style}`)
+	}, [map, style])
 
 	useEffect(() => {
-		const map = mapRef.current
-		if (!map?.isStyleLoaded()) return
-		const z = zoomLocked ? lockedZoom : currentZoom
-		const b = zoomLocked ? getTileBounds(map, z) : bounds
-		syncTileGrid(map, showGrid, b, z)
-	}, [showGrid, bounds, currentZoom, zoomLocked, lockedZoom])
+		if (!map) return
 
-	const zoom = zoomLocked ? lockedZoom : currentZoom
-	// eslint-disable-next-line react-hooks/refs, @eslint-react/refs -- the mapbox instance is an external store; bounds at the locked zoom are derived from it on demand
-	const effectiveBounds = zoomLocked ? (mapRef.current ? getTileBounds(mapRef.current, zoom) : ZERO_BOUNDS) : bounds
-	const { cols, rows } = boundsToGrid(effectiveBounds)
-	const tileCount = cols * rows
-	const { chunksX, chunksY } = chunkGrid(cols, rows)
-	const totalChunks = chunksX * chunksY
+		const draw = () => syncTileGrid(map, showGrid, { bounds: effectiveBounds, zoom })
+		// `moveend` fires while the new viewport's tiles are still in flight, so `isStyleLoaded()` is
+		// routinely false here; `idle` is the event that means every tile has landed.
+		if (map.isStyleLoaded()) draw()
+		else map.once('idle', draw)
+
+		return () => {
+			map.off('idle', draw)
+		}
+	}, [map, showGrid, effectiveBounds, zoom])
 
 	return (
 		<>
@@ -394,82 +582,21 @@ const MapPrinter = () => {
 				<div ref={containerRef} className='absolute size-full' />
 				<nav className='fixed top-2 left-1/2 -translate-x-1/2 w-fit bg-base-100/50 backdrop-blur rounded-box shadow-lg p-2 grid gap-2'>
 					<div className='flex gap-2'>
-						<Button
-							className='btn-square'
-							disabled={downloading}
-							onClick={async () => {
-								const geoBounds = mapRef.current?.getBounds()
-								if (!geoBounds) return
-								const nw = geoBounds.getNorthWest()
-								// eslint-disable-next-line no-alert -- filename prompt is the pen's save UX
-								const name = prompt(
-									'Filename:',
-									`map_z${zoom}_[${nw.lat.toFixed(4)}_${nw.lng.toFixed(4)}]_${cols}x${rows}.${format}`,
-								)
-								if (!name) return
-								setDownloading(true)
-
-								try {
-									await downloadMap(effectiveBounds, zoom, format, style, name)
-								} finally {
-									setDownloading(false)
-								}
+						<DownloadButton map={map} bounds={effectiveBounds} zoom={zoom} format={format} style={style} />
+						<LocateButton map={map} />
+						<ZoomControl
+							zoom={zoom}
+							locked={zoomLocked}
+							onToggleLock={() => {
+								setZoomLocked(!zoomLocked)
+								setLockedZoom(zoom)
 							}}
-						>
-							{downloading ? <span className='loading loading-spinner loading-xs' /> : <FaDownload />}
-						</Button>
-						<Button
-							className='btn-square'
-							title='Go to current location'
-							onClick={() => getPosition().then((center) => mapRef.current?.flyTo({ center }))}
-						>
-							<FaCrosshairs />
-						</Button>
-						<div className='join'>
-							<Button
-								className='btn-square join-item'
-								onClick={() => {
-									if (zoomLocked) setLockedZoom(Math.max(lockedZoom - 1, 1))
-									else mapRef.current?.zoomTo(currentZoom - 1)
-								}}
-							>
-								<FaMinus />
-							</Button>
-							<Button
-								className='join-item gap-1'
-								onClick={() => {
-									setZoomLocked(!zoomLocked)
-									setLockedZoom(zoom)
-								}}
-							>
-								{zoomLocked ? <FaLock /> : <FaLockOpen />}
-								<span className='font-mono'>{zoom}</span>
-							</Button>
-							<Button
-								className='btn-square join-item'
-								onClick={() => {
-									if (zoomLocked) setLockedZoom(Math.min(lockedZoom + 1, 22))
-									else mapRef.current?.zoomTo(currentZoom + 1)
-								}}
-							>
-								<FaPlus />
-							</Button>
-						</div>
-						<Select
-							className='w-fit'
-							value={style}
-							onChange={(e) => {
-								const s = e.target.value as MapStyle
-								setStyle(s)
-								mapRef.current?.setStyle(`mapbox://styles/mapbox/${s}`)
+							onStep={(delta) => {
+								if (zoomLocked) setLockedZoom(Math.min(Math.max(lockedZoom + delta, MIN_ZOOM), MAX_ZOOM))
+								else map?.zoomTo(currentZoom + delta)
 							}}
-						>
-							{Object.entries(STYLES).map(([value, label]) => (
-								<option key={value} value={value}>
-									{label}
-								</option>
-							))}
-						</Select>
+						/>
+						<StyleSelect value={style} onChange={setStyle} />
 						<RadioGroup
 							variant='btn'
 							options={['png', 'jpg']}
@@ -484,19 +611,7 @@ const MapPrinter = () => {
 							<FaBorderAll />
 						</Button>
 					</div>
-					<div className='flex items-center justify-center gap-4 font-mono text-xs opacity-75'>
-						{totalChunks === 1 && tileCount > 100 && format === 'png' && (
-							<FaExclamationTriangle className='text-warning cursor-help' title='Large map — JPG will export faster' />
-						)}
-						<span>{getRatio(cols, rows)}</span>
-						<span>{tileCount} tiles</span>
-						<span>~{formatBytes(tileCount * TILE_SIZE ** 2 * BYTES_PER_PIXEL[format])}</span>
-						{totalChunks > 1 && (
-							<span>
-								{totalChunks} downloads ({chunksX}x{chunksY})
-							</span>
-						)}
-					</div>
+					<MapStats bounds={effectiveBounds} format={format} />
 				</nav>
 			</main>
 		</>

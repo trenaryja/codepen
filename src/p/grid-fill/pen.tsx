@@ -12,17 +12,17 @@ import {
 	useRole,
 } from 'https://esm.sh/@floating-ui/react'
 import { useVirtualizer } from 'https://esm.sh/@tanstack/react-virtual'
-import { Button, Field, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { Button, colorMix, Field, interpolateColors, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { strToU8, zipSync } from 'https://esm.sh/fflate'
 import { parseAsString, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import type { ReactNode } from 'https://esm.sh/react'
+import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuDownload, LuHeart, LuSlidersHorizontal } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
 import { BASE62, decodeIntegers, encodeIntegers, triIndex, triInverse } from './codec'
-import { colorMix, EdgeBadges, interpolateColors, Stepper } from './migrate-to-ui'
+import { EdgeBadges, Stepper } from './migrate-to-ui'
 
 type Bin = { x: number; y: number; w: number; h: number; key: string }
 
@@ -80,6 +80,8 @@ const TAGS: Record<'favorite' | TagId, { label: string; description: string }> =
 		description: 'Every piece size appears at least twice — no singletons.',
 	},
 }
+
+const { sort: sortWith } = R
 
 const parseSize = (size: string): [number, number] => {
 	const [w, h] = size.split('×')
@@ -244,31 +246,29 @@ const solve = ({ W, H }: { W: number; H: number }) => {
 			return null
 		}
 
+		const allCountsSpent = () => {
+			for (let keyIndex = 0; keyIndex < K; keyIndex++) if (counts[keyIndex] !== 0) return false
+			return true
+		}
+
+		const canPlace = ({ x, y, w, h }: Omit<Bin, 'key'>) => {
+			if (x + w > W || y + h > H) return false
+			const mask = ((1 << w) - 1) << x
+			for (let dy = 0; dy < h; dy++) if (rows[y + dy]! & mask) return false
+			return true
+		}
+
 		const recurse = (): boolean => {
 			const cell = firstEmpty()
-
-			if (!cell) {
-				for (let keyIndex = 0; keyIndex < K; keyIndex++) if (counts[keyIndex] !== 0) return false
-				return true
-			}
-
+			if (!cell) return allCountsSpent()
 			const [x, y] = cell
 
 			for (let keyIndex = 0; keyIndex < K; keyIndex++) {
 				if (counts[keyIndex]! <= 0) continue
 
 				for (const [w, h] of keyDimensions[keyIndex]!) {
-					if (x + w > W || y + h > H) continue
+					if (!canPlace({ x, y, w, h })) continue
 					const mask = ((1 << w) - 1) << x
-					let fits = true
-
-					for (let dy = 0; dy < h; dy++)
-						if (rows[y + dy]! & mask) {
-							fits = false
-							break
-						}
-
-					if (!fits) continue
 					for (let dy = 0; dy < h; dy++) rows[y + dy]! |= mask
 					counts[keyIndex]!--
 					layout.push({ x, y, w, h, key: sizeKeys[keyIndex]! })
@@ -614,12 +614,9 @@ const RecipeList = ({
 	})
 
 	useEffect(() => {
-		scrollerRef.current?.scrollTo(0, 0)
-	}, [W, H, filters])
-
-	useEffect(() => {
 		if (filteredIndex >= 0) rowVirtualizer.scrollToIndex(filteredIndex, { align: 'auto' })
-	}, [filteredIndex, rowVirtualizer])
+		else rowVirtualizer.scrollToOffset(0)
+	}, [W, H, filters, filteredIndex, rowVirtualizer])
 
 	return (
 		<div className='grid grid-rows-[auto_minmax(0,1fr)] gap-2'>
@@ -677,7 +674,7 @@ const RecipeList = ({
 												))}
 											</EdgeBadges>
 											<div className='flex gap-2 flex-nowrap overflow-x-fade pt-2'>
-												{R.sort(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => (
+												{sortWith(R.entries(recipe.counts), (a, b) => byFamily(a[0], b[0])).map(([size, count]) => (
 													<span key={size} className='indicator badge badge-soft tabular-nums'>
 														{count > 1 && (
 															<span className='indicator-item badge badge-xs px-1 tabular-nums'>{count}</span>
@@ -715,85 +712,141 @@ const parseInitialDims = (id: string | null) => {
 	}
 }
 
-const Root = () => {
-	const [compactId, setCompactId] = useQueryState('id', parseAsString)
-	const [W, setW] = useState(() => parseInitialDims(compactId)?.W ?? 6)
-	const [H, setH] = useState(() => parseInitialDims(compactId)?.H ?? 5)
-	const [recipes, setRecipes] = useState<Recipe[]>([])
-	const [selectedKey, setSelectedKey] = useState<string | null>(null)
-	const [filters, setFilters] = useState<Filters>(emptyFilters)
-	const { favorites, toggleFavorite } = useFavorites()
-	const restoreIdRef = useRef<string | null>(compactId)
+const sortRecipes = (solved: Recipe[]) => {
+	const allKeys = sortWith(R.unique(solved.flatMap((x) => R.keys(x.counts))), byFamily)
+	const familyOrder = R.fromEntries(allKeys.map((k, i) => [k, i] as const))
+	// familyOrder covers every size key that appears in any recipe
+	const sortedEntries = (recipe: Recipe) => R.sortBy(R.entries(recipe.counts), ([s]) => familyOrder[s]!)
+	return sortWith(solved, (a, b) => {
+		if (a.unique !== b.unique) return a.unique - b.unique
+		const sortedA = sortedEntries(a)
+		const sortedB = sortedEntries(b)
 
-	useEffect(() => {
-		const solved = solve({ W, H })
-		const allKeys = R.sort(R.unique(solved.flatMap((x) => R.keys(x.counts))), byFamily)
-		const familyOrder = R.fromEntries(allKeys.map((k, i) => [k, i] as const))
-		// familyOrder covers every size key that appears in any recipe
-		const sortedEntries = (recipe: Recipe) => R.sortBy(R.entries(recipe.counts), ([s]) => familyOrder[s]!)
-		const sorted = R.sort(solved, (a, b) => {
-			if (a.unique !== b.unique) return a.unique - b.unique
-			const sortedA = sortedEntries(a)
-			const sortedB = sortedEntries(b)
-
-			for (let i = 0; i < sortedA.length && i < sortedB.length; i++) {
-				const [sizeA, countA] = sortedA[i]!
-				const [sizeB, countB] = sortedB[i]!
-				const diff = familyOrder[sizeA]! - familyOrder[sizeB]!
-				if (diff) return diff
-				if (countA !== countB) return countA - countB
-			}
-
-			return sortedA.length - sortedB.length
-		})
-
-		// eslint-disable-next-line @eslint-react/set-state-in-effect -- the solver enumerates every recipe for the new grid size; results land in state once per W/H change
-		setRecipes(sorted)
-
-		const restoreId = restoreIdRef.current
-		restoreIdRef.current = null
-
-		let keyToSelect: string | null = null
-
-		if (restoreId) {
-			try {
-				const { counts } = decodeRecipe(restoreId)
-				const pairs = R.entries(counts).map(([k, v]) => `${k}:${v}`)
-				pairs.sort()
-				const targetKey = pairs.join('|')
-				keyToSelect = sorted.find((r) => r.key === targetKey)?.key ?? null
-			} catch {
-				// malformed hash — fall through to default selection
-			}
+		for (let i = 0; i < sortedA.length && i < sortedB.length; i++) {
+			const [sizeA, countA] = sortedA[i]!
+			const [sizeB, countB] = sortedB[i]!
+			const diff = familyOrder[sizeA]! - familyOrder[sizeB]!
+			if (diff) return diff
+			if (countA !== countB) return countA - countB
 		}
 
-		// eslint-disable-next-line @eslint-react/set-state-in-effect -- selection resets alongside the freshly solved recipe list
-		setSelectedKey(keyToSelect ?? sorted[0]?.key ?? null)
-		const valid = new Set(availableSizes(W, H))
-		// eslint-disable-next-line @eslint-react/set-state-in-effect -- constraints for sizes that no longer exist on the new grid are dropped with the same solve
-		setFilters((f) => ({
-			tags: f.tags,
-			favoriteOnly: f.favoriteOnly,
-			constraints: f.constraints.filter((c) => valid.has(c.size)),
-		}))
-	}, [W, H])
+		return sortedA.length - sortedB.length
+	})
+}
 
-	const plateSizes = availableSizes(W, H)
-	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters, favorites))
-	const filteredIndex = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
-	const selectedRecipe = filteredIndex >= 0 ? filteredRecipes[filteredIndex]! : null
-	const layout = selectedRecipe?.layout ?? []
-	const gridW = SVG_CELL * W
-	const gridH = SVG_CELL * H
-	const viewBoxWidth = gridW + 2 * SVG_PADDING
-	const viewBoxHeight = gridH + 2 * SVG_PADDING
-	const originX = SVG_PADDING
-	const originY = SVG_PADDING
+const restoredKey = (restoreId: string, sorted: Recipe[]) => {
+	try {
+		const { counts } = decodeRecipe(restoreId)
+		const pairs = R.entries(counts).map(([k, v]) => `${k}:${v}`)
+		pairs.sort()
+		const targetKey = pairs.join('|')
+		return sorted.find((r) => r.key === targetKey)?.key ?? null
+	} catch {
+		// malformed hash — fall through to default selection
+		return null
+	}
+}
+
+const PlateBin = ({ bin, base }: { bin: Bin; base: string }) => {
+	const x = SVG_PADDING + bin.x * SVG_CELL + BIN_INSET
+	const y = SVG_PADDING + bin.y * SVG_CELL + BIN_INSET
+	const w = bin.w * SVG_CELL - 2 * BIN_INSET
+	const h = bin.h * SVG_CELL - 2 * BIN_INSET
+	return (
+		<g>
+			<rect
+				x={x}
+				y={y}
+				width={w}
+				height={h}
+				rx={6}
+				fill={colorMix({ color1: base, color2: 'var(--color-base-100)', ratio: 10 })}
+				stroke={base}
+			/>
+			<text
+				x={x + w / 2}
+				y={y + h / 2}
+				textAnchor='middle'
+				dominantBaseline='central'
+				fontSize={SVG_CELL / 3}
+				fontWeight={500}
+				fill={colorMix({ color1: base, color2: 'var(--color-base-content)', ratio: 50 })}
+			>
+				{`${bin.w}×${bin.h}`}
+			</text>
+		</g>
+	)
+}
+
+const PlateSvg = ({ layout, W, H }: { layout: Bin[]; W: number; H: number }) => {
+	const viewBoxWidth = SVG_CELL * W + 2 * SVG_PADDING
+	const viewBoxHeight = SVG_CELL * H + 2 * SVG_PADDING
 	const keys = R.unique(layout.map((bin) => bin.key)).toSorted(byFamily)
 	const baseOf = (size: string) =>
 		interpolateColors(keys.length > 1 ? keys.indexOf(size) / (keys.length - 1) : 0, STOPS)
-	const filtersActive = filters.tags.size > 0 || filters.favoriteOnly || filters.constraints.length > 0
+	return (
+		<svg viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`} className='self-center'>
+			<title>Plate layout</title>
+			{layout.map((bin) => (
+				<PlateBin key={`${bin.x}-${bin.y}`} bin={bin} base={baseOf(bin.key)} />
+			))}
+		</svg>
+	)
+}
 
+type ControlBarProps = {
+	W: number
+	H: number
+	onWidthChange: (value: number) => void
+	onDepthChange: (value: number) => void
+	recipe: Recipe | null
+	filtersActive: boolean
+}
+
+const ControlBar = ({ W, H, onWidthChange, onDepthChange, recipe, filtersActive }: ControlBarProps) => (
+	<section className='flex items-center justify-center flex-wrap gap-2 p-4'>
+		<div className='flex gap-4'>
+			<Field labelPlacement='top-center' label='Width'>
+				<Stepper value={W} min={2} max={6} classNames={{ button: 'btn-sm' }} onChange={onWidthChange} />
+			</Field>
+			<Field labelPlacement='top-center' label='Depth'>
+				<Stepper value={H} min={2} max={6} classNames={{ button: 'btn-sm' }} onChange={onDepthChange} />
+			</Field>
+		</div>
+		<div className='flex items-center gap-1'>
+			<ThemePicker variant='popover' />
+			<ExportButton recipe={recipe} W={W} H={H} />
+			<label htmlFor='filter-drawer' className='btn btn-square indicator' title='Filters'>
+				{filtersActive && <span className='indicator-item size-2 rounded-full bg-primary' />}
+				<LuSlidersHorizontal />
+			</label>
+		</div>
+	</section>
+)
+
+type FilterDrawerProps = {
+	filters: Filters
+	filteredRecipes: Recipe[]
+	favorites: Set<string>
+	onToggleFavoriteOnly: () => void
+	onToggleTag: (id: TagId) => void
+	onSetSizeConstraint: (size: string, op: Constraint['op'] | null) => void
+	onUpdateSizeCount: (size: string, count: number) => void
+	W: number
+	H: number
+}
+
+const FilterDrawer = ({
+	filters,
+	filteredRecipes,
+	favorites,
+	onToggleFavoriteOnly,
+	onToggleTag,
+	onSetSizeConstraint,
+	onUpdateSizeCount,
+	W,
+	H,
+}: FilterDrawerProps) => {
 	const favoriteCount = filteredRecipes.filter((r) => favorites.has(r.key)).length
 	const tagCounts = new Map<TagId, number>(TAG_IDS.map((id) => [id, 0]))
 	for (const recipe of filteredRecipes) for (const tag of recipe.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
@@ -801,8 +854,87 @@ const Root = () => {
 	for (const recipe of filteredRecipes)
 		for (const size of R.keys(recipe.counts)) filteredSizeCounts.set(size, (filteredSizeCounts.get(size) ?? 0) + 1)
 
-	// Deselect during render when filtering removes the selected recipe
-	if (selectedKey && filteredIndex === -1) setSelectedKey(null)
+	return (
+		<div className='drawer-side z-20'>
+			<label htmlFor='filter-drawer' aria-label='close filters' className='drawer-overlay' />
+			<div className='bg-base-200 flex min-h-full w-sm flex-col gap-4 overflow-y-auto p-4'>
+				<div className='flex items-center justify-between'>
+					<span className='font-semibold'>Filters</span>
+					<label htmlFor='filter-drawer' className='btn btn-sm btn-ghost btn-square'>
+						✕
+					</label>
+				</div>
+				<div className='flex flex-col gap-2'>
+					<div className='flex flex-wrap gap-2 justify-center'>
+						<TagChip
+							id='favorite'
+							icon={<LuHeart className='size-3' />}
+							active={filters.favoriteOnly}
+							onToggle={onToggleFavoriteOnly}
+							count={favoriteCount}
+						/>
+						{TAG_IDS.map((id) => (
+							<TagChip
+								key={id}
+								id={id}
+								active={filters.tags.has(id)}
+								onToggle={() => onToggleTag(id)}
+								count={tagCounts.get(id) ?? 0}
+							/>
+						))}
+					</div>
+					<div className='grid gap-2' style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))' }}>
+						{availableSizes(W, H).map((size) => (
+							<SizeCell
+								key={size}
+								size={size}
+								constraint={filters.constraints.find((c) => c.size === size) ?? null}
+								filteredCount={filteredSizeCounts.get(size) ?? 0}
+								onSetOp={(op) => onSetSizeConstraint(size, op)}
+								onUpdateN={(n) => onUpdateSizeCount(size, n)}
+								W={W}
+								H={H}
+							/>
+						))}
+					</div>
+				</div>
+			</div>
+		</div>
+	)
+}
+
+const Root = () => {
+	const [compactId, setCompactId] = useQueryState('id', parseAsString)
+	const [W, setW] = useState(() => parseInitialDims(compactId)?.W ?? 6)
+	const [H, setH] = useState(() => parseInitialDims(compactId)?.H ?? 5)
+	const recipes = sortRecipes(solve({ W, H }))
+	// W and H are themselves restored from compactId, so the first render already solves the linked grid
+	const [selectedKey, setSelectedKey] = useState<string | null>(
+		() => (compactId ? restoredKey(compactId, recipes) : null) ?? recipes[0]?.key ?? null,
+	)
+	const [filters, setFilters] = useState<Filters>(emptyFilters)
+	const { favorites, toggleFavorite } = useFavorites()
+
+	// Resizing the grid resolves a whole new recipe list: reselect the first, drop now-impossible sizes
+	const gridKey = `${W}x${H}`
+	const [prevGridKey, setPrevGridKey] = useState(gridKey)
+	const gridChanged = prevGridKey !== gridKey
+
+	if (gridChanged) {
+		setPrevGridKey(gridKey)
+		setSelectedKey(recipes[0]?.key ?? null)
+		const valid = new Set(availableSizes(W, H))
+		setFilters((f) => ({ ...f, constraints: f.constraints.filter((c) => valid.has(c.size)) }))
+	}
+
+	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters, favorites))
+	const filteredIndex = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
+	const selectedRecipe = filteredIndex >= 0 ? filteredRecipes[filteredIndex]! : null
+	const filtersActive = filters.tags.size > 0 || filters.favoriteOnly || filters.constraints.length > 0
+
+	// Deselect during render when filtering removes the selected recipe. Skipped on a grid change:
+	// selectedKey still belongs to the old grid, so it never matches, and clearing it would undo the reselect above.
+	if (!gridChanged && selectedKey && filteredIndex === -1) setSelectedKey(null)
 
 	const toggleTag = (id: TagId) =>
 		setFilters((f) => {
@@ -838,79 +970,23 @@ const Root = () => {
 
 				<div className='drawer-content'>
 					<main className='grid grid-cols-1 md:grid-cols-2 md:grid-rows-1 gap-4 p-4 w-full md:h-dvh md:overflow-hidden'>
-						<svg viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`} className='self-center'>
-							<title>Plate layout</title>
-							{layout.map((bin) => {
-								const base = baseOf(bin.key)
-								const x = originX + bin.x * SVG_CELL + BIN_INSET
-								const y = originY + bin.y * SVG_CELL + BIN_INSET
-								const w = bin.w * SVG_CELL - 2 * BIN_INSET
-								const h = bin.h * SVG_CELL - 2 * BIN_INSET
-								const fontSize = SVG_CELL / 3
-								return (
-									<g key={`${bin.x}-${bin.y}`}>
-										<rect
-											x={x}
-											y={y}
-											width={w}
-											height={h}
-											rx={6}
-											fill={colorMix(base, 'var(--color-base-100)', 10)}
-											stroke={base}
-										/>
-										<text
-											x={x + w / 2}
-											y={y + h / 2}
-											textAnchor='middle'
-											dominantBaseline='central'
-											fontSize={fontSize}
-											fontWeight={500}
-											fill={colorMix(base, 'var(--color-base-content)', 50)}
-										>
-											{`${bin.w}×${bin.h}`}
-										</text>
-									</g>
-								)
-							})}
-						</svg>
+						<PlateSvg layout={selectedRecipe?.layout ?? []} W={W} H={H} />
 
 						<nav className='grid gap-4 grid-rows-[auto_minmax(0,1fr)] pb-4 h-dvh max-h-full'>
-							<section className='flex items-center justify-center flex-wrap gap-2 p-4'>
-								<div className='flex gap-4'>
-									<Field labelPlacement='top-center' label='Width'>
-										<Stepper
-											value={W}
-											min={2}
-											max={6}
-											classNames={{ button: 'btn-sm' }}
-											onChange={(v) => {
-												setW(v)
-												setCompactId(null)
-											}}
-										/>
-									</Field>
-									<Field labelPlacement='top-center' label='Depth'>
-										<Stepper
-											value={H}
-											min={2}
-											max={6}
-											classNames={{ button: 'btn-sm' }}
-											onChange={(v) => {
-												setH(v)
-												setCompactId(null)
-											}}
-										/>
-									</Field>
-								</div>
-								<div className='flex items-center gap-1'>
-									<ThemePicker variant='popover' />
-									<ExportButton recipe={selectedRecipe} W={W} H={H} />
-									<label htmlFor='filter-drawer' className='btn btn-square indicator' title='Filters'>
-										{filtersActive && <span className='indicator-item size-2 rounded-full bg-primary' />}
-										<LuSlidersHorizontal />
-									</label>
-								</div>
-							</section>
+							<ControlBar
+								W={W}
+								H={H}
+								onWidthChange={(value) => {
+									setW(value)
+									setCompactId(null)
+								}}
+								onDepthChange={(value) => {
+									setH(value)
+									setCompactId(null)
+								}}
+								recipe={selectedRecipe}
+								filtersActive={filtersActive}
+							/>
 							<RecipeList
 								filteredRecipes={filteredRecipes}
 								totalCount={recipes.length}
@@ -932,51 +1008,17 @@ const Root = () => {
 					</main>
 				</div>
 
-				<div className='drawer-side z-20'>
-					<label htmlFor='filter-drawer' aria-label='close filters' className='drawer-overlay' />
-					<div className='bg-base-200 flex min-h-full w-sm flex-col gap-4 overflow-y-auto p-4'>
-						<div className='flex items-center justify-between'>
-							<span className='font-semibold'>Filters</span>
-							<label htmlFor='filter-drawer' className='btn btn-sm btn-ghost btn-square'>
-								✕
-							</label>
-						</div>
-						<div className='flex flex-col gap-2'>
-							<div className='flex flex-wrap gap-2 justify-center'>
-								<TagChip
-									id='favorite'
-									icon={<LuHeart className='size-3' />}
-									active={filters.favoriteOnly}
-									onToggle={() => setFilters((f) => ({ ...f, favoriteOnly: !f.favoriteOnly }))}
-									count={favoriteCount}
-								/>
-								{TAG_IDS.map((id) => (
-									<TagChip
-										key={id}
-										id={id}
-										active={filters.tags.has(id)}
-										onToggle={() => toggleTag(id)}
-										count={tagCounts.get(id) ?? 0}
-									/>
-								))}
-							</div>
-							<div className='grid gap-2' style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))' }}>
-								{plateSizes.map((size) => (
-									<SizeCell
-										key={size}
-										size={size}
-										constraint={filters.constraints.find((c) => c.size === size) ?? null}
-										filteredCount={filteredSizeCounts.get(size) ?? 0}
-										onSetOp={(op) => setSizeConstraint(size, op)}
-										onUpdateN={(n) => updateSizeN(size, n)}
-										W={W}
-										H={H}
-									/>
-								))}
-							</div>
-						</div>
-					</div>
-				</div>
+				<FilterDrawer
+					filters={filters}
+					filteredRecipes={filteredRecipes}
+					favorites={favorites}
+					onToggleFavoriteOnly={() => setFilters((f) => ({ ...f, favoriteOnly: !f.favoriteOnly }))}
+					onToggleTag={toggleTag}
+					onSetSizeConstraint={setSizeConstraint}
+					onUpdateSizeCount={updateSizeN}
+					W={W}
+					H={H}
+				/>
 			</div>
 		</ThemeProvider>
 	)

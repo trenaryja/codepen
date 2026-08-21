@@ -1,6 +1,7 @@
-import { ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { useHotkeys } from 'https://esm.sh/@mantine/hooks'
+import { loadImage, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import heic2any from 'https://esm.sh/heic2any'
-import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import type { CropperRef, CropperState } from 'https://esm.sh/react-advanced-cropper'
 import { Cropper } from 'https://esm.sh/react-advanced-cropper'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -13,6 +14,8 @@ type Format = 'image/avif' | 'image/jpeg' | 'image/png' | 'image/webp'
 type ModelSize = 'large' | 'medium' | 'small'
 
 type BrushMode = 'erase' | 'restore'
+
+type Point = { x: number; y: number }
 
 const FORMAT_META: Record<Format, { ext: string; label: string; transparency: boolean }> = {
 	'image/png': { ext: 'png', label: 'PNG', transparency: true },
@@ -32,8 +35,23 @@ const nextFrame = () =>
 		requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
 	})
 
-// eslint-disable-next-line no-useless-concat -- split to prevent Vite's esm.sh plugin from rewriting
-const ESM_SH = 'https://esm' + '.sh/'
+const createCanvas = (width: number, height: number) => {
+	const canvas = document.createElement('canvas')
+	canvas.width = width
+	canvas.height = height
+	return canvas
+}
+
+const revokeUrls = (urls: (string | null)[]) => {
+	for (const url of urls) if (url) URL.revokeObjectURL(url)
+}
+
+const isHeicFile = (file: File) => file.type === 'image/heic' || file.name.toLowerCase().endsWith('.heic')
+
+// The host is its own constant so the string `https://esm.sh/...` never appears in this file: Vite's
+// esm-sh-to-local plugin rewrites any such literal to a bare specifier, which a blob worker can't resolve.
+const ESM_HOST = 'esm.sh'
+const ESM_SH = `https://${ESM_HOST}/`
 
 function createBgWorker(model: ModelSize) {
 	const code = `
@@ -58,7 +76,7 @@ self.onmessage = async (e) => {
 }
 
 async function normalizeFile(file: File) {
-	if (file.type === 'image/heic' || file.name.toLowerCase().endsWith('.heic')) {
+	if (isHeicFile(file)) {
 		const converted = await heic2any({ blob: file, toType: 'image/png' })
 		const blob = Array.isArray(converted) ? converted[0]! : converted
 		return URL.createObjectURL(blob)
@@ -118,9 +136,7 @@ function imageToBlobUrl(src: string): Promise<Blob> {
 		const img = new Image()
 
 		img.onload = () => {
-			const canvas = document.createElement('canvas')
-			canvas.width = img.naturalWidth
-			canvas.height = img.naturalHeight
+			const canvas = createCanvas(img.naturalWidth, img.naturalHeight)
 			canvas.getContext('2d')!.drawImage(img, 0, 0)
 			canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Canvas export failed'))), 'image/png')
 		}
@@ -130,36 +146,177 @@ function imageToBlobUrl(src: string): Promise<Blob> {
 	})
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-	return new Promise((resolve, reject) => {
-		const img = new Image()
-		img.onload = () => resolve(img)
-		img.onerror = reject
-		img.src = src
+async function renderForDownload({ url, format, bgColor }: { url: string; format: Format; bgColor: string }) {
+	const image = await loadImage(url)
+	const canvas = createCanvas(image.naturalWidth, image.naturalHeight)
+	const context = canvas.getContext('2d')!
+
+	if (!FORMAT_META[format].transparency) {
+		context.fillStyle = bgColor
+		context.fillRect(0, 0, canvas.width, canvas.height)
+	}
+
+	context.drawImage(image, 0, 0)
+	return new Promise<Blob | null>((resolve) => {
+		canvas.toBlob(resolve, format, format === 'image/jpeg' ? 0.92 : undefined)
 	})
 }
 
-/**
- * Create a radial gradient brush with feathered edges.
- * hardness 1 = fully hard circle, hardness 0 = extremely soft gaussian-like falloff.
- * At low hardness, the opaque core shrinks to nearly nothing and the falloff is curved.
- */
-function createBrushPattern(
-	context: CanvasRenderingContext2D,
-	x: number,
-	y: number,
-	radius: number,
-	hardness: number,
-): CanvasGradient {
+/** Returns the object URL; the caller owns revoking it. */
+function triggerDownload(blob: Blob, filename: string) {
+	const url = URL.createObjectURL(blob)
+	const anchor = document.createElement('a')
+	anchor.href = url
+	anchor.download = filename
+	anchor.click()
+	return url
+}
+
+type Dab = { context: CanvasRenderingContext2D; x: number; y: number; radius: number; hardness: number }
+
+function createBrushPattern({ context, x, y, radius, hardness }: Dab): CanvasGradient {
 	const coreRadius = radius * hardness * hardness // quadratic curve for more dramatic softness range
 	const gradient = context.createRadialGradient(x, y, coreRadius, x, y, radius)
-	// Gaussian-ish falloff with intermediate stops
 	gradient.addColorStop(0, 'rgba(0,0,0,1)')
 	gradient.addColorStop(0.3, `rgba(0,0,0,${(0.7 + hardness * 0.3).toFixed(2)})`)
 	gradient.addColorStop(0.6, `rgba(0,0,0,${(0.3 + hardness * 0.4).toFixed(2)})`)
 	gradient.addColorStop(0.85, `rgba(0,0,0,${(0.08 + hardness * 0.2).toFixed(2)})`)
 	gradient.addColorStop(1, 'rgba(0,0,0,0)')
 	return gradient
+}
+
+function fillDab({ context, x, y, radius, hardness }: Dab) {
+	if (hardness >= 0.95) {
+		context.fillStyle = '#000'
+		context.beginPath()
+		context.arc(x, y, radius, 0, Math.PI * 2)
+		context.fill()
+		return
+	}
+
+	context.fillStyle = createBrushPattern({ context, x, y, radius, hardness })
+	context.fillRect(x - radius, y - radius, radius * 2, radius * 2)
+}
+
+const eraseDab = ({ context, x, y, radius, hardness }: Dab) => {
+	context.save()
+	context.globalCompositeOperation = 'destination-out'
+	fillDab({ context, x, y, radius, hardness })
+	context.restore()
+}
+
+type RestoreDab = Dab & {
+	canvas: HTMLCanvasElement
+	scratchCanvas: HTMLCanvasElement
+	croppedImage: HTMLImageElement
+}
+
+function restoreDab({ context, canvas, scratchCanvas, croppedImage, x, y, radius, hardness }: RestoreDab) {
+	const scratchContext = scratchCanvas.getContext('2d')!
+	const brushSize = radius * 2
+	const left = Math.max(0, Math.floor(x - radius))
+	const top = Math.max(0, Math.floor(y - radius))
+	const width = Math.min(canvas.width - left, Math.ceil(brushSize + 2))
+	const height = Math.min(canvas.height - top, Math.ceil(brushSize + 2))
+
+	scratchContext.clearRect(left, top, width, height)
+	scratchContext.save()
+	scratchContext.beginPath()
+	scratchContext.rect(left, top, width, height)
+	scratchContext.clip()
+	scratchContext.drawImage(croppedImage, 0, 0)
+	scratchContext.restore()
+
+	scratchContext.globalCompositeOperation = 'destination-in'
+	fillDab({ context: scratchContext, x, y, radius, hardness })
+	scratchContext.globalCompositeOperation = 'source-over'
+
+	context.save()
+	context.globalCompositeOperation = 'source-over'
+	context.drawImage(scratchCanvas, left, top, width, height, left, top, width, height)
+	context.restore()
+}
+
+type StrokeSettings = {
+	canvas: HTMLCanvasElement
+	scratchCanvas: HTMLCanvasElement
+	croppedImage: HTMLImageElement
+	brushSize: number
+	hardness: number
+	mode: BrushMode
+}
+
+function paintStroke(from: Point, to: Point, settings: StrokeSettings) {
+	const { canvas, scratchCanvas, croppedImage, brushSize, hardness, mode } = settings
+	const context = canvas.getContext('2d')!
+	const radius = brushSize / 2
+	const distance = Math.hypot(to.x - from.x, to.y - from.y)
+	const steps = Math.max(1, Math.ceil(distance / (brushSize * 0.25)))
+
+	for (let i = 0; i <= steps; i++) {
+		const t = i / steps
+		const x = from.x + (to.x - from.x) * t
+		const y = from.y + (to.y - from.y) * t
+
+		if (mode === 'erase') eraseDab({ context, x, y, radius, hardness })
+		else restoreDab({ context, canvas, scratchCanvas, croppedImage, x, y, radius, hardness })
+	}
+}
+
+function primeCanvas(canvas: HTMLCanvasElement, resultImage: HTMLImageElement) {
+	canvas.width = resultImage.naturalWidth
+	canvas.height = resultImage.naturalHeight
+	canvas.getContext('2d')!.drawImage(resultImage, 0, 0)
+	return createCanvas(canvas.width, canvas.height)
+}
+
+function canvasPointFromEvent(canvas: HTMLCanvasElement, e: React.MouseEvent | React.TouchEvent) {
+	const rect = canvas.getBoundingClientRect()
+	const clientX = 'touches' in e ? e.touches[0]!.clientX : e.clientX
+	const clientY = 'touches' in e ? e.touches[0]!.clientY : e.clientY
+	return {
+		x: ((clientX - rect.left) / rect.width) * canvas.width,
+		y: ((clientY - rect.top) / rect.height) * canvas.height,
+	}
+}
+
+function useCanvasViewport() {
+	const [zoom, setZoom] = useState(1)
+	const [pan, setPan] = useState({ x: 0, y: 0 })
+	const panningRef = useRef(false)
+	const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+
+	const handleWheel = (e: React.WheelEvent) => {
+		e.preventDefault()
+		const delta = e.deltaY > 0 ? 0.9 : 1.1
+		setZoom((current) => Math.min(20, Math.max(0.5, current * delta)))
+	}
+
+	const startPan = (clientX: number, clientY: number) => {
+		panningRef.current = true
+		panStartRef.current = { x: clientX, y: clientY, panX: pan.x, panY: pan.y }
+	}
+
+	const movePan = (clientX: number, clientY: number) => {
+		setPan({
+			x: panStartRef.current.panX + (clientX - panStartRef.current.x),
+			y: panStartRef.current.panY + (clientY - panStartRef.current.y),
+		})
+	}
+
+	/** Ends a pan if one was in flight; the boolean says whether it swallowed the gesture. */
+	const endPan = () => {
+		if (!panningRef.current) return false
+		panningRef.current = false
+		return true
+	}
+
+	const reset = () => {
+		setZoom(1)
+		setPan({ x: 0, y: 0 })
+	}
+
+	return { zoom, pan, panningRef, handleWheel, startPan, movePan, endPan, reset }
 }
 
 function Elapsed({ running }: { running: boolean }) {
@@ -185,6 +342,156 @@ function Elapsed({ running }: { running: boolean }) {
 	return <span className='text-xs opacity-40'>{seconds}s</span>
 }
 
+type EraserSurfaceProps = {
+	canvasRef: React.RefObject<HTMLCanvasElement | null>
+	brushSize: number
+	mode: BrushMode
+	zoom: number
+	pan: Point
+	onWheel: (e: React.WheelEvent) => void
+	onStart: (e: React.MouseEvent | React.TouchEvent) => void
+	onMove: (e: React.MouseEvent | React.TouchEvent) => void
+	onEnd: () => void
+}
+
+function EraserSurface({ canvasRef, brushSize, mode, zoom, pan, onWheel, onStart, onMove, onEnd }: EraserSurfaceProps) {
+	const cursorRef = useRef<HTMLDivElement>(null)
+	const [cursorVisible, setCursorVisible] = useState(false)
+	const cursorBorder = mode === 'erase' ? 'border-red-400' : 'border-green-400'
+
+	const trackCursor = (e: React.MouseEvent) => {
+		const cursor = cursorRef.current
+		if (!cursor) return
+		cursor.style.left = `${e.clientX}px`
+		cursor.style.top = `${e.clientY}px`
+	}
+
+	// getBoundingClientRect includes the canvas's CSS `scale(zoom)`, so zoom must not be a factor here —
+	// it and `cursorVisible` (first hover can precede priming) are deps only to retrigger the read.
+	useEffect(() => {
+		const cursor = cursorRef.current
+		const canvas = canvasRef.current
+		if (!cursor || !canvas) return
+		const size = (brushSize / canvas.width) * canvas.getBoundingClientRect().width
+		cursor.style.width = `${size}px`
+		cursor.style.height = `${size}px`
+	}, [brushSize, zoom, cursorVisible, canvasRef])
+
+	return (
+		<>
+			<div
+				ref={cursorRef}
+				className={`fixed pointer-events-none rounded-full border-2 ${cursorBorder} z-50 transition-[border-color] duration-150`}
+				style={{
+					display: cursorVisible ? 'block' : 'none',
+					boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.3)',
+					transform: 'translate(-50%, -50%)',
+				}}
+			/>
+			<div className='flex-1 min-h-0 flex items-center justify-center overflow-hidden' onWheel={onWheel}>
+				<canvas
+					ref={canvasRef}
+					className='max-w-full max-h-full rounded-lg checkerboard'
+					style={{
+						cursor: 'none',
+						touchAction: 'none',
+						transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+						transformOrigin: 'center center',
+					}}
+					onMouseDown={onStart}
+					onMouseMove={(e) => {
+						trackCursor(e)
+						onMove(e)
+					}}
+					onMouseUp={onEnd}
+					onMouseLeave={() => {
+						setCursorVisible(false)
+						onEnd()
+					}}
+					onMouseEnter={(e) => {
+						setCursorVisible(true)
+						trackCursor(e)
+					}}
+					onTouchStart={onStart}
+					onTouchMove={onMove}
+					onTouchEnd={onEnd}
+				/>
+			</div>
+		</>
+	)
+}
+
+type EraserToolbarProps = {
+	mode: BrushMode
+	onModeChange: (mode: BrushMode) => void
+	brushSize: number
+	onBrushSizeChange: (size: number) => void
+	hardness: number
+	onHardnessChange: (hardness: number) => void
+	zoom: number
+	onResetView: () => void
+	onUndo: () => void
+}
+
+function EraserToolbar(props: EraserToolbarProps) {
+	const { mode, onModeChange, brushSize, onBrushSizeChange, hardness, onHardnessChange, zoom } = props
+
+	return (
+		<div className='flex items-center justify-center gap-4 px-4 py-3 bg-base-200/80 backdrop-blur-sm border-t border-current/10 flex-wrap'>
+			<div className='flex gap-1'>
+				<button
+					type='button'
+					className={`btn btn-sm ${mode === 'erase' ? 'btn-error' : 'btn-outline'}`}
+					onClick={() => onModeChange('erase')}
+				>
+					Erase
+				</button>
+				<button
+					type='button'
+					className={`btn btn-sm ${mode === 'restore' ? 'btn-success' : 'btn-outline'}`}
+					onClick={() => onModeChange('restore')}
+				>
+					Restore
+				</button>
+			</div>
+			<div className='flex items-center gap-2'>
+				<span className='text-xs opacity-50'>Size</span>
+				<input
+					type='range'
+					className='range range-xs w-20'
+					min={5}
+					max={150}
+					value={brushSize}
+					onChange={(e) => onBrushSizeChange(Number(e.target.value))}
+				/>
+			</div>
+			<div className='flex items-center gap-2'>
+				<span className='text-xs opacity-50'>Softness</span>
+				<input
+					type='range'
+					className='range range-xs w-20'
+					min={0}
+					max={100}
+					value={Math.round((1 - hardness) * 100)}
+					onChange={(e) => onHardnessChange(1 - Number(e.target.value) / 100)}
+				/>
+			</div>
+			<div className='flex items-center gap-1'>
+				<span className='text-xs opacity-50'>{Math.round(zoom * 100)}%</span>
+				{zoom !== 1 && (
+					<button type='button' className='btn btn-xs btn-ghost' onClick={props.onResetView}>
+						Fit
+					</button>
+				)}
+			</div>
+			<button type='button' className='btn btn-sm btn-ghost' onClick={props.onUndo}>
+				Undo
+			</button>
+			<span className='text-xs opacity-40 hidden sm:inline'>[ ] brush size · scroll to zoom · middle-click to pan</span>
+		</div>
+	)
+}
+
 function EraserCanvas({
 	resultUrl,
 	croppedUrl,
@@ -195,88 +502,45 @@ function EraserCanvas({
 	onUpdate: (url: string) => void
 }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
-	const cursorRef = useRef<HTMLDivElement>(null)
-	const croppedImgRef = useRef<HTMLImageElement | null>(null)
+	const croppedImageRef = useRef<HTMLImageElement | null>(null)
+	// Reusable temp canvas for restore brush (avoids creating one per stroke step)
+	const scratchCanvasRef = useRef<HTMLCanvasElement | null>(null)
+	const paintingRef = useRef(false)
+	const lastPointRef = useRef<Point | null>(null)
+	const undoStackRef = useRef<ImageData[]>([])
 	const [brushSize, setBrushSize] = useState(20)
 	const [hardness, setHardness] = useState(0.7)
 	const [mode, setMode] = useState<BrushMode>('erase')
 	const [ready, setReady] = useState(false)
-	const [cursorVisible, setCursorVisible] = useState(false)
-	const [zoom, setZoom] = useState(1)
-	const [pan, setPan] = useState({ x: 0, y: 0 })
-	const paintingRef = useRef(false)
-	const panningRef = useRef(false)
-	const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
-	const lastPosRef = useRef<{ x: number; y: number } | null>(null)
-	const undoStackRef = useRef<ImageData[]>([])
-
-	// Reusable temp canvas for restore brush (avoids creating one per stroke step)
-	const tmpCanvasRef = useRef<HTMLCanvasElement | null>(null)
-
-	const getDisplayBrushSize = () => {
-		const canvas = canvasRef.current
-		if (!canvas) return brushSize
-		const rect = canvas.getBoundingClientRect()
-		return (brushSize / canvas.width) * rect.width * zoom
-	}
+	const viewport = useCanvasViewport()
+	// Every stroke round-trips out through `onUpdate` and back in as `resultUrl`; re-priming from that
+	// would wipe strokes still in flight. A genuinely new source remounts this via ResultStage's `key`.
+	const [seedUrl] = useState(resultUrl)
 
 	useEffect(() => {
 		let cancelled = false
-		Promise.all([loadImage(resultUrl), loadImage(croppedUrl)]).then(([resultImg, croppedImg]) => {
-			if (cancelled) return
-			croppedImgRef.current = croppedImg
-
-			const canvas = canvasRef.current!
-			canvas.width = resultImg.naturalWidth
-			canvas.height = resultImg.naturalHeight
-			const context = canvas.getContext('2d')!
-			context.drawImage(resultImg, 0, 0)
-
-			// Pre-create temp canvas at image size for restore brush
-			const scratchCanvas = document.createElement('canvas')
-			scratchCanvas.width = canvas.width
-			scratchCanvas.height = canvas.height
-			tmpCanvasRef.current = scratchCanvas
-
-			setReady(true)
-		})
+		Promise.all([loadImage(seedUrl), loadImage(croppedUrl)])
+			.then(([resultImage, croppedImage]) => {
+				if (cancelled) return
+				croppedImageRef.current = croppedImage
+				scratchCanvasRef.current = primeCanvas(canvasRef.current!, resultImage)
+				setReady(true)
+			})
+			.catch((error) => console.error('Touch-up canvas could not load its source images:', error))
 
 		return () => {
 			cancelled = true
 		}
-	}, [resultUrl, croppedUrl])
-
-	const getCanvasPos = (e: React.MouseEvent | React.TouchEvent): { x: number; y: number } => {
-		const canvas = canvasRef.current!
-		const rect = canvas.getBoundingClientRect()
-		const clientX = 'touches' in e ? e.touches[0]!.clientX : e.clientX
-		const clientY = 'touches' in e ? e.touches[0]!.clientY : e.clientY
-		return {
-			x: ((clientX - rect.left) / rect.width) * canvas.width,
-			y: ((clientY - rect.top) / rect.height) * canvas.height,
-		}
-	}
-
-	const updateCursor = (e: React.MouseEvent) => {
-		if (!cursorRef.current) return
-		const size = getDisplayBrushSize()
-		cursorRef.current.style.left = `${e.clientX - size / 2}px`
-		cursorRef.current.style.top = `${e.clientY - size / 2}px`
-		cursorRef.current.style.width = `${size}px`
-		cursorRef.current.style.height = `${size}px`
-	}
+	}, [seedUrl, croppedUrl])
 
 	const saveUndo = () => {
 		const canvas = canvasRef.current!
-		const context = canvas.getContext('2d')!
-		const data = context.getImageData(0, 0, canvas.width, canvas.height)
-		undoStackRef.current.push(data)
+		undoStackRef.current.push(canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height))
 		if (undoStackRef.current.length > 30) undoStackRef.current.shift()
 	}
 
 	const emitUpdate = () => {
-		const canvas = canvasRef.current!
-		canvas.toBlob((blob) => {
+		canvasRef.current!.toBlob((blob) => {
 			if (blob) onUpdate(URL.createObjectURL(blob))
 		}, 'image/png')
 	}
@@ -284,247 +548,393 @@ function EraserCanvas({
 	const undo = () => {
 		const data = undoStackRef.current.pop()
 		if (!data) return
-		const canvas = canvasRef.current!
-		canvas.getContext('2d')!.putImageData(data, 0, 0)
+		canvasRef.current!.getContext('2d')!.putImageData(data, 0, 0)
 		emitUpdate()
 	}
 
-	const paintStroke = (from: { x: number; y: number }, to: { x: number; y: number }) => {
-		const canvas = canvasRef.current!
-		const context = canvas.getContext('2d')!
-		const radius = brushSize / 2
-
-		const dist = Math.hypot(to.x - from.x, to.y - from.y)
-		const steps = Math.max(1, Math.ceil(dist / (brushSize * 0.25)))
-
-		for (let i = 0; i <= steps; i++) {
-			const t = i / steps
-			const x = from.x + (to.x - from.x) * t
-			const y = from.y + (to.y - from.y) * t
-
-			if (mode === 'erase') {
-				context.save()
-				context.globalCompositeOperation = 'destination-out'
-
-				if (hardness >= 0.95) {
-					context.beginPath()
-					context.arc(x, y, radius, 0, Math.PI * 2)
-					context.fill()
-				} else {
-					context.fillStyle = createBrushPattern(context, x, y, radius, hardness)
-					context.fillRect(x - radius, y - radius, brushSize, brushSize)
-				}
-
-				context.restore()
-			} else {
-				// Restore from original cropped image with feathering
-				const scratchCanvas = tmpCanvasRef.current!
-				const tmpCtx = scratchCanvas.getContext('2d')!
-				const bx = Math.max(0, Math.floor(x - radius))
-				const by = Math.max(0, Math.floor(y - radius))
-				const bw = Math.min(canvas.width - bx, Math.ceil(brushSize + 2))
-				const bh = Math.min(canvas.height - by, Math.ceil(brushSize + 2))
-
-				tmpCtx.clearRect(bx, by, bw, bh)
-				tmpCtx.save()
-				tmpCtx.beginPath()
-				tmpCtx.rect(bx, by, bw, bh)
-				tmpCtx.clip()
-				tmpCtx.drawImage(croppedImgRef.current!, 0, 0)
-				tmpCtx.restore()
-
-				tmpCtx.globalCompositeOperation = 'destination-in'
-
-				if (hardness >= 0.95) {
-					tmpCtx.beginPath()
-					tmpCtx.arc(x, y, radius, 0, Math.PI * 2)
-					tmpCtx.fill()
-				} else {
-					tmpCtx.fillStyle = createBrushPattern(tmpCtx, x, y, radius, hardness)
-					tmpCtx.fillRect(x - radius, y - radius, brushSize, brushSize)
-				}
-
-				tmpCtx.globalCompositeOperation = 'source-over'
-
-				context.save()
-				context.globalCompositeOperation = 'source-over'
-				context.drawImage(scratchCanvas, bx, by, bw, bh, bx, by, bw, bh)
-				context.restore()
-			}
-		}
-	}
-
-	const handleWheel = (e: React.WheelEvent) => {
-		e.preventDefault()
-		const delta = e.deltaY > 0 ? 0.9 : 1.1
-		setZoom((z) => Math.min(20, Math.max(0.5, z * delta)))
-	}
+	const stroke = (from: Point, to: Point) =>
+		paintStroke(from, to, {
+			canvas: canvasRef.current!,
+			scratchCanvas: scratchCanvasRef.current!,
+			croppedImage: croppedImageRef.current!,
+			brushSize,
+			hardness,
+			mode,
+		})
 
 	const startPaint = (e: React.MouseEvent | React.TouchEvent) => {
 		if (!ready) return
 
-		// Space+click or middle mouse = pan
 		if ('button' in e && e.button === 1) {
 			e.preventDefault()
-			panningRef.current = true
-			panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
+			viewport.startPan(e.clientX, e.clientY)
 			return
 		}
 
 		e.preventDefault()
 		saveUndo()
 		paintingRef.current = true
-		const pos = getCanvasPos(e)
-		lastPosRef.current = pos
-		paintStroke(pos, pos)
+		const point = canvasPointFromEvent(canvasRef.current!, e)
+		lastPointRef.current = point
+		stroke(point, point)
 	}
 
 	const movePaint = (e: React.MouseEvent | React.TouchEvent) => {
-		if ('clientX' in e) updateCursor(e)
-
-		if (panningRef.current && 'clientX' in e) {
-			setPan({
-				x: panStartRef.current.panX + (e.clientX - panStartRef.current.x),
-				y: panStartRef.current.panY + (e.clientY - panStartRef.current.y),
-			})
+		if (viewport.panningRef.current && 'clientX' in e) {
+			viewport.movePan(e.clientX, e.clientY)
 			return
 		}
 
-		if (!paintingRef.current || !lastPosRef.current) return
+		if (!paintingRef.current || !lastPointRef.current) return
 		e.preventDefault()
-		const pos = getCanvasPos(e)
-		paintStroke(lastPosRef.current, pos)
-		lastPosRef.current = pos
+		const point = canvasPointFromEvent(canvasRef.current!, e)
+		stroke(lastPointRef.current, point)
+		lastPointRef.current = point
 	}
 
 	const endPaint = () => {
-		if (panningRef.current) {
-			panningRef.current = false
-			return
-		}
+		if (viewport.endPan()) return
 		if (!paintingRef.current) return
 		paintingRef.current = false
-		lastPosRef.current = null
+		lastPointRef.current = null
 		emitUpdate()
 	}
 
-	const resetView = () => {
-		setZoom(1)
-		setPan({ x: 0, y: 0 })
-	}
-
-	const handleKey = useEffectEvent((e: KeyboardEvent) => {
-		if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-			e.preventDefault()
-			undo()
-		} else if (e.key === '0') {
-			resetView()
-		} else if (e.key === '[') {
-			setBrushSize((s) => Math.max(5, s - 5))
-		} else if (e.key === ']') {
-			setBrushSize((s) => Math.min(150, s + 5))
-		}
-	})
-
-	useEffect(() => {
-		window.addEventListener('keydown', handleKey)
-		return () => window.removeEventListener('keydown', handleKey)
-	}, [])
-
-	const cursorBorder = mode === 'erase' ? 'border-red-400' : 'border-green-400'
+	useHotkeys([
+		['mod+Z', undo],
+		['0', viewport.reset],
+		['[', () => setBrushSize((size) => Math.max(5, size - 5))],
+		[']', () => setBrushSize((size) => Math.min(150, size + 5))],
+	])
 
 	return (
 		<div className='flex flex-col h-full'>
-			{/* Brush cursor overlay */}
-			<div
-				ref={cursorRef}
-				className={`fixed pointer-events-none rounded-full border-2 ${cursorBorder} z-50 transition-[border-color] duration-150`}
-				style={{
-					display: cursorVisible ? 'block' : 'none',
-					boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.3)',
+			<EraserSurface
+				canvasRef={canvasRef}
+				brushSize={brushSize}
+				mode={mode}
+				zoom={viewport.zoom}
+				pan={viewport.pan}
+				onWheel={viewport.handleWheel}
+				onStart={startPaint}
+				onMove={movePaint}
+				onEnd={endPaint}
+			/>
+			<EraserToolbar
+				mode={mode}
+				onModeChange={setMode}
+				brushSize={brushSize}
+				onBrushSizeChange={setBrushSize}
+				hardness={hardness}
+				onHardnessChange={setHardness}
+				zoom={viewport.zoom}
+				onResetView={viewport.reset}
+				onUndo={undo}
+			/>
+		</div>
+	)
+}
+
+function DropZone({
+	inputRef,
+	onFile,
+}: {
+	inputRef: React.RefObject<HTMLInputElement | null>
+	onFile: (file: File) => void
+}) {
+	const handleDrop = (e: React.DragEvent) => {
+		e.preventDefault()
+		e.currentTarget.classList.remove('border-primary', 'bg-primary/5')
+		const file = e.dataTransfer.files[0]
+		if (file) onFile(file)
+	}
+
+	return (
+		<button
+			type='button'
+			onDrop={handleDrop}
+			onDragOver={(e) => {
+				e.preventDefault()
+				e.currentTarget.classList.add('border-primary', 'bg-primary/5')
+			}}
+			onDragLeave={(e) => e.currentTarget.classList.remove('border-primary', 'bg-primary/5')}
+			onClick={() => inputRef.current?.click()}
+			className='flex-1 m-4 border-2 border-dashed border-current/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all duration-200 hover:border-current/50'
+		>
+			<p className='text-xl font-medium opacity-70'>Drop an image here or click to select</p>
+			<p className='text-sm opacity-40 mt-2'>Accepts any image your browser supports</p>
+			<input
+				ref={inputRef}
+				type='file'
+				accept='image/*,.heic'
+				className='hidden'
+				onChange={(e) => {
+					const file = e.target.files?.[0]
+					if (file) onFile(file)
 				}}
 			/>
-			<div className='flex-1 min-h-0 flex items-center justify-center overflow-hidden' onWheel={handleWheel}>
-				<canvas
-					ref={canvasRef}
-					className='max-w-full max-h-full rounded-lg checkerboard'
-					style={{
-						cursor: 'none',
-						touchAction: 'none',
-						transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
-						transformOrigin: 'center center',
+		</button>
+	)
+}
+
+function LoadingStage({ label }: { label: string }) {
+	return (
+		<div className='flex-1 flex flex-col items-center justify-center gap-4'>
+			<span className='loading loading-spinner loading-lg' />
+			<p className='text-sm opacity-70'>{label}</p>
+		</div>
+	)
+}
+
+type CropStageProps = {
+	imageUrl: string
+	model: ModelSize
+	onModelChange: (model: ModelSize) => void
+	savedStateRef: React.RefObject<CropperState | null>
+	onStatus: (label: string) => void
+	onCropped: (blob: Blob, previewUrl: string) => Promise<void>
+	onCancel: () => void
+}
+
+function CropStage({ imageUrl, model, onModelChange, savedStateRef, onStatus, onCropped, onCancel }: CropStageProps) {
+	const cropperRef = useRef<CropperRef>(null)
+
+	const cropAndRemove = async () => {
+		const canvas = cropperRef.current?.getCanvas({ imageSmoothingQuality: 'high' })
+		if (!canvas) return
+
+		savedStateRef.current = cropperRef.current?.getState() ?? null
+		onStatus('Preparing your crop…')
+		await nextFrame()
+
+		const croppedBlob = await new Promise<Blob>((resolve, reject) => {
+			canvas.toBlob((blob: Blob | null) => {
+				if (blob) resolve(blob)
+				else reject(new Error('Canvas export failed'))
+			}, 'image/png')
+		})
+		await onCropped(croppedBlob, URL.createObjectURL(croppedBlob))
+	}
+
+	const skipCrop = async () => {
+		onStatus('Getting ready…')
+		await nextFrame()
+		await onCropped(await imageToBlobUrl(imageUrl), imageUrl)
+	}
+
+	const restoreSavedState = () => {
+		if (savedStateRef.current && cropperRef.current) cropperRef.current.setState(savedStateRef.current)
+	}
+
+	const resetCrop = () => {
+		cropperRef.current?.reset()
+		savedStateRef.current = null
+	}
+
+	useHotkeys([
+		['Enter', cropAndRemove],
+		['Escape', onCancel],
+	])
+
+	return (
+		<>
+			<div className='flex-1 min-h-0 relative'>
+				<Cropper
+					ref={cropperRef}
+					src={imageUrl}
+					style={{ width: '100%', height: '100%' }}
+					stencilProps={{ movable: true, resizable: true, lines: true, handlers: true, grid: true }}
+					onReady={restoreSavedState}
+					{...{
+						scaleImage: { wheel: { ratio: 0.1 }, touch: true },
+						moveImage: { mouse: true, touch: true },
+						imageRestriction: ImageRestriction.none,
+						transitions: true,
 					}}
-					onMouseDown={startPaint}
-					onMouseMove={(e) => {
-						updateCursor(e)
-						movePaint(e)
-					}}
-					onMouseUp={endPaint}
-					onMouseLeave={() => {
-						setCursorVisible(false)
-						endPaint()
-					}}
-					onMouseEnter={() => setCursorVisible(true)}
-					onTouchStart={startPaint}
-					onTouchMove={movePaint}
-					onTouchEnd={endPaint}
 				/>
 			</div>
-			<div className='flex items-center justify-center gap-4 px-4 py-3 bg-base-200/80 backdrop-blur-sm border-t border-current/10 flex-wrap'>
-				<div className='flex gap-1'>
-					<button
-						type='button'
-						className={`btn btn-sm ${mode === 'erase' ? 'btn-error' : 'btn-outline'}`}
-						onClick={() => setMode('erase')}
-					>
-						Erase
+			<div className='flex items-center justify-between gap-3 px-4 py-3 bg-base-200/80 backdrop-blur-sm border-t border-current/10'>
+				<div className='flex gap-2 items-center'>
+					<button type='button' className='btn btn-sm btn-outline' onClick={() => cropperRef.current?.zoomImage(0.7)}>
+						-
 					</button>
-					<button
-						type='button'
-						className={`btn btn-sm ${mode === 'restore' ? 'btn-success' : 'btn-outline'}`}
-						onClick={() => setMode('restore')}
+					<button type='button' className='btn btn-sm btn-outline' onClick={() => cropperRef.current?.zoomImage(1.4)}>
+						+
+					</button>
+					<span className='text-xs opacity-40 ml-1'>or scroll</span>
+					<button type='button' className='btn btn-sm btn-ghost' onClick={resetCrop}>
+						Reset
+					</button>
+					<select
+						className='select select-sm select-bordered'
+						value={model}
+						onChange={(e) => onModelChange(e.target.value as ModelSize)}
 					>
-						Restore
+						{Object.entries(MODEL_META).map(([key, { label, size }]) => (
+							<option key={key} value={key}>
+								{label} ({size})
+							</option>
+						))}
+					</select>
+				</div>
+				<p className='text-xs opacity-50 hidden sm:block'>Drag edges to resize · Enter to confirm · Esc to cancel</p>
+				<div className='flex gap-2'>
+					<button type='button' className='btn btn-sm btn-ghost' onClick={onCancel}>
+						Cancel
+					</button>
+					<button type='button' className='btn btn-sm btn-outline' onClick={skipCrop}>
+						Skip Crop
+					</button>
+					<button type='button' className='btn btn-sm btn-primary' onClick={cropAndRemove}>
+						Crop & Remove Background
 					</button>
 				</div>
+			</div>
+		</>
+	)
+}
+
+function ProcessingStage({ croppedUrl, progressInfo }: { croppedUrl: string | null; progressInfo: ProgressInfo }) {
+	return (
+		<div className='flex-1 flex flex-col items-center justify-center gap-5 p-6'>
+			{croppedUrl && <img src={croppedUrl} alt='Cropped' className='max-w-lg max-h-[40vh] rounded-lg opacity-30' />}
+			<div className='flex flex-col items-center gap-3 w-full max-w-xs'>
+				{progressInfo.percent != null ? (
+					<div className='w-full bg-base-300 rounded-full h-2 overflow-hidden'>
+						<div
+							className='bg-primary h-full rounded-full transition-all duration-300'
+							style={{ width: `${progressInfo.percent}%` }}
+						/>
+					</div>
+				) : (
+					<progress className='progress progress-primary w-full' />
+				)}
 				<div className='flex items-center gap-2'>
-					<span className='text-xs opacity-50'>Size</span>
-					<input
-						type='range'
-						className='range range-xs w-20'
-						min={5}
-						max={150}
-						value={brushSize}
-						onChange={(e) => setBrushSize(Number(e.target.value))}
-					/>
+					<p className='text-sm opacity-70'>
+						{progressInfo.label}
+						{progressInfo.percent != null ? ` — ${progressInfo.percent}%` : ''}
+					</p>
+					<Elapsed running />
 				</div>
-				<div className='flex items-center gap-2'>
-					<span className='text-xs opacity-50'>Softness</span>
-					<input
-						type='range'
-						className='range range-xs w-20'
-						min={0}
-						max={100}
-						value={Math.round((1 - hardness) * 100)}
-						onChange={(e) => setHardness(1 - Number(e.target.value) / 100)}
-					/>
-				</div>
-				<div className='flex items-center gap-1'>
-					<span className='text-xs opacity-50'>{Math.round(zoom * 100)}%</span>
-					{zoom !== 1 && (
-						<button type='button' className='btn btn-xs btn-ghost' onClick={resetView}>
-							Fit
-						</button>
-					)}
-				</div>
-				<button type='button' className='btn btn-sm btn-ghost' onClick={undo}>
-					Undo
-				</button>
-				<span className='text-xs opacity-40 hidden sm:inline'>
-					[ ] brush size · scroll to zoom · middle-click to pan
-				</span>
 			</div>
 		</div>
+	)
+}
+
+function ErrorStage({ message, onRetry }: { message: string | null; onRetry: () => void }) {
+	return (
+		<div className='flex-1 flex flex-col items-center justify-center gap-4 p-6'>
+			<p className='text-lg font-medium text-error'>Something went wrong</p>
+			<p className='text-sm opacity-70 max-w-md text-center'>{message}</p>
+			<button type='button' className='btn btn-sm btn-primary' onClick={onRetry}>
+				Try Again
+			</button>
+		</div>
+	)
+}
+
+type ExportControls = {
+	onBackToCrop: () => void
+	format: Format
+	onFormatChange: (format: Format) => void
+	bgColor: string
+	onBgColorChange: (color: string) => void
+	onDownload: () => void
+	onReset: () => void
+}
+
+type ResultToolbarProps = ExportControls & {
+	showOriginal: boolean
+	onToggleOriginal: () => void
+	onEdit: () => void
+}
+
+function ResultToolbar(props: ResultToolbarProps) {
+	const { showOriginal, format, bgColor } = props
+
+	return (
+		<div className='flex items-center justify-center gap-3 px-4 py-3 bg-base-200/80 backdrop-blur-sm border-t border-current/10 flex-wrap'>
+			<button type='button' className='btn btn-sm btn-outline' onClick={props.onToggleOriginal}>
+				{showOriginal ? 'Show Result' : 'Show Original'}
+			</button>
+			<button type='button' className='btn btn-sm btn-outline' onClick={props.onEdit}>
+				Touch Up
+			</button>
+			<button type='button' className='btn btn-sm btn-outline' onClick={props.onBackToCrop}>
+				Re-crop
+			</button>
+			<select
+				className='select select-sm select-bordered'
+				value={format}
+				onChange={(e) => props.onFormatChange(e.target.value as Format)}
+			>
+				{Object.entries(FORMAT_META).map(([mime, { label, transparency }]) => (
+					<option key={mime} value={mime}>
+						{label}
+						{!transparency ? ' (no transparency)' : ''}
+					</option>
+				))}
+			</select>
+			{!FORMAT_META[format].transparency && (
+				<input
+					type='color'
+					className='w-8 h-8 rounded cursor-pointer border border-current/20'
+					value={bgColor}
+					onChange={(e) => props.onBgColorChange(e.target.value)}
+					title='Background fill color'
+				/>
+			)}
+			<button type='button' className='btn btn-sm btn-primary' onClick={props.onDownload}>
+				Download {FORMAT_META[format].label}
+			</button>
+			<button type='button' className='btn btn-sm btn-ghost' onClick={props.onReset}>
+				New Image
+			</button>
+		</div>
+	)
+}
+
+type ResultStageProps = ExportControls & {
+	resultUrl: string
+	editedUrl: string | null
+	croppedUrl: string | null
+	onEditUpdate: (url: string) => void
+}
+
+function ResultStage({ resultUrl, editedUrl, croppedUrl, onEditUpdate, ...toolbar }: ResultStageProps) {
+	const [showOriginal, setShowOriginal] = useState(false)
+	const [editing, setEditing] = useState(false)
+	const activeResultUrl = editedUrl ?? resultUrl
+
+	return (
+		<>
+			{editing && croppedUrl ? (
+				<EraserCanvas key={resultUrl} resultUrl={activeResultUrl} croppedUrl={croppedUrl} onUpdate={onEditUpdate} />
+			) : (
+				<>
+					<div className='flex-1 min-h-0 flex items-center justify-center p-4'>
+						<img
+							src={showOriginal ? croppedUrl! : activeResultUrl}
+							alt={showOriginal ? 'Cropped original' : 'Background removed'}
+							className={`max-w-full max-h-full rounded-lg object-contain ${!showOriginal ? 'checkerboard' : ''}`}
+						/>
+					</div>
+					<ResultToolbar
+						{...toolbar}
+						showOriginal={showOriginal}
+						onToggleOriginal={() => setShowOriginal(!showOriginal)}
+						onEdit={() => setEditing(true)}
+					/>
+				</>
+			)}
+			{editing && (
+				<div className='flex justify-center gap-2 px-4 py-2 bg-base-200/80 border-t border-current/10'>
+					<button type='button' className='btn btn-sm btn-primary' onClick={() => setEditing(false)}>
+						Done Editing
+					</button>
+				</div>
+			)}
+		</>
 	)
 }
 
@@ -536,40 +946,35 @@ const Root = () => {
 	const [croppedUrl, setCroppedUrl] = useState<string | null>(null)
 	const [resultUrl, setResultUrl] = useState<string | null>(null)
 	const [editedUrl, setEditedUrl] = useState<string | null>(null)
-	const [showOriginal, setShowOriginal] = useState(false)
-	const [editing, setEditing] = useState(false)
 	const [format, setFormat] = useState<Format>('image/png')
 	const [bgColor, setBgColor] = useState('#ffffff')
 	const [model, setModel] = useState<ModelSize>('medium')
 	const inputRef = useRef<HTMLInputElement>(null)
-	const cropperRef = useRef<CropperRef>(null)
 	const downloadBlobUrlRef = useRef<string | null>(null)
 	const savedCropperStateRef = useRef<CropperState | null>(null)
 
-	const activeResultUrl = editedUrl ?? resultUrl
+	const fail = (err: unknown) => {
+		setError(err instanceof Error ? err.message : String(err))
+		setStage('error')
+	}
+
+	const announce = (label: string) => {
+		setStage('processing')
+		setProgressInfo({ label, percent: null })
+	}
 
 	const handleFile = async (file: File) => {
 		try {
-			const isHeic = file.type === 'image/heic' || file.name.toLowerCase().endsWith('.heic')
 			setStage('loading')
 			setError(null)
-			setProgressInfo({ label: isHeic ? 'Converting your photo…' : 'Opening your image…', percent: null })
+			setProgressInfo({ label: isHeicFile(file) ? 'Converting your photo…' : 'Opening your image…', percent: null })
 			await nextFrame()
 
-			const url = await normalizeFile(file)
-			setImageUrl(url)
+			setImageUrl(await normalizeFile(file))
 			setStage('cropping')
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err))
-			setStage('error')
+			fail(err)
 		}
-	}
-
-	const handleDrop = (e: React.DragEvent) => {
-		e.preventDefault()
-		e.currentTarget.classList.remove('border-primary', 'bg-primary/5')
-		const file = e.dataTransfer.files[0]
-		if (file) handleFile(file)
 	}
 
 	const processImage = async (inputBlob: Blob, previewUrl: string) => {
@@ -586,102 +991,32 @@ const Root = () => {
 			setEditedUrl(null)
 			setStage('done')
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err))
-			setStage('error')
+			fail(err)
 		}
-	}
-
-	const handleCropAndRemove = async () => {
-		const canvas = cropperRef.current?.getCanvas({ imageSmoothingQuality: 'high' })
-		if (!canvas) return
-
-		savedCropperStateRef.current = cropperRef.current?.getState() ?? null
-		setStage('processing')
-		setProgressInfo({ label: 'Preparing your crop…', percent: null })
-		await nextFrame()
-
-		const croppedBlob = await new Promise<Blob>((resolve, reject) => {
-			canvas.toBlob((b: Blob | null) => {
-				if (b) resolve(b)
-				else reject(new Error('Canvas export failed'))
-			}, 'image/png')
-		})
-		const previewUrl = URL.createObjectURL(croppedBlob)
-		await processImage(croppedBlob, previewUrl)
-	}
-
-	const handleSkipCrop = async () => {
-		if (!imageUrl) return
-		setStage('processing')
-		setProgressInfo({ label: 'Getting ready…', percent: null })
-		await nextFrame()
-
-		const blob = await imageToBlobUrl(imageUrl)
-		await processImage(blob, imageUrl)
 	}
 
 	const handleBackToCrop = () => {
-		if (resultUrl) URL.revokeObjectURL(resultUrl)
-		if (editedUrl) URL.revokeObjectURL(editedUrl)
-		if (croppedUrl && croppedUrl !== imageUrl) URL.revokeObjectURL(croppedUrl)
+		revokeUrls([resultUrl, editedUrl, croppedUrl === imageUrl ? null : croppedUrl])
 		setResultUrl(null)
 		setEditedUrl(null)
 		setCroppedUrl(null)
-		setShowOriginal(false)
-		setEditing(false)
 		setStage('cropping')
 	}
 
-	const handleCropperReady = () => {
-		if (savedCropperStateRef.current && cropperRef.current) {
-			cropperRef.current.setState(savedCropperStateRef.current)
-		}
-	}
-
-	const handleResetCrop = () => {
-		cropperRef.current?.reset()
-		savedCropperStateRef.current = null
-	}
-
 	const handleEditUpdate = (url: string) => {
-		if (editedUrl) URL.revokeObjectURL(editedUrl)
+		revokeUrls([editedUrl])
 		setEditedUrl(url)
 	}
 
 	const download = async () => {
-		if (!activeResultUrl) return
+		const source = editedUrl ?? resultUrl
+		if (!source) return
 
-		if (downloadBlobUrlRef.current) {
-			URL.revokeObjectURL(downloadBlobUrlRef.current)
-			downloadBlobUrlRef.current = null
-		}
+		const blob = await renderForDownload({ url: source, format, bgColor })
+		if (!blob) return
 
-		const { ext, transparency } = FORMAT_META[format]
-		const img = await loadImage(activeResultUrl)
-		const c = document.createElement('canvas')
-		c.width = img.naturalWidth
-		c.height = img.naturalHeight
-		const context = c.getContext('2d')!
-
-		if (!transparency) {
-			context.fillStyle = bgColor
-			context.fillRect(0, 0, c.width, c.height)
-		}
-
-		context.drawImage(img, 0, 0)
-		c.toBlob(
-			(blob) => {
-				if (!blob) return
-				const url = URL.createObjectURL(blob)
-				downloadBlobUrlRef.current = url
-				const a = document.createElement('a')
-				a.href = url
-				a.download = `bg-removed.${ext}`
-				a.click()
-			},
-			format,
-			format === 'image/jpeg' ? 0.92 : undefined,
-		)
+		revokeUrls([downloadBlobUrlRef.current])
+		downloadBlobUrlRef.current = triggerDownload(blob, `bg-removed.${FORMAT_META[format].ext}`)
 	}
 
 	const reset = () => {
@@ -690,259 +1025,48 @@ const Root = () => {
 		setError(null)
 		savedCropperStateRef.current = null
 
-		for (const url of [imageUrl, resultUrl, croppedUrl, editedUrl]) {
-			if (url) URL.revokeObjectURL(url)
-		}
-
-		if (downloadBlobUrlRef.current) {
-			URL.revokeObjectURL(downloadBlobUrlRef.current)
-			downloadBlobUrlRef.current = null
-		}
+		revokeUrls([imageUrl, resultUrl, croppedUrl, editedUrl, downloadBlobUrlRef.current])
+		downloadBlobUrlRef.current = null
 
 		setImageUrl(null)
 		setResultUrl(null)
 		setCroppedUrl(null)
 		setEditedUrl(null)
-		setShowOriginal(false)
-		setEditing(false)
 		if (inputRef.current) inputRef.current.value = ''
 	}
-
-	const handleStageKey = useEffectEvent((e: KeyboardEvent) => {
-		if (stage === 'cropping') {
-			if (e.key === 'Enter') {
-				e.preventDefault()
-				handleCropAndRemove()
-			} else if (e.key === 'Escape') {
-				e.preventDefault()
-				reset()
-			}
-		}
-	})
-
-	useEffect(() => {
-		window.addEventListener('keydown', handleStageKey)
-		return () => window.removeEventListener('keydown', handleStageKey)
-	}, [])
 
 	return (
 		<ThemeProvider>
 			<div className='h-screen w-screen flex flex-col overflow-hidden'>
-				{/* ── Drop zone ── */}
-				{stage === 'idle' && (
-					<button
-						type='button'
-						onDrop={handleDrop}
-						onDragOver={(e) => {
-							e.preventDefault()
-							e.currentTarget.classList.add('border-primary', 'bg-primary/5')
-						}}
-						onDragLeave={(e) => e.currentTarget.classList.remove('border-primary', 'bg-primary/5')}
-						onClick={() => inputRef.current?.click()}
-						className='flex-1 m-4 border-2 border-dashed border-current/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all duration-200 hover:border-current/50'
-					>
-						<p className='text-xl font-medium opacity-70'>Drop an image here or click to select</p>
-						<p className='text-sm opacity-40 mt-2'>Accepts any image your browser supports</p>
-						<input
-							ref={inputRef}
-							type='file'
-							accept='image/*,.heic'
-							className='hidden'
-							onChange={(e) => {
-								const file = e.target.files?.[0]
-								if (file) handleFile(file)
-							}}
-						/>
-					</button>
-				)}
-
-				{/* ── Loading ── */}
-				{stage === 'loading' && (
-					<div className='flex-1 flex flex-col items-center justify-center gap-4'>
-						<span className='loading loading-spinner loading-lg' />
-						<p className='text-sm opacity-70'>{progressInfo.label}</p>
-					</div>
-				)}
-
-				{/* ── Crop ── */}
+				{stage === 'idle' && <DropZone inputRef={inputRef} onFile={handleFile} />}
+				{stage === 'loading' && <LoadingStage label={progressInfo.label} />}
 				{stage === 'cropping' && imageUrl && (
-					<>
-						<div className='flex-1 min-h-0 relative'>
-							<Cropper
-								ref={cropperRef}
-								src={imageUrl}
-								style={{ width: '100%', height: '100%' }}
-								stencilProps={{
-									movable: true,
-									resizable: true,
-									lines: true,
-									handlers: true,
-									grid: true,
-								}}
-								onReady={handleCropperReady}
-								{...{
-									scaleImage: { wheel: { ratio: 0.1 }, touch: true },
-									moveImage: { mouse: true, touch: true },
-									imageRestriction: ImageRestriction.none,
-									transitions: true,
-								}}
-							/>
-						</div>
-						<div className='flex items-center justify-between gap-3 px-4 py-3 bg-base-200/80 backdrop-blur-sm border-t border-current/10'>
-							<div className='flex gap-2 items-center'>
-								<button
-									type='button'
-									className='btn btn-sm btn-outline'
-									onClick={() => cropperRef.current?.zoomImage(0.7)}
-								>
-									-
-								</button>
-								<button
-									type='button'
-									className='btn btn-sm btn-outline'
-									onClick={() => cropperRef.current?.zoomImage(1.4)}
-								>
-									+
-								</button>
-								<span className='text-xs opacity-40 ml-1'>or scroll</span>
-								<button type='button' className='btn btn-sm btn-ghost' onClick={handleResetCrop}>
-									Reset
-								</button>
-								<select
-									className='select select-sm select-bordered'
-									value={model}
-									onChange={(e) => setModel(e.target.value as ModelSize)}
-								>
-									{Object.entries(MODEL_META).map(([key, { label, size }]) => (
-										<option key={key} value={key}>
-											{label} ({size})
-										</option>
-									))}
-								</select>
-							</div>
-							<p className='text-xs opacity-50 hidden sm:block'>
-								Drag edges to resize · Enter to confirm · Esc to cancel
-							</p>
-							<div className='flex gap-2'>
-								<button type='button' className='btn btn-sm btn-ghost' onClick={reset}>
-									Cancel
-								</button>
-								<button type='button' className='btn btn-sm btn-outline' onClick={handleSkipCrop}>
-									Skip Crop
-								</button>
-								<button type='button' className='btn btn-sm btn-primary' onClick={handleCropAndRemove}>
-									Crop & Remove Background
-								</button>
-							</div>
-						</div>
-					</>
+					<CropStage
+						imageUrl={imageUrl}
+						model={model}
+						onModelChange={setModel}
+						savedStateRef={savedCropperStateRef}
+						onStatus={announce}
+						onCropped={processImage}
+						onCancel={reset}
+					/>
 				)}
-
-				{/* ── Processing ── */}
-				{stage === 'processing' && (
-					<div className='flex-1 flex flex-col items-center justify-center gap-5 p-6'>
-						{croppedUrl && (
-							<img src={croppedUrl} alt='Cropped' className='max-w-lg max-h-[40vh] rounded-lg opacity-30' />
-						)}
-						<div className='flex flex-col items-center gap-3 w-full max-w-xs'>
-							{progressInfo.percent != null ? (
-								<div className='w-full bg-base-300 rounded-full h-2 overflow-hidden'>
-									<div
-										className='bg-primary h-full rounded-full transition-all duration-300'
-										style={{ width: `${progressInfo.percent}%` }}
-									/>
-								</div>
-							) : (
-								<progress className='progress progress-primary w-full' />
-							)}
-							<div className='flex items-center gap-2'>
-								<p className='text-sm opacity-70'>
-									{progressInfo.label}
-									{progressInfo.percent != null ? ` — ${progressInfo.percent}%` : ''}
-								</p>
-								<Elapsed running={stage === 'processing'} />
-							</div>
-						</div>
-					</div>
-				)}
-
-				{/* ── Error ── */}
-				{stage === 'error' && (
-					<div className='flex-1 flex flex-col items-center justify-center gap-4 p-6'>
-						<p className='text-lg font-medium text-error'>Something went wrong</p>
-						<p className='text-sm opacity-70 max-w-md text-center'>{error}</p>
-						<button type='button' className='btn btn-sm btn-primary' onClick={reset}>
-							Try Again
-						</button>
-					</div>
-				)}
-
-				{/* ── Result ── */}
+				{stage === 'processing' && <ProcessingStage croppedUrl={croppedUrl} progressInfo={progressInfo} />}
+				{stage === 'error' && <ErrorStage message={error} onRetry={reset} />}
 				{stage === 'done' && resultUrl && (
-					<>
-						{editing && croppedUrl ? (
-							<EraserCanvas resultUrl={editedUrl ?? resultUrl} croppedUrl={croppedUrl} onUpdate={handleEditUpdate} />
-						) : (
-							<>
-								<div className='flex-1 min-h-0 flex items-center justify-center p-4'>
-									<img
-										src={showOriginal ? croppedUrl! : activeResultUrl!}
-										alt={showOriginal ? 'Cropped original' : 'Background removed'}
-										className={`max-w-full max-h-full rounded-lg object-contain ${!showOriginal ? 'checkerboard' : ''}`}
-									/>
-								</div>
-								<div className='flex items-center justify-center gap-3 px-4 py-3 bg-base-200/80 backdrop-blur-sm border-t border-current/10 flex-wrap'>
-									<button
-										type='button'
-										className='btn btn-sm btn-outline'
-										onClick={() => setShowOriginal(!showOriginal)}
-									>
-										{showOriginal ? 'Show Result' : 'Show Original'}
-									</button>
-									<button type='button' className='btn btn-sm btn-outline' onClick={() => setEditing(true)}>
-										Touch Up
-									</button>
-									<button type='button' className='btn btn-sm btn-outline' onClick={handleBackToCrop}>
-										Re-crop
-									</button>
-									<select
-										className='select select-sm select-bordered'
-										value={format}
-										onChange={(e) => setFormat(e.target.value as Format)}
-									>
-										{Object.entries(FORMAT_META).map(([mime, { label, transparency }]) => (
-											<option key={mime} value={mime}>
-												{label}
-												{!transparency ? ' (no transparency)' : ''}
-											</option>
-										))}
-									</select>
-									{!FORMAT_META[format].transparency && (
-										<input
-											type='color'
-											className='w-8 h-8 rounded cursor-pointer border border-current/20'
-											value={bgColor}
-											onChange={(e) => setBgColor(e.target.value)}
-											title='Background fill color'
-										/>
-									)}
-									<button type='button' className='btn btn-sm btn-primary' onClick={download}>
-										Download {FORMAT_META[format].label}
-									</button>
-									<button type='button' className='btn btn-sm btn-ghost' onClick={reset}>
-										New Image
-									</button>
-								</div>
-							</>
-						)}
-						{editing && (
-							<div className='flex justify-center gap-2 px-4 py-2 bg-base-200/80 border-t border-current/10'>
-								<button type='button' className='btn btn-sm btn-primary' onClick={() => setEditing(false)}>
-									Done Editing
-								</button>
-							</div>
-						)}
-					</>
+					<ResultStage
+						resultUrl={resultUrl}
+						editedUrl={editedUrl}
+						croppedUrl={croppedUrl}
+						format={format}
+						onFormatChange={setFormat}
+						bgColor={bgColor}
+						onBgColorChange={setBgColor}
+						onEditUpdate={handleEditUpdate}
+						onBackToCrop={handleBackToCrop}
+						onDownload={download}
+						onReset={reset}
+					/>
 				)}
 			</div>
 		</ThemeProvider>

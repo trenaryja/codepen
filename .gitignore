@@ -5,8 +5,7 @@ dist/
 .env
 *.local
 .codepen-export.html
-.claude/*
-!.claude/skills/
+.claude/
 .vercel/
 .env*.local
 .worktrees/

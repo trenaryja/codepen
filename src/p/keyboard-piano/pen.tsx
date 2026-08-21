@@ -208,6 +208,63 @@ function Piano({
 	)
 }
 
+type PianoDockProps = {
+	activeKeys: Set<string>
+	black: NoteConfig[]
+	blackPositions: Record<string, number>
+	containerRef: React.Ref<HTMLDivElement>
+	firstNote: string
+	lastNote: string
+	onTrigger: (key: string, frequency: number) => void
+	onWheel: (e: WheelEvent) => void
+	white: NoteConfig[]
+}
+
+// The bar pinned to the bottom of the viewport: which computer key plays what, the audible range, and the keys
+function PianoDock({
+	activeKeys,
+	black,
+	blackPositions,
+	containerRef,
+	firstNote,
+	lastNote,
+	onTrigger,
+	onWheel,
+	white,
+}: PianoDockProps) {
+	return (
+		<div className='sticky bottom-0 w-full flex flex-col items-center gap-1 p-6 pt-4 bg-base-100/80 backdrop-blur-sm'>
+			<p className='opacity-60 text-sm text-center flex flex-wrap items-center justify-center gap-1'>
+				<span>White:</span>
+				{white.map((note) => (
+					<kbd key={note.note} className='kbd kbd-sm'>
+						{note.key.toUpperCase()}
+					</kbd>
+				))}
+				<span>· Black:</span>
+				{black.map((note) => (
+					<kbd key={note.note} className='kbd kbd-sm'>
+						{note.key.toUpperCase()}
+					</kbd>
+				))}
+			</p>
+			<p className='text-xs opacity-40 text-center'>
+				{firstNote} — {lastNote} · scroll to transpose
+			</p>
+			<div ref={containerRef} className='w-full max-w-2xl'>
+				<Piano
+					white={white}
+					black={black}
+					blackPositions={blackPositions}
+					activeKeys={activeKeys}
+					onTrigger={onTrigger}
+					onWheel={onWheel}
+				/>
+			</div>
+		</div>
+	)
+}
+
 function StepDisplay({
 	chordProgress,
 	songNoteToKey,
@@ -585,35 +642,17 @@ function Root() {
 					/>
 				</div>
 
-				<div className='sticky bottom-0 w-full flex flex-col items-center gap-1 p-6 pt-4 bg-base-100/80 backdrop-blur-sm'>
-					<p className='opacity-60 text-sm text-center flex flex-wrap items-center justify-center gap-1'>
-						<span>White:</span>
-						{white.map((note) => (
-							<kbd key={note.note} className='kbd kbd-sm'>
-								{note.key.toUpperCase()}
-							</kbd>
-						))}
-						<span>· Black:</span>
-						{black.map((note) => (
-							<kbd key={note.note} className='kbd kbd-sm'>
-								{note.key.toUpperCase()}
-							</kbd>
-						))}
-					</p>
-					<p className='text-xs opacity-40 text-center'>
-						{firstNote} — {lastNote} · scroll to transpose
-					</p>
-					<div ref={pianoContainerRef} className='w-full max-w-2xl'>
-						<Piano
-							white={white}
-							black={black}
-							blackPositions={blackPositions}
-							activeKeys={activeKeys}
-							onTrigger={triggerNote}
-							onWheel={handleWheel}
-						/>
-					</div>
-				</div>
+				<PianoDock
+					containerRef={pianoContainerRef}
+					white={white}
+					black={black}
+					blackPositions={blackPositions}
+					firstNote={firstNote}
+					lastNote={lastNote}
+					activeKeys={activeKeys}
+					onTrigger={triggerNote}
+					onWheel={handleWheel}
+				/>
 			</main>
 		</ThemeProvider>
 	)

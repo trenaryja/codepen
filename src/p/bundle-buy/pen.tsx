@@ -12,6 +12,7 @@ import {
 	LuTrash2,
 	LuX,
 } from 'https://esm.sh/react-icons/lu'
+import * as R from 'https://esm.sh/remeda'
 
 // The wire format for scenarios: what `PRESET_SCENARIOS` are authored in and what the
 // AI prompt asks for back. `hydrate` turns it into the runtime shape below.
@@ -38,18 +39,15 @@ type Solution = {
 
 type ImpliedValue = { itemId: string; value: number }
 
-const uid = () =>
-	Array.from(crypto.getRandomValues(new Uint8Array(4)), (byte) => byte.toString(16).padStart(2, '0')).join('')
-
 function hydrate(input: ScenarioImport): Scenario {
-	const items: Item[] = input.items.map((i) => ({ id: uid(), displayName: i.name, variable: i.symbol }))
+	const items: Item[] = input.items.map((i) => ({ id: R.randomString(21), displayName: i.name, variable: i.symbol }))
 	const bundles: Bundle[] = input.bundles.map((b) => ({
-		id: uid(),
+		id: R.randomString(21),
 		name: b.name,
 		price: b.price,
 		quantities: Object.fromEntries(items.map((item, i) => [item.id, b.quantities[i] ?? 0])),
 	}))
-	return { id: uid(), name: input.name, items, bundles }
+	return { id: R.randomString(21), name: input.name, items, bundles }
 }
 
 function dehydrate(scenario: Scenario): ScenarioImport {
@@ -63,6 +61,26 @@ function dehydrate(scenario: Scenario): ScenarioImport {
 		})),
 	}
 }
+
+// What buying `counts[i]` of `bundles[i]` costs and yields.
+function tallyPurchase(bundles: Bundle[], itemIds: string[], counts: number[]) {
+	const totals: Record<string, number> = {}
+	let cost = 0
+
+	for (const [i, bundle] of bundles.entries()) {
+		const count = counts[i] ?? 0
+		cost += bundle.price * count
+		for (const id of itemIds) totals[id] = (totals[id] ?? 0) + (bundle.quantities[id] ?? 0) * count
+	}
+
+	return { totals, cost }
+}
+
+const coversNeeds = (itemIds: string[], totals: Record<string, number>, needs: Need) =>
+	itemIds.every((id) => (totals[id] ?? 0) >= (needs[id] ?? 0))
+
+const surplusOver = (itemIds: string[], totals: Record<string, number>, needs: Need) =>
+	Object.fromEntries(itemIds.map((id) => [id, (totals[id] ?? 0) - (needs[id] ?? 0)]))
 
 // Brute-force ILP — viable only because bundle counts stay small.
 function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
@@ -84,33 +102,23 @@ function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
 
 	function search(depth: number) {
 		if (depth === bundles.length) {
-			const totals: Record<string, number> = {}
-			let cost = 0
+			const { totals, cost } = tallyPurchase(bundles, itemIds, counts)
+			if (!coversNeeds(itemIds, totals, needs)) return
+			if (best !== null && cost >= best.totalCost) return
 
-			for (const [i, bundle] of bundles.entries()) {
-				cost += bundle.price * counts[i]
-				for (const id of itemIds) totals[id] = (totals[id] ?? 0) + (bundle.quantities[id] ?? 0) * counts[i]
-			}
-
-			for (const id of itemIds) if ((totals[id] ?? 0) < (needs[id] ?? 0)) return
-
-			if (best === null || cost < best.totalCost) {
-				const surplus: Record<string, number> = {}
-				for (const id of itemIds) surplus[id] = (totals[id] ?? 0) - (needs[id] ?? 0)
-				best = {
-					bundleCounts: Object.fromEntries(bundles.map((b, i) => [b.id, counts[i]])),
-					totalCost: cost,
-					totalItems: { ...totals },
-					surplus,
-				}
+			best = {
+				bundleCounts: Object.fromEntries(bundles.map((b, i) => [b.id, counts[i]])),
+				totalCost: cost,
+				totalItems: { ...totals },
+				surplus: surplusOver(itemIds, totals, needs),
 			}
 
 			return
 		}
 
 		// depth < bundles.length: the depth === bundles.length branch returned above
-		for (let c = 0; c <= maxPerBundle[depth]!; c++) {
-			counts[depth] = c
+		for (let count = 0; count <= maxPerBundle[depth]!; count++) {
+			counts[depth] = count
 
 			if (best !== null) {
 				let partialCost = 0
@@ -267,7 +275,7 @@ const PRESET_SCENARIOS: ScenarioImport[] = [
 	},
 ]
 
-const EMPTY_SCENARIO: Scenario = { id: uid(), name: 'New Scenario', items: [], bundles: [] }
+const EMPTY_SCENARIO: Scenario = { id: R.randomString(21), name: 'New Scenario', items: [], bundles: [] }
 const fmt = (n: number) => `$${n.toFixed(2)}`
 
 function buildAiPrompt(example: ScenarioImport): string {
@@ -288,7 +296,7 @@ Generate a scenario for: [DESCRIBE YOUR PRODUCT/SITUATION HERE]`
 }
 
 function ItemEditor({ items, onChange }: { items: Item[]; onChange: (items: Item[]) => void }) {
-	const addItem = () => onChange([...items, { id: uid(), displayName: '', variable: '' }])
+	const addItem = () => onChange([...items, { id: R.randomString(21), displayName: '', variable: '' }])
 	const removeItem = (id: string) => onChange(items.filter((i) => i.id !== id))
 	const updateItem = (id: string, patch: Partial<Item>) =>
 		onChange(items.map((i) => (i.id === id ? { ...i, ...patch } : i)))
@@ -339,7 +347,7 @@ function BundleEditor({
 	const addBundle = () =>
 		onChange([
 			...bundles,
-			{ id: uid(), name: '', price: 0, quantities: Object.fromEntries(items.map((i) => [i.id, 0])) },
+			{ id: R.randomString(21), name: '', price: 0, quantities: Object.fromEntries(items.map((i) => [i.id, 0])) },
 		])
 	const removeBundle = (id: string) => onChange(bundles.filter((b) => b.id !== id))
 	const updateBundle = (id: string, patch: Partial<Bundle>) =>
@@ -657,22 +665,14 @@ function AllCombinationsTable({
 	function enumerate(depth: number) {
 		if (combos.length > 200) return
 		if (depth === bundles.length) {
-			const totals: Record<string, number> = {}
-			let cost = 0
-
-			for (const [i, bundle] of bundles.entries()) {
-				cost += bundle.price * counts[i]
-				for (const id of itemIds) totals[id] = (totals[id] ?? 0) + (bundle.quantities[id] ?? 0) * counts[i]
-			}
-
-			for (const id of itemIds) if ((totals[id] ?? 0) < (needs[id] ?? 0)) return
-			combos.push({ counts: [...counts], cost, totals })
+			const { totals, cost } = tallyPurchase(bundles, itemIds, counts)
+			if (coversNeeds(itemIds, totals, needs)) combos.push({ counts: [...counts], cost, totals })
 			return
 		}
 
 		// depth < bundles.length: the depth === bundles.length branch returned above
-		for (let c = 0; c <= maxPerBundle[depth]!; c++) {
-			counts[depth] = c
+		for (let count = 0; count <= maxPerBundle[depth]!; count++) {
+			counts[depth] = count
 			enumerate(depth + 1)
 		}
 
@@ -1002,13 +1002,13 @@ function Root() {
 							if (activeId === id && remaining[0]) setActiveId(remaining[0].id)
 						}}
 						onNew={() => {
-							const s = { ...EMPTY_SCENARIO, id: uid() }
+							const s = { ...EMPTY_SCENARIO, id: R.randomString(21) }
 							setScenarios((previous) => [...previous, s])
 							setActiveId(s.id)
 							setConfigOpen(true)
 						}}
 						onDuplicate={() => {
-							const s = { ...scenario, id: uid(), name: `${scenario.name} (copy)` }
+							const s = { ...scenario, id: R.randomString(21), name: `${scenario.name} (copy)` }
 							setScenarios((previous) => [...previous, s])
 							setActiveId(s.id)
 						}}

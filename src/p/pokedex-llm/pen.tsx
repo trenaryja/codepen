@@ -10,6 +10,7 @@ import type {
 	ColumnDef,
 	ColumnFiltersState,
 	SortingState,
+	Table,
 	VisibilityState,
 } from 'https://esm.sh/@tanstack/react-table@8'
 import {
@@ -217,6 +218,14 @@ const STAT_KEYS = {
 	speed: 'Speed',
 }
 
+/** Split out from `deriveMon` because every one of these fields is optional twice over. */
+const deriveProfile = (profile: RawMon['profile'] | undefined) => ({
+	height: Number.parseFloat(profile?.height ?? '0') || 0,
+	weight: Number.parseFloat(profile?.weight ?? '0') || 0,
+	eggGroups: profile?.egg ?? [],
+	abilities: (profile?.ability ?? []).map(([name]) => name!), // dataset ability entries are [name, hidden] pairs
+})
+
 const deriveMon = (raw: RawMon): Mon => {
 	const stats = R.mapValues(STAT_KEYS, (key) => raw.base?.[key] ?? 0)
 	return {
@@ -228,10 +237,7 @@ const deriveMon = (raw: RawMon): Mon => {
 		generation: GENERATION_ENDS.findIndex((end) => raw.id <= end) + 1,
 		...stats,
 		total: R.sum(R.values(stats)),
-		height: Number.parseFloat(raw.profile?.height ?? '0') || 0,
-		weight: Number.parseFloat(raw.profile?.weight ?? '0') || 0,
-		eggGroups: raw.profile?.egg ?? [],
-		abilities: (raw.profile?.ability ?? []).map(([name]) => name!), // dataset ability entries are [name, hidden] pairs
+		...deriveProfile(raw.profile),
 		legendary: LEGENDARY.has(raw.id),
 		mythical: MYTHICAL.has(raw.id),
 		finalForm: !raw.evolution?.next,
@@ -292,6 +298,30 @@ const matchField = (field: Field, mon: Mon, value: FilterValue) => {
 	return field.get(mon).toLowerCase().includes(needle)
 }
 
+const sanitizeEnum = (values: readonly string[], value: unknown) => {
+	if (!Array.isArray(value)) return undefined
+	// Partial streams produce half-typed values like "Wa" — only keep real ones.
+	const valid = value.filter((entry): entry is string => typeof entry === 'string' && values.includes(entry))
+	return valid.length ? valid : undefined
+}
+
+const sanitizeRange = (value: unknown): RangeValue | undefined => {
+	if (!R.isPlainObject(value)) return undefined
+	if ('level' in value && LEVELS.includes(value.level as Level)) return { level: value.level as Level }
+	const min = typeof value.min === 'number' ? value.min : undefined
+	const max = typeof value.max === 'number' ? value.max : undefined
+	if (min == null && max == null) return undefined
+	return { min, max }
+}
+
+/** `undefined` means "the model gave us nothing usable for this field", so the caller drops it. */
+const sanitizeValue = (field: Field, value: unknown): FilterValue | undefined => {
+	if (field.kind === 'enum') return sanitizeEnum(field.values, value)
+	if (field.kind === 'range') return sanitizeRange(value)
+	if (field.kind === 'bool') return typeof value === 'boolean' ? value : undefined
+	return typeof value === 'string' && value.trim() ? value : undefined
+}
+
 /** Drop anything the model invented that the pack doesn't recognise, and drop no-op filters. */
 const sanitizeFilters = (raw: unknown): Filters => {
 	if (!R.isPlainObject(raw)) return {}
@@ -300,26 +330,18 @@ const sanitizeFilters = (raw: unknown): Filters => {
 	for (const [id, value] of R.entries(raw)) {
 		const field = FIELD_BY_ID[id]
 		if (!field || value == null) continue
-		if (field.kind === 'enum') {
-			if (!Array.isArray(value)) continue
-			// Partial streams produce half-typed values like "Wa" — only keep real ones.
-			const valid = value.filter((entry): entry is string => typeof entry === 'string' && field.values.includes(entry))
-			if (valid.length) out[id] = valid
-		} else if (field.kind === 'range') {
-			if (!R.isPlainObject(value)) continue
-			if ('level' in value && LEVELS.includes(value.level as Level)) out[id] = { level: value.level as Level }
-			else {
-				const min = typeof value.min === 'number' ? value.min : undefined
-				const max = typeof value.max === 'number' ? value.max : undefined
-				if (min != null || max != null) out[id] = { min, max }
-			}
-		} else if (field.kind === 'bool') {
-			if (typeof value === 'boolean') out[id] = value
-		} else if (typeof value === 'string' && value.trim()) out[id] = value
+		const clean = sanitizeValue(field, value)
+		if (clean !== undefined) out[id] = clean
 	}
 
 	return out
 }
+
+/** `null` is the schema's own "no ordering implied", and a truncated stream drops `sort` entirely. */
+const sanitizeSorting = (raw: unknown) =>
+	R.isPlainObject(raw) && typeof raw.field === 'string' && FIELD_BY_ID[raw.field]
+		? [{ id: raw.field, desc: Boolean(raw.desc) }]
+		: []
 
 // The JSON schema handed to the model.
 const fieldValueSchema = (field: Field) => {
@@ -956,12 +978,16 @@ type Rejection = { reason: string; message: string }
 // compile the component. It does not yet support dynamic `import()`, `for await`, or `try/finally`, and
 // a single unsupported construct disqualifies the whole component — including unrelated derived values,
 // which then lose their memoization. Keeping the async work at module scope keeps `Root` compilable.
-const loadEngine = async (
-	id: string,
-	previous: Engine | null,
-	onLoaded: (engine: Engine, loadMs: number) => void,
-	onError: (message: string) => void,
-) => {
+const toErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+type LoadEngineHandlers = {
+	id: string
+	previous: Engine | null
+	onLoaded: (engine: Engine, loadMs: number) => void
+	onError: (message: string) => void
+}
+
+const loadEngine = async ({ id, previous, onLoaded, onError }: LoadEngineHandlers) => {
 	loadProgress.set('Starting…', 0)
 	const started = performance.now()
 
@@ -981,12 +1007,17 @@ const loadEngine = async (
 		})
 		onLoaded(engine, performance.now() - started)
 	} catch (error) {
-		onError(error instanceof Error ? error.message : String(error))
+		onError(toErrorMessage(error))
 	}
 }
 
 type StreamResult =
 	{ ok: false; message: string } | { ok: true; decodeMs: number; tokensPerSecond?: number; rejection: Rejection | null }
+
+const toRejection = (final: unknown): Rejection | null => {
+	if (!R.isPlainObject(final) || final.ok !== false) return null
+	return { reason: String(final.reason ?? 'off_domain'), message: String(final.message ?? '') }
+}
 
 const streamFilters = async (
 	engine: Engine,
@@ -1015,39 +1046,23 @@ const streamFilters = async (
 			if (chunk.usage?.extra?.decode_tokens_per_s) tokensPerSecond = chunk.usage.extra.decode_tokens_per_s
 		}
 
-		const final = repairJson(text)
-		const rejection =
-			R.isPlainObject(final) && final.ok === false
-				? { reason: String(final.reason ?? 'off_domain'), message: String(final.message ?? '') }
-				: null
-		return { ok: true, decodeMs: performance.now() - started, tokensPerSecond, rejection }
+		return {
+			ok: true,
+			decodeMs: performance.now() - started,
+			tokensPerSecond,
+			rejection: toRejection(repairJson(text)),
+		}
 	} catch (error) {
-		return { ok: false, message: error instanceof Error ? error.message : String(error) }
+		return { ok: false, message: toErrorMessage(error) }
 	}
 }
 
-const Root = () => {
+type Timing = { load?: number; decode?: number; tokensPerSecond?: number }
+
+/** One fetch, one derive, one pass to fill `RANGE_STATS` — everything else reads the result. */
+const usePokedexRows = () => {
 	const [rows, setRows] = useState<Mon[]>([])
 	const [loadError, setLoadError] = useState<string | null>(null)
-	const [filters, setFilters] = useState<Filters>({})
-	const [sorting, setSorting] = useState<SortingState>([])
-	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
-		R.mapValues(FIELD_BY_ID, (field) => DEFAULT_COLUMNS.has(field.id)),
-	)
-
-	const [prompt, setPrompt] = useState('')
-	const [modelId, setModelId] = useState<string>(MODELS[1]!.id)
-	const [modelState, setModelState] = useState<ModelState>('idle')
-	const [modelError, setModelError] = useState('')
-	const [running, setRunning] = useState(false)
-	const [streamText, setStreamText] = useState('')
-	const [touched, setTouched] = useState<Set<string>>(() => new Set())
-	const [rejection, setRejection] = useState<Rejection | null>(null)
-	const [timing, setTiming] = useState<{ load?: number; decode?: number; tokensPerSecond?: number }>({})
-	const [showJson, setShowJson] = useState(false)
-
-	const engineRef = useRef<Engine | null>(null)
-	const scrollRef = useRef<HTMLDivElement>(null)
 
 	useEffect(() => {
 		const controller = new AbortController()
@@ -1059,10 +1074,401 @@ const Root = () => {
 				setRows(derived)
 			})
 			.catch((error) => {
-				if (!controller.signal.aborted) setLoadError(error instanceof Error ? error.message : String(error))
+				if (!controller.signal.aborted) setLoadError(toErrorMessage(error))
 			})
 		return () => controller.abort()
 	}, [])
+
+	return { rows, loadError }
+}
+
+/** The WebLLM engine's whole lifecycle: which model, how far along, and how long it took. */
+const useEngine = () => {
+	const engineRef = useRef<Engine | null>(null)
+	// Bumped the moment a load starts, so anything still streaming off the outgoing engine is stale.
+	const runIdRef = useRef(0)
+	const [modelId, setModelId] = useState<string>(MODELS[1]!.id)
+	const [modelState, setModelState] = useState<ModelState>('idle')
+	const [modelError, setModelError] = useState('')
+	const [timing, setTiming] = useState<Timing>({})
+
+	const loadModel = (id: string) => {
+		runIdRef.current += 1
+		setModelState('loading')
+		loadEngine({
+			id,
+			previous: engineRef.current,
+			onLoaded: (engine, loadMs) => {
+				engineRef.current = engine
+				setTiming({ load: loadMs })
+				setModelState('ready')
+			},
+			onError: (message) => {
+				setModelError(message)
+				setModelState('error')
+			},
+		})
+	}
+
+	const selectModel = (id: string) => {
+		setModelId(id)
+		// Already running one? Swap immediately. Otherwise the Enable button starts it.
+		if (modelState === 'ready') loadModel(id)
+	}
+
+	return { engineRef, runIdRef, modelId, modelState, modelError, timing, setTiming, loadModel, selectModel }
+}
+
+type ModelNoticeProps = {
+	modelState: ModelState
+	modelError: string
+	size: string
+}
+
+/** The one-line status under the prompt: what loading the model buys you, or why it didn't load. */
+const ModelNotice = ({ modelState, modelError, size }: ModelNoticeProps) => {
+	if (modelState === 'idle')
+		return (
+			<p className='px-3 pb-2 text-[11px] opacity-50'>
+				The table below works right now — filter and sort it however you like. Loading the model ({size}, cached after
+				the first visit) adds natural-language search on top, running entirely in this tab.
+			</p>
+		)
+	if (modelState !== 'error') return null
+	return (
+		<p className='px-3 pb-2 text-[11px] text-error'>
+			Couldn't load the model: {modelError}.{' '}
+			{/* ~700 MB of weights: a dropped connection is likelier than absent WebGPU. Only blame WebGPU when it is. */}
+			{navigator.gpu
+				? 'Try again — the weights download can drop partway.'
+				: 'This pen needs WebGPU, which this browser does not support.'}
+		</p>
+	)
+}
+
+type PromptHeaderProps = {
+	prompt: string
+	setPrompt: (value: string) => void
+	onRun: () => void
+	running: boolean
+	modelId: string
+	onSelectModel: (id: string) => void
+	modelState: ModelState
+	modelError: string
+	onEnable: () => void
+	rejection: Rejection | null
+	onDismissRejection: () => void
+}
+
+const PromptHeader = ({
+	prompt,
+	setPrompt,
+	onRun,
+	running,
+	modelId,
+	onSelectModel,
+	modelState,
+	modelError,
+	onEnable,
+	rejection,
+	onDismissRejection,
+}: PromptHeaderProps) => {
+	const selectedModel = MODELS.find((model) => model.id === modelId)!
+
+	return (
+		<header className='shrink-0 border-b border-base-content/10 bg-base-200/60'>
+			<div className='flex items-center gap-2 px-3 py-2'>
+				<span className='flex items-center gap-1.5 font-semibold text-sm shrink-0'>
+					<LuSparkles size={15} className='text-primary' /> Pokédex
+				</span>
+
+				<div className='relative flex-1 min-w-0'>
+					<Input
+						className='input input-sm w-full pr-20'
+						placeholder={
+							modelState === 'ready'
+								? 'Describe what you want — "tanky water types from the first two gens"'
+								: 'Enable natural-language search to type a request…'
+						}
+						value={prompt}
+						disabled={modelState !== 'ready' || running}
+						onChange={(event) => setPrompt(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === 'Enter') onRun()
+						}}
+					/>
+					<span className='absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] opacity-40'>
+						{running ? <span className='loading loading-spinner loading-xs' /> : <LuCornerDownLeft size={11} />}
+					</span>
+				</div>
+
+				<div className='flex items-center gap-2 shrink-0'>
+					<select
+						className='select select-sm select-bordered w-40'
+						value={modelId}
+						disabled={modelState === 'loading' || running}
+						onChange={(event) => onSelectModel(event.target.value)}
+					>
+						{MODELS.map((model) => (
+							<option key={model.id} value={model.id}>
+								{modelState === 'ready' ? model.label : `${model.label} · ${model.size}`}
+							</option>
+						))}
+					</select>
+					{modelState !== 'ready' && (
+						<Button className='btn-sm btn-primary' disabled={modelState === 'loading'} onClick={onEnable}>
+							<LuBrain size={14} />
+							{modelState === 'loading' ? 'Loading…' : 'Enable AI search'}
+						</Button>
+					)}
+				</div>
+
+				<ThemePicker variant='modal' />
+			</div>
+
+			{modelState === 'loading' && <LoadOverlay label={selectedModel.label} size={selectedModel.size} />}
+
+			<ModelNotice modelState={modelState} modelError={modelError} size={selectedModel.size} />
+
+			{rejection && (
+				<div className='mx-3 mb-2 alert alert-warning py-1.5 px-3 text-xs'>
+					<LuCircleAlert size={14} />
+					<span>{rejection.message}</span>
+					<button type='button' className='btn btn-ghost btn-xs' onClick={onDismissRejection}>
+						<LuX size={12} />
+					</button>
+				</div>
+			)}
+		</header>
+	)
+}
+
+/**
+ * `sorting` and `columnVisibility` come in as props even though `table` already holds both. The table
+ * object is one instance for the life of the pen, so React Compiler sees an unchanging dependency and
+ * would happily hand this component its first, empty render forever — the same staleness the note at
+ * the top of the file describes for v9. Reading the state directly is what makes the cache key move.
+ *
+ * For the same reason the three reads off `table` sit above `useVirtualizer`: the compiler cannot
+ * cache across a hook call, so anything derived before one is recomputed every render.
+ */
+type TableGridProps = {
+	table: Table<Mon>
+	sorting: SortingState
+	columnVisibility: VisibilityState
+	filters: Filters
+	setFilter: (id: string, value: FilterValue | undefined) => void
+}
+
+const TableGrid = ({ table, sorting, columnVisibility, filters, setFilter }: TableGridProps) => {
+	const scrollRef = useRef<HTMLDivElement>(null)
+	const headers = table.getHeaderGroups()[0]?.headers ?? []
+	const tableRows = table.getRowModel().rows
+	const gridTemplate = FIELDS.filter((field) => columnVisibility[field.id] ?? true)
+		.map((field) => `${field.width}px`)
+		.join(' ')
+
+	const virtualizer = useVirtualizer({
+		count: tableRows.length,
+		getScrollElement: () => scrollRef.current,
+		estimateSize: () => 40,
+		overscan: 12,
+	})
+
+	// `getTotalSize()` reads virtualizer internals the compiler cannot see, and `useVirtualizer`
+	// hands back one identity-stable instance — so a memo keyed on `virtualizer` alone caches the
+	// first height forever and the scroll area keeps its unfiltered size. Naming `tableRows.length`
+	// is what moves the cache key when a filter changes.
+	const totalSize = tableRows.length > 0 ? virtualizer.getTotalSize() : 0
+
+	return (
+		<div ref={scrollRef} className='flex-1 overflow-auto'>
+			<div style={{ width: gridTemplate ? 'max-content' : '100%', minWidth: '100%' }}>
+				<div
+					className='sticky top-0 z-20 grid bg-base-200 border-b border-base-content/15 text-xs font-semibold'
+					style={{ gridTemplateColumns: gridTemplate }}
+				>
+					{headers.map((header) => {
+						const field = FIELD_BY_ID[header.column.id]! // column ids are generated from FIELDS
+						const sorted = sorting.find((entry) => entry.id === header.column.id)
+						return (
+							<div key={header.id} className='flex items-center gap-1 px-2 py-1.5 min-w-0'>
+								<button
+									type='button'
+									className={`truncate text-left ${header.column.getCanSort() ? 'cursor-pointer hover:text-primary' : 'cursor-default'}`}
+									onClick={header.column.getToggleSortingHandler()}
+								>
+									{flexRender(header.column.columnDef.header, header.getContext())}
+								</button>
+								{sorted?.desc === false && <LuChevronUp size={11} className='text-primary shrink-0' />}
+								{sorted?.desc === true && <LuChevronDown size={11} className='text-primary shrink-0' />}
+								<span className='flex-1' />
+								<HeaderFilter field={field} value={filters[field.id]} setFilter={setFilter} />
+							</div>
+						)
+					})}
+				</div>
+
+				<div style={{ height: totalSize, position: 'relative' }}>
+					{virtualizer.getVirtualItems().map((virtualRow) => {
+						const row = tableRows[virtualRow.index]! // virtualizer only yields in-range indexes
+						return (
+							<div
+								key={row.id}
+								className='grid absolute left-0 top-0 w-full items-center border-b border-base-content/5 text-xs hover:bg-base-200/60'
+								style={{
+									gridTemplateColumns: gridTemplate,
+									height: virtualRow.size,
+									transform: `translateY(${virtualRow.start}px)`,
+								}}
+							>
+								{row.getVisibleCells().map((visibleCell) => (
+									<div key={visibleCell.id} className='px-2 min-w-0 truncate'>
+										{flexRender(visibleCell.column.columnDef.cell, visibleCell.getContext())}
+									</div>
+								))}
+							</div>
+						)
+					})}
+				</div>
+			</div>
+		</div>
+	)
+}
+
+type PokedexBodyProps = TableGridProps & {
+	rows: Mon[]
+	loadError: string | null
+	touched: Set<string>
+	onReset: () => void
+}
+
+/** The filter panel and whichever of the three table states applies. */
+const PokedexBody = ({ rows, loadError, touched, onReset, ...grid }: PokedexBodyProps) => (
+	<div className='flex-1 flex min-h-0'>
+		<FilterPanel filters={grid.filters} setFilter={grid.setFilter} touched={touched} onReset={onReset} />
+
+		<main className='flex-1 min-w-0 flex flex-col'>
+			{loadError ? (
+				<div className='flex-1 grid place-items-center text-sm text-error'>Failed to load Pokédex: {loadError}</div>
+			) : rows.length === 0 ? (
+				<div className='flex-1 grid place-items-center gap-2'>
+					<span className='loading loading-spinner loading-lg' />
+				</div>
+			) : (
+				<TableGrid {...grid} />
+			)}
+		</main>
+	</div>
+)
+
+const JsonDrawer = ({ streamText, onClose }: { streamText: string; onClose: () => void }) => (
+	<div className='shrink-0 h-56 border-t border-base-content/10 bg-base-300/40 flex flex-col'>
+		<div className='flex items-center justify-between px-3 py-1.5 border-b border-base-content/10'>
+			<span className='text-xs font-semibold opacity-70'>Model output</span>
+			<button type='button' className='btn btn-ghost btn-xs' onClick={onClose}>
+				<LuX size={12} />
+			</button>
+		</div>
+		<pre className='flex-1 overflow-auto p-3 text-[11px] leading-relaxed font-mono whitespace-pre-wrap'>
+			{streamText || <span className='opacity-40'>Run a natural-language search to see what the model emits.</span>}
+		</pre>
+	</div>
+)
+
+/**
+ * React Compiler caches a derived value against the values it references, and `table` is a single
+ * object for the life of the pen — keyed on that alone the count freezes at the empty first render.
+ * The trailing arguments are unused on purpose: they are the cache key, and unlike `table` they move.
+ * `TableGrid` needs no such thing because its own reads sit above a hook call, which the cache cannot
+ * span. Anywhere else, read the table through this.
+ */
+const countRows = (table: Table<Mon>, ..._cacheKey: unknown[]) => table.getRowModel().rows.length
+
+/** Never touches `table`, for the reason spelled out on `TableGridProps` — plain state only. */
+type StatusBarProps = {
+	filteredRows: number
+	totalRows: number
+	columnVisibility: VisibilityState
+	onToggleColumn: (id: string) => void
+	filters: Filters
+	setFilter: (id: string, value: FilterValue | undefined) => void
+	timing: Timing
+	onToggleJson: () => void
+}
+
+const StatusBar = ({
+	filteredRows,
+	totalRows,
+	columnVisibility,
+	onToggleColumn,
+	filters,
+	setFilter,
+	timing,
+	onToggleJson,
+}: StatusBarProps) => (
+	<footer className='shrink-0 flex items-center gap-3 px-3 py-1 border-t border-base-content/10 bg-base-200/60 text-[11px]'>
+		<span className='tabular-nums'>
+			<strong>{filteredRows.toLocaleString()}</strong>
+			<span className='opacity-50'> / {totalRows.toLocaleString()} Pokémon</span>
+		</span>
+		{!R.isEmpty(filters) && (
+			<span className='flex items-center gap-1 flex-wrap min-w-0'>
+				{R.entries(filters).map(([id, value]) => (
+					<span key={id} className='badge badge-xs badge-primary badge-soft gap-1'>
+						{FIELD_BY_ID[id]!.label}: {summarize(FIELD_BY_ID[id]!, value)}
+						<button type='button' onClick={() => setFilter(id, undefined)}>
+							<LuX size={9} />
+						</button>
+					</span>
+				))}
+			</span>
+		)}
+		<span className='flex-1' />
+		{timing.load != null && <span className='opacity-45'>model {(timing.load / 1000).toFixed(1)}s</span>}
+		{timing.decode != null && <span className='opacity-45'>decode {(timing.decode / 1000).toFixed(2)}s</span>}
+		{timing.tokensPerSecond != null && <span className='opacity-45'>{timing.tokensPerSecond.toFixed(0)} tok/s</span>}
+		<details className='dropdown dropdown-top dropdown-end'>
+			<summary className='btn btn-ghost btn-xs'>
+				<LuColumns3 size={12} /> Columns
+			</summary>
+			<div className='dropdown-content z-30 mb-1 w-52 max-h-80 overflow-y-auto rounded-box bg-base-100 p-2 shadow-xl border border-base-content/10'>
+				{FIELDS.map((field) => (
+					<label
+						key={field.id}
+						className='flex items-center gap-2 px-1 py-0.5 cursor-pointer hover:bg-base-200 rounded'
+					>
+						<input
+							type='checkbox'
+							className='checkbox checkbox-xs'
+							checked={columnVisibility[field.id] ?? true}
+							onChange={() => onToggleColumn(field.id)}
+						/>
+						<span className='text-xs'>{field.label}</span>
+					</label>
+				))}
+			</div>
+		</details>
+		<button type='button' className='btn btn-ghost btn-xs' onClick={onToggleJson}>
+			<LuBrain size={12} /> JSON
+		</button>
+	</footer>
+)
+
+const Root = () => {
+	const { rows, loadError } = usePokedexRows()
+	const [filters, setFilters] = useState<Filters>({})
+	const [sorting, setSorting] = useState<SortingState>([])
+	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+		R.mapValues(FIELD_BY_ID, (field) => DEFAULT_COLUMNS.has(field.id)),
+	)
+
+	const [prompt, setPrompt] = useState('')
+	const [running, setRunning] = useState(false)
+	const [streamText, setStreamText] = useState('')
+	const [touched, setTouched] = useState<Set<string>>(() => new Set())
+	const [rejection, setRejection] = useState<Rejection | null>(null)
+	const [showJson, setShowJson] = useState(false)
 
 	// Referentially stable via React Compiler. TanStack Table keys its filtered-row-model memo on this
 	// array's identity, so a fresh one each render invalidates it, firing auto-reset → onStateChange →
@@ -1080,19 +1486,15 @@ const Root = () => {
 		getSortedRowModel: getSortedRowModel(),
 	})
 
-	const visibleColumns = table.getVisibleLeafColumns()
-	const tableRows = table.getRowModel().rows
-	const gridTemplate = visibleColumns.map((column) => `${column.getSize()}px`).join(' ')
+	const filteredRows = countRows(table, rows, filters, sorting)
 
-	const virtualizer = useVirtualizer({
-		count: tableRows.length,
-		getScrollElement: () => scrollRef.current,
-		estimateSize: () => 40,
-		overscan: 12,
-	})
+	const { engineRef, runIdRef, modelId, modelState, modelError, timing, setTiming, loadModel, selectModel } =
+		useEngine()
 
 	const setFilter = (id: string, value: FilterValue | undefined) =>
 		setFilters((current) => (value === undefined ? R.omit(current, [id]) : { ...current, [id]: value }))
+
+	const toggleColumn = (id: string) => setColumnVisibility((current) => ({ ...current, [id]: !(current[id] ?? true) }))
 
 	const resetAll = () => {
 		setFilters({})
@@ -1101,284 +1503,85 @@ const Root = () => {
 		setRejection(null)
 	}
 
-	const loadModel = (id: string) => {
-		setModelState('loading')
-		loadEngine(
-			id,
-			engineRef.current,
-			(engine, loadMs) => {
-				engineRef.current = engine
-				setTiming((current) => ({ ...current, load: loadMs }))
-				setModelState('ready')
-			},
-			(message) => {
-				setModelError(message)
-				setModelState('error')
-			},
-		)
-	}
-
+	// Every accepted partial replaces the whole table state, so a response that never reaches `query`
+	// or `sort` clears them instead of leaving the previous prompt's. `ok` streams after `thinking`,
+	// and until it lands neither branch is chosen — applying then would wipe the table on a rejection.
 	const applyPartial = (parsed: Record<string, unknown>) => {
-		if (parsed.ok === false) return
-		if (Array.isArray(parsed.fields)) setTouched(new Set(parsed.fields.filter((id) => typeof id === 'string')))
-		if ('query' in parsed) setFilters(sanitizeFilters(parsed.query))
-		const { sort } = parsed
-		if (R.isPlainObject(sort) && typeof sort.field === 'string' && FIELD_BY_ID[sort.field])
-			setSorting([{ id: sort.field, desc: Boolean(sort.desc) }])
+		if (parsed.ok !== true) return
+		const fields = Array.isArray(parsed.fields) ? parsed.fields.filter((id) => typeof id === 'string') : []
+		setTouched(new Set(fields))
+		setFilters(sanitizeFilters(parsed.query))
+		setSorting(sanitizeSorting(parsed.sort))
 	}
 
 	const run = () => {
 		const engine = engineRef.current
 		if (!engine || !prompt.trim() || running) return
+		const runId = runIdRef.current
+		const isStale = () => runId !== runIdRef.current
 		setRunning(true)
 		setRejection(null)
 		setStreamText('')
-		setTouched(new Set())
 
 		const onProgress = (text: string, parsed: Record<string, unknown> | null) => {
+			if (isStale()) return
 			setStreamText(text)
 			if (parsed) applyPartial(parsed)
 		}
 
 		streamFilters(engine, prompt.trim(), onProgress).then((result) => {
+			// This run exclusively owns `running`, so clearing it above the staleness check is what stops
+			// a stream off a swapped-out engine leaving the prompt disabled forever.
+			setRunning(false)
+			if (isStale()) return
 			if (result.ok) {
 				if (result.rejection) setRejection(result.rejection)
 				setTiming((current) => ({ ...current, decode: result.decodeMs, tokensPerSecond: result.tokensPerSecond }))
 			} else setRejection({ reason: 'error', message: result.message })
-			setRunning(false)
 		})
 	}
-
-	const selectedModel = MODELS.find((model) => model.id === modelId)!
 
 	return (
 		<ThemeProvider>
 			<div className='h-screen w-screen flex flex-col overflow-hidden bg-base-100'>
-				{/* ── Prompt header ── */}
-				<header className='shrink-0 border-b border-base-content/10 bg-base-200/60'>
-					<div className='flex items-center gap-2 px-3 py-2'>
-						<span className='flex items-center gap-1.5 font-semibold text-sm shrink-0'>
-							<LuSparkles size={15} className='text-primary' /> Pokédex
-						</span>
+				<PromptHeader
+					prompt={prompt}
+					setPrompt={setPrompt}
+					onRun={run}
+					running={running}
+					modelId={modelId}
+					onSelectModel={selectModel}
+					modelState={modelState}
+					modelError={modelError}
+					onEnable={() => loadModel(modelId)}
+					rejection={rejection}
+					onDismissRejection={() => setRejection(null)}
+				/>
 
-						<div className='relative flex-1 min-w-0'>
-							<Input
-								className='input input-sm w-full pr-20'
-								placeholder={
-									modelState === 'ready'
-										? 'Describe what you want — "tanky water types from the first two gens"'
-										: 'Enable natural-language search to type a request…'
-								}
-								value={prompt}
-								disabled={modelState !== 'ready' || running}
-								onChange={(event) => setPrompt(event.target.value)}
-								onKeyDown={(event) => {
-									if (event.key === 'Enter') run()
-								}}
-							/>
-							<span className='absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] opacity-40'>
-								{running ? <span className='loading loading-spinner loading-xs' /> : <LuCornerDownLeft size={11} />}
-							</span>
-						</div>
+				<PokedexBody
+					rows={rows}
+					loadError={loadError}
+					table={table}
+					sorting={sorting}
+					columnVisibility={columnVisibility}
+					filters={filters}
+					setFilter={setFilter}
+					touched={touched}
+					onReset={resetAll}
+				/>
 
-						<div className='flex items-center gap-2 shrink-0'>
-							<select
-								className='select select-sm select-bordered w-40'
-								value={modelId}
-								disabled={modelState === 'loading'}
-								onChange={(event) => {
-									setModelId(event.target.value)
-									// Already running one? Swap immediately. Otherwise the Enable button starts it.
-									if (modelState === 'ready') loadModel(event.target.value)
-								}}
-							>
-								{MODELS.map((model) => (
-									<option key={model.id} value={model.id}>
-										{modelState === 'ready' ? model.label : `${model.label} · ${model.size}`}
-									</option>
-								))}
-							</select>
-							{modelState !== 'ready' && (
-								<Button
-									className='btn-sm btn-primary'
-									disabled={modelState === 'loading'}
-									onClick={() => loadModel(modelId)}
-								>
-									<LuBrain size={14} />
-									{modelState === 'loading' ? 'Loading…' : 'Enable AI search'}
-								</Button>
-							)}
-						</div>
+				{showJson && <JsonDrawer streamText={streamText} onClose={() => setShowJson(false)} />}
 
-						<ThemePicker variant='modal' />
-					</div>
-
-					{modelState === 'loading' && <LoadOverlay label={selectedModel.label} size={selectedModel.size} />}
-
-					{modelState === 'idle' && (
-						<p className='px-3 pb-2 text-[11px] opacity-50'>
-							The table below works right now — filter and sort it however you like. Loading the model (
-							{selectedModel.size}, cached after the first visit) adds natural-language search on top, running entirely
-							in this tab.
-						</p>
-					)}
-
-					{modelState === 'error' && (
-						<p className='px-3 pb-2 text-[11px] text-error'>
-							Couldn't load the model: {modelError}.{' '}
-							{/* ~700 MB of weights: a dropped connection is likelier than absent WebGPU. Only blame WebGPU when it is. */}
-							{navigator.gpu
-								? 'Try again — the weights download can drop partway.'
-								: 'This pen needs WebGPU, which this browser does not support.'}
-						</p>
-					)}
-
-					{rejection && (
-						<div className='mx-3 mb-2 alert alert-warning py-1.5 px-3 text-xs'>
-							<LuCircleAlert size={14} />
-							<span>{rejection.message}</span>
-							<button type='button' className='btn btn-ghost btn-xs' onClick={() => setRejection(null)}>
-								<LuX size={12} />
-							</button>
-						</div>
-					)}
-				</header>
-
-				{/* ── Body ── */}
-				<div className='flex-1 flex min-h-0'>
-					<FilterPanel filters={filters} setFilter={setFilter} touched={touched} onReset={resetAll} />
-
-					<main className='flex-1 min-w-0 flex flex-col'>
-						{loadError ? (
-							<div className='flex-1 grid place-items-center text-sm text-error'>
-								Failed to load Pokédex: {loadError}
-							</div>
-						) : rows.length === 0 ? (
-							<div className='flex-1 grid place-items-center gap-2'>
-								<span className='loading loading-spinner loading-lg' />
-							</div>
-						) : (
-							<div ref={scrollRef} className='flex-1 overflow-auto'>
-								<div style={{ width: gridTemplate ? 'max-content' : '100%', minWidth: '100%' }}>
-									<div
-										className='sticky top-0 z-20 grid bg-base-200 border-b border-base-content/15 text-xs font-semibold'
-										style={{ gridTemplateColumns: gridTemplate }}
-									>
-										{table.getHeaderGroups()[0]?.headers.map((header) => {
-											const field = FIELD_BY_ID[header.column.id]! // column ids are generated from FIELDS
-											const sorted = header.column.getIsSorted()
-											return (
-												<div key={header.id} className='flex items-center gap-1 px-2 py-1.5 min-w-0'>
-													<button
-														type='button'
-														className={`truncate text-left ${header.column.getCanSort() ? 'cursor-pointer hover:text-primary' : 'cursor-default'}`}
-														onClick={header.column.getToggleSortingHandler()}
-													>
-														{flexRender(header.column.columnDef.header, header.getContext())}
-													</button>
-													{sorted === 'asc' && <LuChevronUp size={11} className='text-primary shrink-0' />}
-													{sorted === 'desc' && <LuChevronDown size={11} className='text-primary shrink-0' />}
-													<span className='flex-1' />
-													<HeaderFilter field={field} value={filters[field.id]} setFilter={setFilter} />
-												</div>
-											)
-										})}
-									</div>
-
-									<div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-										{virtualizer.getVirtualItems().map((virtualRow) => {
-											const row = tableRows[virtualRow.index]! // virtualizer only yields in-range indexes
-											return (
-												<div
-													key={row.id}
-													className='grid absolute left-0 top-0 w-full items-center border-b border-base-content/5 text-xs hover:bg-base-200/60'
-													style={{
-														gridTemplateColumns: gridTemplate,
-														height: virtualRow.size,
-														transform: `translateY(${virtualRow.start}px)`,
-													}}
-												>
-													{row.getVisibleCells().map((visibleCell) => (
-														<div key={visibleCell.id} className='px-2 min-w-0 truncate'>
-															{flexRender(visibleCell.column.columnDef.cell, visibleCell.getContext())}
-														</div>
-													))}
-												</div>
-											)
-										})}
-									</div>
-								</div>
-							</div>
-						)}
-					</main>
-				</div>
-
-				{/* ── JSON drawer ── */}
-				{showJson && (
-					<div className='shrink-0 h-56 border-t border-base-content/10 bg-base-300/40 flex flex-col'>
-						<div className='flex items-center justify-between px-3 py-1.5 border-b border-base-content/10'>
-							<span className='text-xs font-semibold opacity-70'>Model output</span>
-							<button type='button' className='btn btn-ghost btn-xs' onClick={() => setShowJson(false)}>
-								<LuX size={12} />
-							</button>
-						</div>
-						<pre className='flex-1 overflow-auto p-3 text-[11px] leading-relaxed font-mono whitespace-pre-wrap'>
-							{streamText || (
-								<span className='opacity-40'>Run a natural-language search to see what the model emits.</span>
-							)}
-						</pre>
-					</div>
-				)}
-
-				{/* ── Status bar ── */}
-				<footer className='shrink-0 flex items-center gap-3 px-3 py-1 border-t border-base-content/10 bg-base-200/60 text-[11px]'>
-					<span className='tabular-nums'>
-						<strong>{tableRows.length.toLocaleString()}</strong>
-						<span className='opacity-50'> / {rows.length.toLocaleString()} Pokémon</span>
-					</span>
-					{!R.isEmpty(filters) && (
-						<span className='flex items-center gap-1 flex-wrap min-w-0'>
-							{R.entries(filters).map(([id, value]) => (
-								<span key={id} className='badge badge-xs badge-primary badge-soft gap-1'>
-									{FIELD_BY_ID[id]!.label}: {summarize(FIELD_BY_ID[id]!, value)}
-									<button type='button' onClick={() => setFilter(id, undefined)}>
-										<LuX size={9} />
-									</button>
-								</span>
-							))}
-						</span>
-					)}
-					<span className='flex-1' />
-					{timing.load != null && <span className='opacity-45'>model {(timing.load / 1000).toFixed(1)}s</span>}
-					{timing.decode != null && <span className='opacity-45'>decode {(timing.decode / 1000).toFixed(2)}s</span>}
-					{timing.tokensPerSecond != null && (
-						<span className='opacity-45'>{timing.tokensPerSecond.toFixed(0)} tok/s</span>
-					)}
-					<details className='dropdown dropdown-top dropdown-end'>
-						<summary className='btn btn-ghost btn-xs'>
-							<LuColumns3 size={12} /> Columns
-						</summary>
-						<div className='dropdown-content z-30 mb-1 w-52 max-h-80 overflow-y-auto rounded-box bg-base-100 p-2 shadow-xl border border-base-content/10'>
-							{table.getAllLeafColumns().map((column) => (
-								<label
-									key={column.id}
-									className='flex items-center gap-2 px-1 py-0.5 cursor-pointer hover:bg-base-200 rounded'
-								>
-									<input
-										type='checkbox'
-										className='checkbox checkbox-xs'
-										checked={column.getIsVisible()}
-										onChange={column.getToggleVisibilityHandler()}
-									/>
-									<span className='text-xs'>{FIELD_BY_ID[column.id]!.label}</span>
-								</label>
-							))}
-						</div>
-					</details>
-					<button type='button' className='btn btn-ghost btn-xs' onClick={() => setShowJson((current) => !current)}>
-						<LuBrain size={12} /> JSON
-					</button>
-				</footer>
+				<StatusBar
+					filteredRows={filteredRows}
+					totalRows={rows.length}
+					columnVisibility={columnVisibility}
+					onToggleColumn={toggleColumn}
+					filters={filters}
+					setFilter={setFilter}
+					timing={timing}
+					onToggleJson={() => setShowJson((current) => !current)}
+				/>
 			</div>
 		</ThemeProvider>
 	)

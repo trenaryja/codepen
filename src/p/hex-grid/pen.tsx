@@ -1,4 +1,4 @@
-import { Button, Field, Input, Modal, Range, Select, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
+import { buildOklch, Button, Field, Input, Modal, Range, Select, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { defineHex, Grid, hexToPoint, Orientation, rectangle } from 'https://esm.sh/honeycomb-grid'
 import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -128,9 +128,6 @@ const RANGE_CONTROLS: { key: NumericParam; label: string; max: number; min: numb
 	{ key: 'chromaMax', label: 'Chroma Max', max: 0.4, min: 0, step: 0.01 },
 ]
 
-const oklch = ({ chroma, hue, lightness }: { chroma: number; hue: number; lightness: number }) =>
-	`oklch(${lightness} ${chroma} ${hue})`
-
 const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 	const {
 		border,
@@ -175,17 +172,20 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 			hue: mapValue(clamp01(hueT), [0, 1], [hueStart, hueEnd]),
 			lightness: mapValue(clampedT, [0, 1], [lightnessMin, lightnessMax]),
 		}
-		const stroke = { ...fill, lightness: Math.max(0, fill.lightness * strokeMultiplier) }
 
 		context.beginPath()
 		context.moveTo(x + corners[0]!.x, y + corners[0]!.y) // a hex always has 6 corners
 		for (const corner of corners.values().drop(1)) context.lineTo(x + corner.x, y + corner.y)
 		context.closePath()
-		context.fillStyle = oklch(fill)
+		context.fillStyle = buildOklch(fill.lightness, fill.chroma, fill.hue)
 		context.fill()
-		context.lineWidth = border
-		context.strokeStyle = oklch(stroke)
-		context.stroke()
+
+		if (border > 0) {
+			const stroke = { ...fill, lightness: Math.max(0, fill.lightness * strokeMultiplier) }
+			context.lineWidth = border
+			context.strokeStyle = buildOklch(stroke.lightness, stroke.chroma, stroke.hue)
+			context.stroke()
+		}
 	})
 }
 

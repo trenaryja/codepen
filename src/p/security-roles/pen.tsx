@@ -33,6 +33,11 @@ const PERMISSION_GROUPS: { asset: string; permissions: Permission[] }[] = [
 
 const ORG_NAMES = ['Coal', 'Oil & Gas', 'Solar', 'Wind', 'Nuclear']
 
+const TABS = ['users', 'roles'] as const
+type Tab = (typeof TABS)[number]
+
+const TAB_LABELS: Record<Tab, string> = { users: 'Users', roles: 'Roles' }
+
 // The two models this pen compares. Current: every role bakes in its org scope, so the same
 // `baseRole` is duplicated once per org. Proposed: roles are pure permission sets and orgs are
 // attached per user. Both render from the same `UserData.orgRoles` so the toggle can flip live.
@@ -41,6 +46,9 @@ type OldRole = { name: string; baseRole: string; permissions: Permission[]; orgs
 type NewRole = { name: string; permissions: Permission[] }
 
 type OrgRole = { org: string; roles: string[] }
+
+// Handed to `RoleCard` only in the old model, where a role owns the orgs it is scoped to.
+type OrgsControl = { active: string[]; onToggle: (org: string) => void }
 
 type UserData = {
 	id: string
@@ -162,7 +170,7 @@ const RoleCard = ({
 	onDelete,
 }: {
 	role: NewRole
-	orgs?: { active: string[]; onToggle: (org: string) => void }
+	orgs?: OrgsControl
 	onUpdate: (role: NewRole) => void
 	onDelete?: () => void
 }) => (
@@ -395,6 +403,166 @@ const NewUserSecurity = ({
 	)
 }
 
+const Header = ({
+	proposed,
+	tab,
+	search,
+	onProposedChange,
+	onTabChange,
+	onSearchChange,
+	onRandomize,
+	onReset,
+}: {
+	proposed: boolean
+	tab: Tab
+	search: string
+	onProposedChange: (proposed: boolean) => void
+	onTabChange: (tab: Tab) => void
+	onSearchChange: (search: string) => void
+	onRandomize: () => void
+	onReset: () => void
+}) => (
+	<header className='navbar bg-base-300 gap-2 sticky top-0 z-20 full-bleed px-4'>
+		<div className='flex-1 flex items-center gap-3'>
+			<span className={`text-sm font-medium ${!proposed ? 'opacity-100' : 'opacity-40'}`}>Current</span>
+			<Toggle checked={proposed} onChange={(event) => onProposedChange(event.target.checked)} />
+			<span className={`text-sm font-medium ${proposed ? 'opacity-100' : 'opacity-40'}`}>Proposed</span>
+		</div>
+		<div>
+			<Input
+				className='input-sm w-48'
+				placeholder={`Search ${tab}...`}
+				value={search}
+				onChange={(event) => onSearchChange(event.target.value)}
+			/>
+		</div>
+		<div role='tablist' className='tabs tabs-boxed tabs-sm'>
+			{TABS.map((name) => (
+				<button
+					type='button'
+					key={name}
+					className={`tab ${tab === name ? 'tab-active' : ''}`}
+					onClick={() => onTabChange(name)}
+				>
+					{TAB_LABELS[name]}
+				</button>
+			))}
+		</div>
+		<Button className='btn-sm btn-ghost btn-square' title='Randomize users' onClick={onRandomize}>
+			<LuShuffle size={14} />
+		</Button>
+		<Button className='btn-sm btn-ghost btn-square text-error' title='Reset all data' onClick={onReset}>
+			<LuTrash2 size={14} />
+		</Button>
+		<ThemePicker />
+	</header>
+)
+
+const SectionHeading = ({ proposed, tab, onAddRole }: { proposed: boolean; tab: Tab; onAddRole: () => void }) => (
+	<div className='flex items-center gap-3'>
+		<div className='flex-1'>
+			<h2 className='text-sm font-bold tracking-wide uppercase opacity-70'>
+				{proposed ? 'Proposed System' : 'Current System'}
+			</h2>
+			<p className='text-xs opacity-40'>
+				{proposed
+					? 'Roles are clean — orgs assigned per user'
+					: 'Roles carry org scope — permissions × orgs baked together'}
+			</p>
+		</div>
+		{tab === 'roles' && (
+			<Button className='btn-xs btn-ghost' onClick={onAddRole}>
+				<LuPlus size={12} /> Add Role
+			</Button>
+		)}
+	</div>
+)
+
+// `users` stays unfiltered so a card's index still points at the caller's array after a search narrows it.
+const UserList = ({
+	users,
+	search,
+	proposed,
+	oldRoles,
+	roleNames,
+	onUpdate,
+}: {
+	users: UserData[]
+	search: string
+	proposed: boolean
+	oldRoles: OldRole[]
+	roleNames: string[]
+	onUpdate: (index: number, user: UserData) => void
+}) => {
+	const query = search.toLowerCase()
+	const matchesQuery = (user: UserData) =>
+		[fullName(user), user.email, user.firstName, user.lastName].some((field) => field.toLowerCase().includes(query))
+	const filteredUsers = query ? users.filter(matchesQuery) : users
+
+	if (!filteredUsers.length)
+		return <div className='text-center py-12 opacity-30 text-sm'>No users match "{search}"</div>
+
+	return (
+		<div className='space-y-2'>
+			{filteredUsers
+				.toSorted((a, b) => fullName(a).localeCompare(fullName(b)))
+				.map((user) => {
+					const index = users.indexOf(user)
+					return (
+						<UserCard key={user.id} user={user} onUpdate={(updated) => onUpdate(index, updated)}>
+							{proposed ? (
+								<NewUserSecurity user={user} roleNames={roleNames} onUpdate={(updated) => onUpdate(index, updated)} />
+							) : (
+								<BadgeMultiSelect
+									label='Roles'
+									options={oldRoles.map((role) => role.name)}
+									active={getUserActiveOldRoles(user.orgRoles, oldRoles)}
+									onToggle={(name) => onUpdate(index, toggleOldRoleForUser(user, name, oldRoles))}
+								/>
+							)}
+						</UserCard>
+					)
+				})}
+		</div>
+	)
+}
+
+// Serves both models: `OldRole` widens `NewRole`, and only the old one supplies `orgsFor`.
+const RoleList = <T extends NewRole>({
+	roles,
+	search,
+	orgsFor,
+	onUpdate,
+	onDelete,
+}: {
+	roles: T[]
+	search: string
+	orgsFor?: (role: T, index: number) => OrgsControl
+	onUpdate: (index: number, role: NewRole) => void
+	onDelete: (index: number) => void
+}) => {
+	const query = search.toLowerCase()
+	return (
+		<div className='space-y-2'>
+			{roles
+				.filter((role) => !query || role.name.toLowerCase().includes(query))
+				.toSorted((a, b) => a.name.localeCompare(b.name))
+				.map((role) => {
+					const index = roles.indexOf(role)
+					return (
+						<RoleCard
+							key={index}
+							role={role}
+							orgs={orgsFor?.(role, index)}
+							onUpdate={(updated) => onUpdate(index, updated)}
+							onDelete={roles.length > 1 ? () => onDelete(index) : undefined}
+						/>
+					)
+				})}
+		</div>
+	)
+}
+
 const Root = () => {
 	const [oldRoles, setOldRoles] = useLocalStorage<OldRole[]>({
 		key: 'security-old-roles-v1',
@@ -409,7 +577,7 @@ const Root = () => {
 		key: 'security-users-v3',
 		defaultValue: generateUsers(newRoleNames),
 	})
-	const [tab, setTab] = useState<'roles' | 'users'>('users')
+	const [tab, setTab] = useState<Tab>('users')
 	const [search, setSearch] = useState('')
 	const [proposed, setProposed] = useState(false)
 
@@ -428,9 +596,10 @@ const Root = () => {
 	const deleteOldRole = (index: number) => setOldRoles((previous) => previous.filter((_, i) => i !== index))
 	const deleteNewRole = (index: number) => setNewRoles((previous) => previous.filter((_, i) => i !== index))
 
+	// An old role with no orgs is unassignable: `toggleOldRoleForUser` drives entirely off `role.orgs`.
 	const addOldRole = () => {
 		const name = `New Role ${oldRoles.length + 1}`
-		setOldRoles((previous) => [...previous, { name, baseRole: name, permissions: [], orgs: [] }])
+		setOldRoles((previous) => [...previous, { name, baseRole: name, permissions: [], orgs: [...ORG_NAMES] }])
 	}
 
 	const addNewRole = () =>
@@ -444,150 +613,45 @@ const Root = () => {
 		setUsers(generateUsers(DEFAULT_NEW_ROLES.map((role) => role.name)))
 	}
 
-	const query = search.toLowerCase()
-	const filteredUsers = query
-		? safeUsers.filter(
-				(user) =>
-					fullName(user).toLowerCase().includes(query) ||
-					user.email.toLowerCase().includes(query) ||
-					user.firstName.toLowerCase().includes(query) ||
-					user.lastName.toLowerCase().includes(query),
-			)
-		: safeUsers
-
 	return (
 		<ThemeProvider defaultTheme='dark'>
 			<div className='full-bleed-container h-screen overflow-y-auto grid-rows-[auto_1fr]'>
-				<header className='navbar bg-base-300 gap-2 sticky top-0 z-20 full-bleed px-4'>
-					<div className='flex-1 flex items-center gap-3'>
-						<span className={`text-sm font-medium ${!proposed ? 'opacity-100' : 'opacity-40'}`}>Current</span>
-						<Toggle checked={proposed} onChange={(event) => setProposed(event.target.checked)} />
-						<span className={`text-sm font-medium ${proposed ? 'opacity-100' : 'opacity-40'}`}>Proposed</span>
-					</div>
-					<div>
-						<Input
-							className='input-sm w-48'
-							placeholder={tab === 'users' ? 'Search users...' : 'Search roles...'}
-							value={search}
-							onChange={(event) => setSearch(event.target.value)}
-						/>
-					</div>
-					<div role='tablist' className='tabs tabs-boxed tabs-sm'>
-						<button
-							type='button'
-							className={`tab ${tab === 'users' ? 'tab-active' : ''}`}
-							onClick={() => setTab('users')}
-						>
-							Users
-						</button>
-						<button
-							type='button'
-							className={`tab ${tab === 'roles' ? 'tab-active' : ''}`}
-							onClick={() => setTab('roles')}
-						>
-							Roles
-						</button>
-					</div>
-					<Button
-						className='btn-sm btn-ghost btn-square'
-						title='Randomize users'
-						onClick={() => setUsers(generateUsers(newRoleNames))}
-					>
-						<LuShuffle size={14} />
-					</Button>
-					<Button className='btn-sm btn-ghost btn-square text-error' title='Reset all data' onClick={reset}>
-						<LuTrash2 size={14} />
-					</Button>
-					<ThemePicker />
-				</header>
+				<Header
+					proposed={proposed}
+					tab={tab}
+					search={search}
+					onProposedChange={setProposed}
+					onTabChange={setTab}
+					onSearchChange={setSearch}
+					onRandomize={() => setUsers(generateUsers(newRoleNames))}
+					onReset={reset}
+				/>
 
 				<div className='py-4 space-y-4'>
-					<div className='flex items-center gap-3'>
-						<div className='flex-1'>
-							<h2 className='text-sm font-bold tracking-wide uppercase opacity-70'>
-								{proposed ? 'Proposed System' : 'Current System'}
-							</h2>
-							<p className='text-xs opacity-40'>
-								{proposed
-									? 'Roles are clean — orgs assigned per user'
-									: 'Roles carry org scope — permissions × orgs baked together'}
-							</p>
-						</div>
-						{tab === 'roles' && (
-							<Button className='btn-xs btn-ghost' onClick={proposed ? addNewRole : addOldRole}>
-								<LuPlus size={12} /> Add Role
-							</Button>
-						)}
-					</div>
+					<SectionHeading proposed={proposed} tab={tab} onAddRole={proposed ? addNewRole : addOldRole} />
 
 					{tab === 'users' ? (
-						filteredUsers.length ? (
-							<div className='space-y-2'>
-								{filteredUsers
-									.toSorted((a, b) => fullName(a).localeCompare(fullName(b)))
-									.map((user) => {
-										const index = safeUsers.indexOf(user)
-										return (
-											<UserCard key={user.id} user={user} onUpdate={(updated) => updateUser(index, updated)}>
-												{proposed ? (
-													<NewUserSecurity
-														user={user}
-														roleNames={newRoleNames}
-														onUpdate={(updated) => updateUser(index, updated)}
-													/>
-												) : (
-													<BadgeMultiSelect
-														label='Roles'
-														options={oldRoles.map((role) => role.name)}
-														active={getUserActiveOldRoles(user.orgRoles, oldRoles)}
-														onToggle={(name) => updateUser(index, toggleOldRoleForUser(user, name, oldRoles))}
-													/>
-												)}
-											</UserCard>
-										)
-									})}
-							</div>
-						) : (
-							<div className='text-center py-12 opacity-30 text-sm'>No users match "{search}"</div>
-						)
+						<UserList
+							users={safeUsers}
+							search={search}
+							proposed={proposed}
+							oldRoles={oldRoles}
+							roleNames={newRoleNames}
+							onUpdate={updateUser}
+						/>
 					) : proposed ? (
-						<div className='space-y-2'>
-							{newRoles
-								.filter((role) => !query || role.name.toLowerCase().includes(query))
-								.toSorted((a, b) => a.name.localeCompare(b.name))
-								.map((role) => {
-									const index = newRoles.indexOf(role)
-									return (
-										<RoleCard
-											key={index}
-											role={role}
-											onUpdate={(updated) => updateNewRole(index, updated)}
-											onDelete={newRoles.length > 1 ? () => deleteNewRole(index) : undefined}
-										/>
-									)
-								})}
-						</div>
+						<RoleList roles={newRoles} search={search} onUpdate={updateNewRole} onDelete={deleteNewRole} />
 					) : (
-						<div className='space-y-2'>
-							{oldRoles
-								.filter((role) => !query || role.name.toLowerCase().includes(query))
-								.toSorted((a, b) => a.name.localeCompare(b.name))
-								.map((role) => {
-									const index = oldRoles.indexOf(role)
-									return (
-										<RoleCard
-											key={index}
-											role={role}
-											orgs={{
-												active: role.orgs,
-												onToggle: (org) => updateOldRole(index, { ...role, orgs: toggle(role.orgs, org) }),
-											}}
-											onUpdate={(updated) => updateOldRole(index, { ...role, ...updated })}
-											onDelete={oldRoles.length > 1 ? () => deleteOldRole(index) : undefined}
-										/>
-									)
-								})}
-						</div>
+						<RoleList
+							roles={oldRoles}
+							search={search}
+							orgsFor={(role, index) => ({
+								active: role.orgs,
+								onToggle: (org) => updateOldRole(index, { ...role, orgs: toggle(role.orgs, org) }),
+							})}
+							onUpdate={(index, updated) => updateOldRole(index, { ...oldRoles[index]!, ...updated })}
+							onDelete={deleteOldRole}
+						/>
 					)}
 				</div>
 			</div>
