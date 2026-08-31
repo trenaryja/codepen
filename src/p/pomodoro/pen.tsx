@@ -78,7 +78,8 @@ const formatTime = (ms: number) => {
 const playSound = (key: string, volume: number) => {
 	const audio = new Audio((SOUNDS[key] ?? SOUNDS.completed!).url)
 	audio.volume = volume / 100
-	audio.play()
+	// autoplay policy rejects until the page has been clicked; playAlarm repeats, so one id collapses the toasts
+	audio.play().catch(() => toast.error('Sound blocked — click the page to allow audio', { id: 'audio-blocked' }))
 }
 
 const playAlarm = ({ alarmSound, alarmVolume, alarmRepeat }: Settings) => {
