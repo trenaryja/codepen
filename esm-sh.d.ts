@@ -86,6 +86,7 @@ declare module 'https://esm.sh/qrcode' {
 }
 
 declare module 'https://esm.sh/react' {
+	// eslint-disable-next-line @typescript-eslint/no-require-imports -- import-assignment is the only syntax that re-exports an `export =` module from inside a `declare module`
 	import React = require('react')
 
 	export = React

@@ -8,7 +8,7 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"fix": "prettier -w . && eslint --fix .",
-		"check": "tsc && prettier -c . && eslint . && ./penx.ts check",
+		"check": "tsc && prettier -c . && eslint . --max-warnings=0 && ./penx.ts check",
 		"get-latest": "bun update --latest -i",
 		"reinstall": "rm -rf node_modules && rm bun.lock && bun install",
 		"penx": "./penx.ts"
@@ -45,7 +45,7 @@
 		"@rolldown/plugin-babel": "^0.2.3",
 		"@tailwindcss/vite": "^4.3.3",
 		"@tanstack/react-table": "^8.21.3",
-		"@trenaryja/config": "^0.0.1",
+		"@trenaryja/config": "^0.0.3",
 		"@types/chroma-js": "^3.1.2",
 		"@types/d3-selection": "^3.0.11",
 		"@types/qrcode": "^1.5.6",

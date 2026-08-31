@@ -38,7 +38,6 @@ const PenCard = ({ slug, href, Icon }: Item) => {
 		>
 			<div ref={containerRef} className='relative overflow-hidden' style={{ aspectRatio: `${IFRAME_W}/${IFRAME_H}` }}>
 				{scale > 0 && (
-					// eslint-disable-next-line @eslint-react/dom-no-missing-iframe-sandbox -- previews are this repo's own pens, and every one of them needs allow-scripts (React) plus allow-same-origin (ThemeProvider reads localStorage); that pair is the combination a sandbox can't restrict
 					<iframe
 						src={href}
 						title={slug}

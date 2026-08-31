@@ -307,6 +307,7 @@ const downloadMap = async ({ bounds, zoom, format, style, filename }: DownloadRe
 			})
 		}
 
+		// serial on purpose: each chunk holds a full-size OffscreenCanvas, so overlapping them multiplies peak memory
 		for (const [index, chunk] of chunks.entries()) {
 			signal.throwIfAborted()
 
@@ -317,6 +318,7 @@ const downloadMap = async ({ bounds, zoom, format, style, filename }: DownloadRe
 
 			const pieces = chunkPieces({ bounds, zoom, style }, chunk)
 
+			// batch, don't flatten to one Promise.all — TILE_BATCH_SIZE caps concurrent tile fetches so Mapbox doesn't 429
 			for (let i = 0; i < pieces.length; i += TILE_BATCH_SIZE) {
 				signal.throwIfAborted()
 				await Promise.all(pieces.slice(i, i + TILE_BATCH_SIZE).map((piece) => loadTile(piece, ctx, chunkLabel)))

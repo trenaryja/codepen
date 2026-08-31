@@ -36,7 +36,7 @@
         "@rolldown/plugin-babel": "^0.2.3",
         "@tailwindcss/vite": "^4.3.3",
         "@tanstack/react-table": "^8.21.3",
-        "@trenaryja/config": "^0.0.1",
+        "@trenaryja/config": "^0.0.3",
         "@types/chroma-js": "^3.1.2",
         "@types/d3-selection": "^3.0.11",
         "@types/qrcode": "^1.5.6",
@@ -414,7 +414,7 @@
 
     "@testing-library/user-event": ["@testing-library/user-event@14.6.4", "", { "peerDependencies": { "@testing-library/dom": ">=7.21.4" } }, "sha512-QCGwP6QrjypBLwyj5cuyfVamkaIEy/XGY+1VDehbtbQqOggYmTFpFOdWR5mPz14vX8vXLMVjDHlRNBcClyO9ew=="],
 
-    "@trenaryja/config": ["@trenaryja/config@0.0.1", "", { "dependencies": { "@fullstacksjs/eslint-config": "^15.0.1", "@types/bun": "^1.3.14", "@typescript/native": "npm:typescript@^7.0.2", "eslint": "^10.8.1", "eslint-plugin-react-hooks": "^7.1.1", "local-pkg": "^1.2.1", "prettier": "^3.9.6", "typescript": "^6.0.3" } }, "sha512-xlQZILMRG/UpKLNGoG+M1M/SvQ83D17lenO1p/NcF2PluSwIG5klSP+wdqJQeS7wDyRc3LTF51BZNJWOoeKV9Q=="],
+    "@trenaryja/config": ["@trenaryja/config@0.0.3", "", { "dependencies": { "@fullstacksjs/eslint-config": "^15.0.1", "@types/bun": "^1.3.14", "@typescript/native": "npm:typescript@^7.0.2", "eslint": "^10.8.1", "eslint-plugin-react-hooks": "^7.1.1", "prettier": "^3.9.6", "typescript": "^6.0.3" } }, "sha512-eFrJc+dudMV7BeTLlU12ZAoqNOiwHlt66dlxjOUN2gyL4ivdlqywu+JpdSfhoT4/dJG/fwPgc/wdmXwApYqt+A=="],
 
     "@trenaryja/ui": ["@trenaryja/ui@0.0.1-37", "", { "dependencies": { "@colordx/core": "^5.4.3", "@floating-ui/react": "^0.27.19", "@mantine/hooks": "^9.2.1", "@types/d3-selection": "^3.0.11", "@types/d3-transition": "^3.0.9", "@types/d3-zoom": "^3.0.8", "clsx": "^2.1.1", "d3-geo": "^3.1.1", "d3-geo-projection": "^4.0.0", "d3-selection": "^3.0.0", "d3-transition": "^3.0.1", "d3-zoom": "^3.0.0", "date-fns": "^4.1.0", "react-icons": "^5.6.0", "recharts": "^3.8.1", "remeda": "^2.34.1", "sonner": "^2.0.7", "supercluster": "^8.0.1", "tailwind-merge": "^3.6.0", "topojson-client": "^3.1.0", "tw-animate-css": "^1.4.0", "type-fest": "^5.6.0" }, "peerDependencies": { "daisyui": ">=5", "react": ">=19.2.6", "react-dom": ">=19.2.6", "tailwindcss": ">=4.2.4" } }, "sha512-Z/G4Wt79gpHC7Yhv/WimQ2inHNGa09pYgle28cl1iNmkGh5U2lZamAfMTLQuHHLLQsXoY2fV17ngDMHkbGBLvA=="],
 
