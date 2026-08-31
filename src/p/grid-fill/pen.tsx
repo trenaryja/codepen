@@ -978,11 +978,11 @@ const Root = () => {
 								H={H}
 								onWidthChange={(value) => {
 									setW(value)
-									setCompactId(null)
+									void setCompactId(null)
 								}}
 								onDepthChange={(value) => {
 									setH(value)
-									setCompactId(null)
+									void setCompactId(null)
 								}}
 								recipe={selectedRecipe}
 								filtersActive={filtersActive}
@@ -994,7 +994,7 @@ const Root = () => {
 								filteredIndex={filteredIndex}
 								onSelect={(key, encoded) => {
 									setSelectedKey(key)
-									setCompactId(encoded)
+									void setCompactId(encoded)
 								}}
 								filtersActive={filtersActive}
 								onClearAll={clearAll}

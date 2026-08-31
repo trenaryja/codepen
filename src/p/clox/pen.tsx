@@ -236,7 +236,7 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 			}
 		}
 
-		load()
+		void load()
 		const id = setInterval(load, 15 * 60_000)
 
 		return () => {
@@ -307,7 +307,7 @@ const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 			if (!cancelled) bump()
 		}
 
-		load()
+		void load()
 
 		return () => {
 			cancelled = true
@@ -371,7 +371,7 @@ const useDetectedCity = () => {
 			if (!cancelled) setPending(false)
 		}
 
-		lookup()
+		void lookup()
 
 		return () => {
 			cancelled = true
@@ -1430,7 +1430,7 @@ const App = () => {
 	usePersistence({ origin, places, detected, preferences, view, cities, setCities })
 
 	useEffect(() => {
-		setViewParam(view === DEFAULTS.view ? null : view)
+		void setViewParam(view === DEFAULTS.view ? null : view)
 	}, [view, setViewParam])
 
 	// pre-fill retarget searches with the current city so a typo or misclick is a two-keystroke fix

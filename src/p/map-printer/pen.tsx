@@ -516,7 +516,7 @@ const MapPrinter = () => {
 		let created: mapboxgl.Map | null = null
 		let cancelled = false
 
-		getPosition().then((center) => {
+		void getPosition().then((center) => {
 			if (cancelled) return
 			created = createMap(container, center)
 			// Seeded here, not left to `load`: with the style cached the map can finish loading before the

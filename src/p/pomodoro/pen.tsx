@@ -345,7 +345,7 @@ function Root() {
 
 	useEffect(() => {
 		if (settings.notificationsEnabled && 'Notification' in window && Notification.permission === 'default')
-			Notification.requestPermission()
+			void Notification.requestPermission()
 	}, [settings.notificationsEnabled])
 
 	const { mm, ss } = formatTime(displayMs)

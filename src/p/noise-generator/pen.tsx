@@ -156,7 +156,7 @@ function scaleBarHeight(value: number) {
 
 function createNoiseEngine() {
 	const audioContext = new AudioContext()
-	audioContext.suspend()
+	void audioContext.suspend()
 
 	const gain = audioContext.createGain()
 	gain.gain.value = 0.5
@@ -235,7 +235,7 @@ function Root() {
 
 		return () => {
 			cancelAnimationFrame(animRef.current)
-			engine.close()
+			void engine.close()
 		}
 	}, [])
 
@@ -248,7 +248,7 @@ function Root() {
 		const engine = engineRef.current
 		if (!engine) return
 
-		engine.setPaused(isPaused)
+		void engine.setPaused(isPaused)
 		engine.setGain(volume)
 	}, [isPaused, volume])
 

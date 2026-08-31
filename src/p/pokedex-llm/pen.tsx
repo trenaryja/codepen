@@ -1095,7 +1095,7 @@ const useEngine = () => {
 	const loadModel = (id: string) => {
 		runIdRef.current += 1
 		setModelState('loading')
-		loadEngine({
+		void loadEngine({
 			id,
 			previous: engineRef.current,
 			onLoaded: (engine, loadMs) => {
@@ -1529,7 +1529,7 @@ const Root = () => {
 			if (parsed) applyPartial(parsed)
 		}
 
-		streamFilters(engine, prompt.trim(), onProgress).then((result) => {
+		void streamFilters(engine, prompt.trim(), onProgress).then((result) => {
 			// This run exclusively owns `running`, so clearing it above the staleness check is what stops
 			// a stream off a swapped-out engine leaving the prompt disabled forever.
 			setRunning(false)

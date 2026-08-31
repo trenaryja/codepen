@@ -544,7 +544,7 @@ function Root() {
 	// Browsers only let an AudioContext start from a user gesture, so create it lazily on first note
 	const getAudioContext = () => {
 		audioContextRef.current ??= new AudioContext()
-		audioContextRef.current.resume()
+		void audioContextRef.current.resume()
 		return audioContextRef.current
 	}
 
