@@ -27,6 +27,7 @@ import {
 	FaPlus,
 } from 'https://esm.sh/react-icons/fa'
 import { env } from './env'
+import type { Feature, FeatureCollection } from 'geojson'
 
 // Set via .env.local locally, Vercel env vars for deploys — see .env.example
 mapboxgl.accessToken = env.VITE_MAPBOX_TOKEN
@@ -227,7 +228,7 @@ const syncTileGrid = (map: mapboxgl.Map, show: boolean, { bounds, zoom }: MapReg
 	const { cols, rows } = boundsToGrid(bounds)
 	if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return
 
-	const line = (coords: [number, number][]): GeoJSON.Feature => ({
+	const line = (coords: [number, number][]): Feature => ({
 		type: 'Feature',
 		properties: {},
 		geometry: { type: 'LineString', coordinates: coords },
@@ -249,7 +250,7 @@ const syncTileGrid = (map: mapboxgl.Map, show: boolean, { bounds, zoom }: MapReg
 		}),
 	]
 
-	const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features }
+	const data: FeatureCollection = { type: 'FeatureCollection', features }
 
 	if (source) {
 		source.setData(data)
