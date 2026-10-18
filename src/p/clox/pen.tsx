@@ -12,8 +12,9 @@ import { CSS } from 'https://esm.sh/@dnd-kit/utilities'
 import { ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { parseAsString, parseAsStringLiteral, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
-import type { ReactNode } from 'https://esm.sh/react'
+import type { ReactNode, RefObject } from 'https://esm.sh/react'
 import { createContext, use, useEffect, useReducer, useRef, useState } from 'https://esm.sh/react'
+import { flushSync } from 'https://esm.sh/react-dom'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuChevronsDownUp, LuChevronsUpDown, LuClock, LuLocateFixed, LuMapPin } from 'https://esm.sh/react-icons/lu'
 import {
@@ -51,6 +52,14 @@ const DEMO_CITIES: City[] = [
 	{ name: 'London', country: 'GB', latitude: 51.51, longitude: -0.13, timeZone: 'Europe/London' },
 	{ name: 'Hyderabad', country: 'IN', latitude: 17.38, longitude: 78.46, timeZone: 'Asia/Kolkata' },
 ]
+
+/** Fetches `url` and validates the JSON body; a mismatch throws naming the host. */
+const fetchJson = async <Schema extends z.ZodType>(url: string, schema: Schema, init?: RequestInit) => {
+	const parsed = schema.safeParse(await (await fetch(url, init)).json())
+	if (!parsed.success)
+		throw new Error(`${new URL(url).host} sent an unexpected shape: ${z.prettifyError(parsed.error)}`)
+	return parsed.data
+}
 
 const round = (value: unknown) => Math.round(Number(value ?? 0))
 
@@ -138,8 +147,8 @@ const parseWallTime = (raw: string): number[] | null => {
 	const named = NAMED_TIMES.get(text)
 	if (named) return named
 	const match = /^(\d{1,2})(?:[ .:]?(\d{2}))?\s*(?:(a|p)\.?m?\.?)?$/.exec(text)
-	if (!match) return null
-	const hourField = match[1]!
+	const hourField = match?.[1]
+	if (!match || hourField === undefined) return null
 	const hour = Number(hourField)
 	const minute = Number(match[2] ?? 0)
 	if (hour > 23 || minute > 59) return null
@@ -193,6 +202,12 @@ const weatherGlyph = (code: number, day: boolean, className: string) => {
 	return <Icon className={className} />
 }
 
+const currentWeatherSchema = z.object({
+	current: z
+		.object({ temperature_2m: z.number(), weather_code: z.number(), apparent_temperature: z.number() })
+		.optional(),
+})
+
 // Live weather from open-meteo; no API key required.
 const useWeather = (cities: City[], fahrenheit: boolean) => {
 	const [weather, setWeather] = useState<Record<string, Weather>>({})
@@ -210,24 +225,20 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 		const load = async () => {
 			try {
 				const coords = (index: number) => keys.map((key) => key.split(',')[index]).join(',')
-				const parsed = await (
-					await fetch(
-						`https://api.open-meteo.com/v1/forecast?latitude=${coords(0)}&longitude=${coords(1)}&current=temperature_2m,weather_code,apparent_temperature${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
-					)
-				).json()
-				type Current = { temperature_2m: number; weather_code: number; apparent_temperature: number }
-
-				const list: { current?: Current }[] = Array.isArray(parsed) ? parsed : [parsed]
+				const parsed = await fetchJson(
+					`https://api.open-meteo.com/v1/forecast?latitude=${coords(0)}&longitude=${coords(1)}&current=temperature_2m,weather_code,apparent_temperature${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
+					z.union([z.array(currentWeatherSchema), currentWeatherSchema]),
+				)
+				const list = Array.isArray(parsed) ? parsed : [parsed]
 				if (cancelled) return
 				const next: Record<string, Weather> = {}
-				list.forEach(({ current }, index) => {
+				for (const [key, { current }] of R.zip(keys, list))
 					if (current)
-						next[keys[index]!] = {
+						next[key] = {
 							temperature: current.temperature_2m,
 							code: current.weather_code,
 							feelsLike: current.apparent_temperature,
 						}
-				})
 				setWeather(next)
 			} catch {
 				// weather is decoration — fail silent, cards just omit it
@@ -269,6 +280,8 @@ const FORECAST_FIELDS: Record<ForecastMode, string> = {
 }
 const forecastCache = new Map<string, ForecastCell[]>()
 
+const forecastBlockSchema = z.record(z.string(), z.array(z.unknown())).optional()
+
 const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 	const [, bump] = useReducer((count: number) => count + 1, 0)
 	const key = `${weatherKey(city)}:${fahrenheit}:${mode}`
@@ -279,11 +292,10 @@ const useForecast = (city: City, fahrenheit: boolean, mode: ForecastMode) => {
 
 		const load = async () => {
 			try {
-				const parsed: Partial<Record<ForecastMode, Record<string, unknown[]>>> = await (
-					await fetch(
-						`https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&${FORECAST_FIELDS[mode]}&timezone=auto${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
-					)
-				).json()
+				const parsed = await fetchJson(
+					`https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&${FORECAST_FIELDS[mode]}&timezone=auto${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
+					z.object({ hourly: forecastBlockSchema, daily: forecastBlockSchema }),
+				)
 				const block = parsed[mode] ?? {}
 				const at = (field: string, index: number) => round(block[field]?.[index])
 				const hourly = mode === 'hourly'
@@ -331,7 +343,7 @@ const localTimeZone = unalias(Intl.DateTimeFormat().resolvedOptions().timeZone) 
 
 // 'America/Argentina/Buenos_Aires' → 'Buenos Aires': the city a zone is named after, close enough that a
 // board seeded from the zone alone still reads like a place
-const prettifyZone = (timeZone: string) => timeZone.split('/').at(-1)!.replaceAll('_', ' ')
+const prettifyZone = (timeZone: string) => (timeZone.split('/').at(-1) ?? timeZone).replaceAll('_', ' ')
 
 const fallbackCity: City = {
 	name: prettifyZone(localTimeZone),
@@ -340,6 +352,15 @@ const fallbackCity: City = {
 	longitude: (zoneOffset(localTimeZone, Date.now()) / HOUR) * 15,
 	timeZone: localTimeZone,
 }
+
+const ipLocationSchema = z.object({
+	city: z.string().min(1),
+	latitude: z.number(),
+	longitude: z.number().nullish(),
+	country_code: z.string().nullish(),
+	// ipwho.is nests the zone under timezone.id; ipapi.co returns it flat
+	timezone: z.union([z.string(), z.object({ id: z.string() })]).nullish(),
+})
 
 // The IANA zone resolves immediately; IP geolocation refines it to a real city.
 const useDetectedCity = () => {
@@ -352,19 +373,18 @@ const useDetectedCity = () => {
 			// ipwho.is first (keyless, CORS, generous), ipapi.co as backup — both throttle bursts with 429s
 			for (const url of ['https://ipwho.is/', 'https://ipapi.co/json/']) {
 				try {
-					const data = await (await fetch(url)).json()
-					if (cancelled || typeof data?.latitude !== 'number' || !data.city) continue
+					const data = await fetchJson(url, ipLocationSchema)
+					if (cancelled) continue
 					setDetected({
 						name: data.city,
 						country: data.country_code ?? '',
 						latitude: data.latitude,
 						longitude: data.longitude ?? fallbackCity.longitude,
-						// ipwho.is nests the zone under timezone.id; ipapi.co returns it flat
-						timeZone: unalias(data.timezone?.id ?? data.timezone) ?? localTimeZone,
+						timeZone: unalias(typeof data.timezone === 'object' ? data.timezone?.id : data.timezone) ?? localTimeZone,
 					})
 					break
 				} catch {
-					// provider unreachable — try the next one
+					// provider unreachable or answered without a location — try the next one
 				}
 			}
 
@@ -379,6 +399,21 @@ const useDetectedCity = () => {
 	}, [])
 	return { detected, pending }
 }
+
+const geocodingSchema = z.object({
+	results: z
+		.array(
+			z.object({
+				name: z.string(),
+				admin1: z.string().optional(),
+				country_code: z.string().optional(),
+				latitude: z.number(),
+				longitude: z.number(),
+				timezone: z.string().optional(),
+			}),
+		)
+		.optional(),
+})
 
 // open-meteo geocoding, no API key required.
 const useCitySearch = (query: string) => {
@@ -408,20 +443,11 @@ const useCitySearch = (query: string) => {
 		const controller = new AbortController()
 		const search = async () => {
 			try {
-				type Result = {
-					name: string
-					admin1?: string
-					country_code?: string
-					latitude: number
-					longitude: number
-					timezone?: string
-				}
-
-				const parsed: { results?: Result[] } = await (
-					await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(lower)}&count=8`, {
-						signal: controller.signal,
-					})
-				).json()
+				const parsed = await fetchJson(
+					`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(lower)}&count=8`,
+					geocodingSchema,
+					{ signal: controller.signal },
+				)
 				const cities = (parsed.results ?? [])
 					.filter((result) => result.timezone)
 					.map(({ name, admin1, country_code: countryCode, latitude, longitude, timezone }) => ({
@@ -487,8 +513,12 @@ type Settings = Preferences & {
 	remove: (id: string) => void
 }
 
-const SettingsContext = createContext<Settings>(null!)
-const useSettings = () => use(SettingsContext)
+const SettingsContext = createContext<Settings | null>(null)
+const useSettings = () => {
+	const settings = use(SettingsContext)
+	if (!settings) throw new Error('useSettings needs a <SettingsContext> provider above it')
+	return settings
+}
 
 const loadStored = () => {
 	try {
@@ -756,6 +786,7 @@ const Editable = ({
 	className?: string
 }) => {
 	const [draft, setDraft] = useState<string | null>(null)
+	const inputRef = useRef<HTMLInputElement>(null)
 	// display and input share one box so swapping shifts nothing — 1lh is exactly one line of the caller's own text size
 	const shared = `h-[1lh] leading-tight field-sizing-content ${className ?? ''}`
 	if (draft === null)
@@ -764,7 +795,10 @@ const Editable = ({
 				type='button'
 				title={title}
 				className={`flex cursor-text items-center truncate text-left hover:opacity-75 ${shared}`}
-				onClick={() => setDraft(edit)}
+				onClick={() => {
+					flushSync(() => setDraft(edit))
+					inputRef.current?.focus()
+				}}
 			>
 				{display}
 			</button>
@@ -774,7 +808,7 @@ const Editable = ({
 			className={`input px-[0.15em] ${shared}`}
 			value={draft}
 			placeholder={placeholder}
-			autoFocus
+			ref={inputRef}
 			onChange={(event) => setDraft(event.target.value)}
 			onBlur={() => {
 				commit(draft)
@@ -921,11 +955,13 @@ const PlaceCard = ({
 			// Translate, not Transform — Transform includes a scale that stretches cards when
 			// an expanded card and a collapsed one trade differently-sized slots mid-drag
 			style={{ transform: CSS.Translate.toString(transform), transition }}
-			{...attributes}
+			role='button'
+			tabIndex={0}
+			{...R.omit(attributes, ['role', 'tabIndex'])}
 			{...listeners}
 			className={`card group cursor-grab touch-manipulation select-none bg-base-200 active:cursor-grabbing ${isDragging ? 'z-10 opacity-60' : ''}`}
 			onClick={expandOnClick(() => expandable && onToggle())}
-			// useSortable's attributes already make the card focusable and announce it as a button; this is
+			// role and tabIndex make the card focusable and announce it as a button; this is
 			// what makes it operable. The currentTarget check is the keyboard twin of expandOnClick's guard —
 			// a nested button or input gets its own Enter, and the press must not also toggle the card.
 			onKeyDown={(event) => {
@@ -1083,12 +1119,11 @@ const BandsView = ({
 	onSettle: (target: number | null) => void
 }) => {
 	const { instant } = useSettings()
-	const surfaceRef = useRef<HTMLDivElement>(null)
 	// ±12h around now, floored to the scrub grain so bars and labels don't creep a hair every tick
 	const start = Math.floor(now / QUARTER_HOUR) * QUARTER_HOUR - DAY / 2
 
-	const instantAt = (clientX: number) => {
-		const { left, width } = surfaceRef.current!.getBoundingClientRect()
+	const instantAt = (surface: HTMLElement, clientX: number) => {
+		const { left, width } = surface.getBoundingClientRect()
 		return start + Math.min(1, Math.max(0, (clientX - left) / width)) * DAY
 	}
 
@@ -1098,16 +1133,17 @@ const BandsView = ({
 			{/* Rows share the leftover height; the container is the drag surface so one line
 			    crosses every bar, gaps included. Keyboard scrubbing stays on the global arrow keys */}
 			<div
-				ref={surfaceRef}
 				className='relative flex grow cursor-ew-resize touch-none select-none flex-col gap-2'
 				onPointerDown={(event) => {
 					event.currentTarget.setPointerCapture(event.pointerId)
-					onScrub(instantAt(event.clientX))
+					onScrub(instantAt(event.currentTarget, event.clientX))
 				}}
 				onPointerMove={(event) => {
-					if (event.buttons) onScrub(instantAt(event.clientX))
+					if (event.buttons) onScrub(instantAt(event.currentTarget, event.clientX))
 				}}
-				onPointerUp={(event) => onSettle(Math.round(instantAt(event.clientX) / QUARTER_HOUR) * QUARTER_HOUR)}
+				onPointerUp={(event) =>
+					onSettle(Math.round(instantAt(event.currentTarget, event.clientX) / QUARTER_HOUR) * QUARTER_HOUR)
+				}
 			>
 				{places.map((place) => (
 					<BandRow key={place.id} label={place.label} city={place.city} start={start} />
@@ -1308,6 +1344,7 @@ const SearchDialog = ({
 	detectPending,
 	onPick,
 	onClose,
+	inputRef,
 }: {
 	query: string
 	onQuery: (query: string) => void
@@ -1317,6 +1354,7 @@ const SearchDialog = ({
 	detectPending: boolean
 	onPick: (city: City) => void
 	onClose: () => void
+	inputRef: RefObject<HTMLInputElement | null>
 }) => {
 	const { matches, searching } = useCitySearch(query)
 	return (
@@ -1327,7 +1365,7 @@ const SearchDialog = ({
 						className='grow'
 						placeholder='search any city…'
 						value={query}
-						autoFocus
+						ref={inputRef}
 						onFocus={(event) => event.target.select()}
 						onChange={(event) => onQuery(event.target.value)}
 						onKeyDown={(event) => {
@@ -1372,6 +1410,28 @@ const SearchDialog = ({
 	)
 }
 
+const useSearch = () => {
+	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
+	const [query, setQuery] = useState('')
+	const searchInputRef = useRef<HTMLInputElement>(null)
+
+	// pre-fill retarget searches with the current city so a typo or misclick is a two-keystroke fix
+	const openSearch = (mode: SearchMode, prefill = '') => {
+		flushSync(() => {
+			setSearchMode(mode)
+			setQuery(prefill)
+		})
+		searchInputRef.current?.focus()
+	}
+
+	const closeSearch = () => {
+		setSearchMode(null)
+		setQuery('')
+	}
+
+	return { searchMode, query, setQuery, searchInputRef, openSearch, closeSearch }
+}
+
 const App = () => {
 	// The board and the view are shareable, so they ride in the URL; the rest are your preferences and stay
 	// on this device. Replace, not push — thirty scrubs shouldn't cost thirty presses of the back button
@@ -1388,8 +1448,7 @@ const App = () => {
 	const [places, setPlaces] = useState(() => toPlaces(startEntries(origin, fallbackCity)))
 	const [preferences, setPreferences] = useState(origin.preferences)
 	const [view, setView] = useState(origin.view)
-	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
-	const [query, setQuery] = useState('')
+	const { searchMode, query, setQuery, searchInputRef, openSearch, closeSearch } = useSearch()
 	const [expandedIds, setExpandedIds] = useState<string[]>([])
 
 	const { detected, pending: detectPending } = useDetectedCity()
@@ -1408,11 +1467,6 @@ const App = () => {
 		places.map((place) => place.city),
 		preferences.fahrenheit,
 	)
-
-	const closeSearch = () => {
-		setSearchMode(null)
-		setQuery('')
-	}
 
 	const { animateTo, scrubToWall } = useScrubber({
 		now,
@@ -1433,12 +1487,6 @@ const App = () => {
 	useEffect(() => {
 		void setViewParam(view === DEFAULTS.view ? null : view)
 	}, [view, setViewParam])
-
-	// pre-fill retarget searches with the current city so a typo or misclick is a two-keystroke fix
-	const openSearch = (mode: SearchMode, prefill = '') => {
-		setSearchMode(mode)
-		setQuery(prefill)
-	}
 
 	const pickCity = (city: City) => {
 		if (searchMode?.kind === 'place')
@@ -1512,6 +1560,7 @@ const App = () => {
 							detectPending={detectPending}
 							onPick={pickCity}
 							onClose={closeSearch}
+							inputRef={searchInputRef}
 						/>
 					)}
 				</div>
@@ -1520,7 +1569,9 @@ const App = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('#root is missing from index.html')
+createRoot(rootElement).render(
 	<NuqsAdapter>
 		<App />
 	</NuqsAdapter>,
