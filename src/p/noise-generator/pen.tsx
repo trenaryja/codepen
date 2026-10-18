@@ -107,7 +107,10 @@ const SPECTRUM_ENTRIES = SPECTRUM.map((entry, i) => ({
 function getSpectrumNeighbors(position: number) {
 	const scaled = position * (SPECTRUM_ENTRIES.length - 1)
 	const i = Math.min(Math.floor(scaled), SPECTRUM_ENTRIES.length - 2)
-	return { lower: SPECTRUM_ENTRIES[i]!, upper: SPECTRUM_ENTRIES[i + 1]!, t: scaled - i } // i clamped to length - 2
+	const lower = SPECTRUM_ENTRIES[i]
+	const upper = SPECTRUM_ENTRIES[i + 1]
+	if (!lower || !upper) throw new Error(`noise-generator: no spectrum entries around position ${position}`)
+	return { lower, upper, t: scaled - i }
 }
 
 function fillBlendedBuffer(position: number, samples: Float32Array) {
@@ -118,7 +121,7 @@ function fillBlendedBuffer(position: number, samples: Float32Array) {
 
 	const temp = new Float32Array(samples.length)
 	upper.generate(temp)
-	for (let i = 0; i < samples.length; i++) samples[i] = samples[i]! * (1 - t) + temp[i]! * t
+	for (const [i, sample] of samples.entries()) samples[i] = sample * (1 - t) + (temp[i] ?? 0) * t
 }
 
 const SVG_HEIGHT = 50
@@ -135,7 +138,7 @@ function buildBlendedColorArray(position: number) {
 	if (t === 0) return lowerColors
 
 	const upperColors = chroma.scale([...upper.colors]).colors(256)
-	return lowerColors.map((color, i) => chroma.mix(color, upperColors[i]!, t).hex()) // both scales have 256 colors
+	return lowerColors.map((color, i) => chroma.mix(color, upperColors[i] ?? color, t).hex())
 }
 
 function getSpectrumLabel(position: number) {
@@ -218,14 +221,15 @@ function Root() {
 			const data = engine.getFrequencyData()
 			const colors = colorArrayRef.current
 
-			for (let i = 0; i < data.length; i++) {
+			for (const [i, value] of data.entries()) {
 				const bar = barsRef.current[i]
 				if (!bar) continue
 
-				const barHeight = scaleBarHeight(data[i]!)
+				const barHeight = scaleBarHeight(value)
 				bar.setAttribute('height', String(barHeight))
 				bar.setAttribute('y', String((SVG_HEIGHT - barHeight) / 2))
-				bar.setAttribute('fill', colors[data[i]!]!) // byte values index the 256-color array
+				const fill = colors[value] // byte values index the 256-color array
+				if (fill) bar.setAttribute('fill', fill)
 			}
 
 			animRef.current = requestAnimationFrame(animate)
@@ -311,4 +315,6 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(<Root />)
