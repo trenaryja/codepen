@@ -7,7 +7,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Plugin } from 'vite'
 import { defineConfig, transformWithOxc } from 'vite'
-import type { PenMeta } from './src/pen-meta.ts'
+import type { IconType } from 'react-icons'
+import { z } from 'zod'
+import { penMetaSchema } from './src/pen-meta.ts'
 
 const penUrlRe = /^\/(p|t)\/([^#/?]+)\/?(\?.*)?$/
 
@@ -30,13 +32,19 @@ function parseIcon(icon: string) {
  * Reads a pen's `meta.ts`. The sidecar is pure data (its only import is a type), so Oxc
  * type-stripping is enough — no bundling, and the same path serves dev and build.
  */
-async function readPenMeta(base: string): Promise<PenMeta | undefined> {
+async function readPenMeta(base: string) {
 	const metaPath = `${base}/meta.ts`
 	if (!existsSync(metaPath)) return undefined
 
 	const { code } = await transformWithOxc(readFileSync(metaPath, 'utf-8'), 'meta.ts', { lang: 'ts' })
-	return (await import(`data:text/javascript,${encodeURIComponent(code)}`)).default
+	const metaModule = z
+		.object({ default: penMetaSchema })
+		.safeParse(await import(`data:text/javascript,${encodeURIComponent(code)}`))
+	if (!metaModule.success) throw new Error(`${metaPath}: ${z.prettifyError(metaModule.error)}`)
+	return metaModule.data.default
 }
+
+const isIconType = (value: unknown): value is IconType => typeof value === 'function'
 
 /** Renders a pen's icon to an inline data URI for use as its favicon. */
 async function resolveIcon(base: string) {
@@ -44,13 +52,14 @@ async function resolveIcon(base: string) {
 	if (!meta?.icon) return DEFAULT_ICON
 
 	const { pack, name } = parseIcon(meta.icon)
-	const icons = await import(`react-icons/${pack}`)
-	if (!icons[name]) throw new Error(`${base}/meta.ts: no icon "${name}" in react-icons/${pack}`)
+	const icons = z.record(z.string(), z.unknown()).parse(await import(`react-icons/${pack}`))
+	const Icon = icons[name]
+	if (!isIconType(Icon)) throw new Error(`${base}/meta.ts: no icon "${name}" in react-icons/${pack}`)
 
 	// An explicit `color` renders as an inline style, which beats the stylesheet; without one the
 	// glyph follows the reader's light/dark preference. The `<style>` can't be passed as children —
 	// `GenIcon` overwrites them with the icon's own paths.
-	const svg = renderToStaticMarkup(createElement(icons[name], { size: 32, color: meta.color }))
+	const svg = renderToStaticMarkup(createElement(Icon, { size: 32, color: meta.color }))
 	return `data:image/svg+xml,${encodeURIComponent(svg.replace('>', `>${COLOR_SCHEME_STYLE}`))}`
 }
 
@@ -109,19 +118,16 @@ ${fragment}
 		transformIndexHtml: {
 			order: 'pre',
 			handler(html, ctx) {
-				const match = /\/src\/(p|t)\/([^/]+)\/index\.html$/.exec(ctx.filename)
-				return match ? buildWrapper(match[2]!, match[1]!) : html
+				const [, dir, slug] = /\/src\/(p|t)\/([^/]+)\/index\.html$/.exec(ctx.filename) ?? []
+				return dir && slug ? buildWrapper(slug, dir) : html
 			},
 		},
 
 		configureServer(server) {
 			server.middlewares.use((req, res, next) => {
 				const url = req.url ?? ''
-				const match = penUrlRe.exec(url)
-				if (!match) return next()
-
-				const dir = match[1]!
-				const slug = match[2]!
+				const [, dir, slug] = penUrlRe.exec(url) ?? []
+				if (!dir || !slug) return next()
 				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return next()
 
 				buildWrapper(slug, dir)
@@ -156,7 +162,10 @@ const esmShToNpm = (url: string) =>
 
 function esmShToLocal(id: string) {
 	const npmSpec = esmShToNpm(id)
-	const pkgRoot = npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]!
+	const pkgRoot = npmSpec
+		.split('/')
+		.slice(0, npmSpec.startsWith('@') ? 2 : 1)
+		.join('/')
 	return existsSync(resolve(import.meta.dirname, 'node_modules', pkgRoot)) ? npmSpec : undefined
 }
 

@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 // Every `react-icons` pack, as `pack/IconName`. The pack prefix is explicit because
 // `fa`/`fa6`, `io`/`io5`, and `hi`/`hi2` all share a capital-letter prefix.
 export type PenIcon =
@@ -33,8 +35,11 @@ export type PenIcon =
 	| `vsc/${keyof typeof import('react-icons/vsc')}`
 	| `wi/${keyof typeof import('react-icons/wi')}`
 
-export type PenMeta = {
-	icon: PenIcon
+export const penMetaSchema = z.object({
+	icon: z.string(),
 	/** Overrides the default, which follows the reader's `prefers-color-scheme`. */
-	color?: string
-}
+	color: z.string().optional(),
+})
+
+/** `meta.ts` is typechecked against the icon union; the schema checks the shape the build reads. */
+export type PenMeta = z.infer<typeof penMetaSchema> & { icon: PenIcon }
