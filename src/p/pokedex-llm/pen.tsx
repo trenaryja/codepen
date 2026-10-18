@@ -90,6 +90,8 @@ type RangeValue = { level: Level } | { min?: number; max?: number }
 
 type FilterValue = boolean | string | RangeValue | string[]
 
+const textOf = (value: FilterValue) => (typeof value === 'string' ? value : '')
+
 type Filters = Record<string, FilterValue>
 
 type FieldBase = { id: string; label: string; width: number; hint: string }
@@ -217,7 +219,7 @@ const deriveProfile = (profile: RawMon['profile'] | undefined) => ({
 })
 
 const deriveMon = (raw: RawMon): Mon => {
-	const stats = R.mapValues(STAT_KEYS, (key) => raw.base?.[key] ?? 0)
+	const stats = R.mapValues(STAT_KEYS, (key) => raw.base[key] ?? 0)
 	return {
 		id: raw.id,
 		name: raw.name.english,
@@ -231,8 +233,8 @@ const deriveMon = (raw: RawMon): Mon => {
 		legendary: LEGENDARY.has(raw.id),
 		mythical: MYTHICAL.has(raw.id),
 		finalForm: !raw.evolution?.next,
-		species: raw.species ?? '',
-		description: raw.description ?? '',
+		species: raw.species,
+		description: raw.description,
 	}
 }
 
@@ -283,7 +285,7 @@ const matchField = (field: Field, mon: Mon, value: FilterValue) => {
 		return (min == null || own >= min) && (max == null || own <= max)
 	}
 	if (field.kind === 'bool') return field.get(mon) === value
-	const needle = String(value).trim().toLowerCase()
+	const needle = textOf(value).trim().toLowerCase()
 	if (!needle) return true
 	return field.get(mon).toLowerCase().includes(needle)
 }
@@ -805,7 +807,7 @@ const summarize = (field: Field, value: FilterValue): string => {
 		return min != null ? `≥ ${min}` : `≤ ${max}`
 	}
 	if (field.kind === 'bool') return value ? 'yes' : 'no'
-	return `“${value}”`
+	return `“${textOf(value)}”`
 }
 
 const FilterPanel = ({
@@ -1015,7 +1017,10 @@ type StreamResult =
 
 const toRejection = (final: unknown): Rejection | null => {
 	if (!R.isPlainObject(final) || final.ok !== false) return null
-	return { reason: String(final.reason ?? 'off_domain'), message: String(final.message ?? '') }
+	return {
+		reason: typeof final.reason === 'string' ? final.reason : 'off_domain',
+		message: typeof final.message === 'string' ? final.message : '',
+	}
 }
 
 const streamFilters = async (

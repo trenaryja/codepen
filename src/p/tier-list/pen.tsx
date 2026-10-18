@@ -799,7 +799,7 @@ const ImportDialog = () => {
 						const file = event.dataTransfer.files[0]
 						if (file?.type !== 'application/json') return toast.error('Please drop a valid JSON file.')
 						const reader = new FileReader()
-						reader.onload = (loadEvent) => setJsonInput(String(loadEvent.target?.result ?? ''))
+						reader.onload = () => setJsonInput(typeof reader.result === 'string' ? reader.result : '')
 						reader.readAsText(file)
 					}}
 				>

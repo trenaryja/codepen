@@ -444,7 +444,8 @@ const TagChip = ({ id, icon, active, onToggle, count }: TagChipProps) => {
 		middleware: [offset(6), flip(), shift({ padding: 8 })],
 		whileElementsMounted: autoUpdate,
 	})
-	const { setReference, setFloating } = refs
+	const setReference = (node: Element | null) => refs.setReference(node)
+	const setFloating = (node: HTMLElement | null) => refs.setFloating(node)
 	const hover = useHover(context, { mouseOnly: true, delay: { open: 120, close: 0 } })
 	const focus = useFocus(context)
 	const dismiss = useDismiss(context)
@@ -570,7 +571,7 @@ const ExportButton = ({ recipe, W, H }: { recipe: Recipe | null; W: number; H: n
 	}
 
 	return (
-		<Button className='btn-square' onClick={download} disabled={busy || !recipe} title='Download 3MF'>
+		<Button className='btn-square' onClick={() => void download()} disabled={busy || !recipe} title='Download 3MF'>
 			<LuDownload />
 		</Button>
 	)

@@ -529,7 +529,7 @@ const Root = () => {
 								<svg ref={svgRef} className='shadow' />
 								{canOptimize && <span className='text-xs opacity-40 font-mono truncate max-w-40'>{debouncedText}</span>}
 							</div>
-							{canOptimize && optInfo && (
+							{canOptimize && (
 								<div className='flex flex-col items-center gap-2'>
 									<svg ref={svgOptRef} className='shadow' />
 									<span className='text-xs opacity-40 font-mono truncate max-w-40'>{optText}</span>

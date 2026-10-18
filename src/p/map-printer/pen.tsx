@@ -206,7 +206,8 @@ const encodeChunk = async (canvas: OffscreenCanvas, format: Format, chunk: Chunk
 		throw new Error(
 			`convertToBlob failed for chunk r${chunk.chunkY}c${chunk.chunkX} (${canvas.width}x${canvas.height}px). ` +
 				`Detected limits: ${CANVAS_MAX_TILES_PER_DIM * TILE_SIZE}px/dim, ${CANVAS_MAX_TILE_AREA} tile area. ` +
-				`${error instanceof Error ? error.message : error}`,
+				`${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
 		)
 	}
 }
@@ -413,7 +414,7 @@ const LocateButton = ({ map }: { map: mapboxgl.Map | null }) => (
 	<Button
 		className='btn-square'
 		title='Go to current location'
-		onClick={() => getPosition().then((center) => map?.flyTo({ center }))}
+		onClick={() => void getPosition().then((center) => map?.flyTo({ center }))}
 	>
 		<FaCrosshairs />
 	</Button>

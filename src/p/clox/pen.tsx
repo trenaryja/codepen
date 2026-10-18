@@ -237,7 +237,7 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 		}
 
 		void load()
-		const id = setInterval(load, 15 * 60_000)
+		const id = setInterval(() => void load(), 15 * 60_000)
 
 		return () => {
 			cancelled = true
@@ -406,7 +406,7 @@ const useCitySearch = (query: string) => {
 		if (lower.length < 2) return
 		const utcMatch = 'utc'.startsWith(lower) ? [UTC_CITY] : []
 		const controller = new AbortController()
-		const id = setTimeout(async () => {
+		const search = async () => {
 			try {
 				type Result = {
 					name: string
@@ -436,7 +436,8 @@ const useCitySearch = (query: string) => {
 			} catch {
 				// aborted or offline — keep previous matches
 			}
-		}, 250)
+		}
+		const id = setTimeout(() => void search(), 250)
 
 		return () => {
 			clearTimeout(id)
@@ -637,7 +638,7 @@ const usePersistence = ({
 	preferences: Preferences
 	view: View
 	cities: string | null
-	setCities: (cities: string | null) => void
+	setCities: (cities: string | null) => Promise<unknown>
 }) => {
 	const entries = places.map(({ label, city }) => ({ label, city }))
 	const initialEntries = startEntries(origin, detected)
@@ -656,7 +657,7 @@ const usePersistence = ({
 	const initialEncoded = initialEntries.map(encodeEntry).join(';')
 	useEffect(() => {
 		// once the URL carries a board it keeps carrying one, right down to the empty board that clears it
-		if (encoded !== initialEncoded || cities) setCities(encoded || null)
+		if (encoded !== initialEncoded || cities) void setCities(encoded || null)
 	}, [encoded, initialEncoded, cities, setCities])
 }
 
