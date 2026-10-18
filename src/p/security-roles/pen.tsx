@@ -390,7 +390,7 @@ const NewUserSecurity = ({
 					<Button tabIndex={0} className='btn-xs btn-ghost opacity-40 hover:opacity-100'>
 						<LuPlus size={10} /> org
 					</Button>
-					<ul tabIndex={0} className='dropdown-content menu bg-base-300 rounded-box z-20 w-36 p-1 shadow-lg'>
+					<ul tabIndex={-1} className='dropdown-content menu bg-base-300 rounded-box z-20 w-36 p-1 shadow-lg'>
 						{availableOrgs.map((org) => (
 							<li key={org}>
 								<button type='button' className='text-xs' onClick={() => addOrg(org)}>
