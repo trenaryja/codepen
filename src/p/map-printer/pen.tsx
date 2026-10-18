@@ -15,6 +15,7 @@ import {
 } from 'https://esm.sh/@trenaryja/ui'
 import mapboxgl from 'https://esm.sh/mapbox-gl'
 import { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
+import { flushSync } from 'https://esm.sh/react-dom'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
 	FaBorderAll,
@@ -362,6 +363,7 @@ const DownloadButton = ({ map, bounds, zoom, format, style }: DownloadButtonProp
 	const [downloading, setDownloading] = useState(false)
 	// Non-null is also what opens the dialog: there is no draft filename unless one is being edited
 	const [draft, setDraft] = useState<string | null>(null)
+	const filenameRef = useRef<HTMLInputElement>(null)
 
 	const save = async (filename: string) => {
 		setDraft(null)
@@ -380,7 +382,11 @@ const DownloadButton = ({ map, bounds, zoom, format, style }: DownloadButtonProp
 				className='btn-square'
 				disabled={downloading}
 				title='Download'
-				onClick={() => setDraft(defaultFilename({ map, bounds, zoom, format }))}
+				onClick={() => {
+					// Modal keeps its children mounted while closed, so autoFocus fires before the dialog opens
+					flushSync(() => setDraft(defaultFilename({ map, bounds, zoom, format })))
+					filenameRef.current?.focus()
+				}}
 			>
 				{downloading ? <span className='loading loading-spinner loading-xs' /> : <FaDownload />}
 			</Button>
@@ -395,8 +401,8 @@ const DownloadButton = ({ map, bounds, zoom, format, style }: DownloadButtonProp
 				>
 					<Field label='Filename'>
 						<Input
+							ref={filenameRef}
 							className='w-full'
-							autoFocus
 							value={draft ?? ''}
 							onChange={(event) => setDraft(event.target.value)}
 						/>

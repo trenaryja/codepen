@@ -91,6 +91,10 @@ declare module 'https://esm.sh/react-advanced-cropper' {
 	export * from 'react-advanced-cropper'
 }
 
+declare module 'https://esm.sh/react-dom' {
+	export * from 'react-dom'
+}
+
 declare module 'https://esm.sh/react-dom/client' {
 	export * from 'react-dom/client'
 }
