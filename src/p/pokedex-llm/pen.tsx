@@ -1,26 +1,15 @@
-/**
- * Pinned to @tanstack/react-table v8 — decided 2026-08-11, revisit 2026-09-22.
- * v9's headline open bug is React Compiler + table state going stale (TanStack/table#6524), and this
- * pen's build is exactly that setup. v9 also costs lines for a single table (`tableFeatures()`,
- * `TFeatures` threaded through every generic) and its wins are million-row wins; this table is 898.
- * Revisit when #6524 closes, or sooner if a second table lands here.
- */
-
-import type {
-	ColumnDef,
-	ColumnFiltersState,
-	SortingState,
-	Table,
-	VisibilityState,
-} from 'https://esm.sh/@tanstack/react-table@8'
+import type { ColumnDef, ColumnVisibilityState, ReactTable, SortingState } from 'https://esm.sh/@tanstack/react-table'
 import {
-	flexRender,
-	getCoreRowModel,
-	getFilteredRowModel,
-	getSortedRowModel,
-	useReactTable,
-} from 'https://esm.sh/@tanstack/react-table@8'
-import { useVirtualizer } from 'https://esm.sh/@tanstack/react-virtual'
+	columnFilteringFeature,
+	columnVisibilityFeature,
+	createFilteredRowModel,
+	createSortedRowModel,
+	rowSortingFeature,
+	sortFn_alphanumeric,
+	sortFn_text,
+	tableFeatures,
+	useTable,
+} from 'https://esm.sh/@tanstack/react-table'
 import { Button, Input, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
@@ -37,6 +26,7 @@ import {
 	LuX,
 } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
+import { Virtualizer } from 'https://esm.sh/virtua'
 
 // PokéAPI has `color` and the legendary/mythical flags; the Purukitto dump doesn't.
 // Rather than ship a data file (pens are 3 files, copy-pasteable to CodePen) these are
@@ -904,14 +894,23 @@ const cellFor = (field: Field) => {
 	return cell((mon) => <span className='truncate opacity-70'>{field.get(mon)}</span>)
 }
 
-const COLUMNS: ColumnDef<Mon>[] = FIELDS.map((field) => ({
+/** `'auto'` sorting only resolves the fns registered here; these are the ones it picks for string columns. */
+const features = tableFeatures({
+	rowSortingFeature,
+	columnFilteringFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	filteredRowModel: createFilteredRowModel(),
+	sortFns: { alphanumeric: sortFn_alphanumeric, text: sortFn_text },
+})
+
+const COLUMNS: ColumnDef<typeof features, Mon>[] = FIELDS.map((field) => ({
 	id: field.id,
 	header: field.label,
-	size: field.width,
 	accessorFn: (mon: Mon) => (field.kind === 'enum' ? field.get(mon).join(',') : field.get(mon)),
 	enableSorting: field.kind !== 'enum',
 	cell: cellFor(field),
-	filterFn: (row, id, value) => matchField(FIELD_BY_ID[id]!, row.original, value as FilterValue),
+	filterFn: (row, id, value) => matchField(FIELD_BY_ID[id]!, row.original, value),
 }))
 
 const HeaderFilter = ({
@@ -1243,43 +1242,17 @@ const PromptHeader = ({
 	)
 }
 
-/**
- * `sorting` and `columnVisibility` come in as props even though `table` already holds both. The table
- * object is one instance for the life of the pen, so React Compiler sees an unchanging dependency and
- * would happily hand this component its first, empty render forever — the same staleness the note at
- * the top of the file describes for v9. Reading the state directly is what makes the cache key move.
- *
- * For the same reason the three reads off `table` sit above `useVirtualizer`: the compiler cannot
- * cache across a hook call, so anything derived before one is recomputed every render.
- */
 type TableGridProps = {
-	table: Table<Mon>
-	sorting: SortingState
-	columnVisibility: VisibilityState
+	table: ReactTable<typeof features, Mon>
 	filters: Filters
 	setFilter: (id: string, value: FilterValue | undefined) => void
 }
 
-const TableGrid = ({ table, sorting, columnVisibility, filters, setFilter }: TableGridProps) => {
+const TableGrid = ({ table, filters, setFilter }: TableGridProps) => {
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const headers = table.getHeaderGroups()[0]?.headers ?? []
-	const tableRows = table.getRowModel().rows
-	const gridTemplate = FIELDS.filter((field) => columnVisibility[field.id] ?? true)
-		.map((field) => `${field.width}px`)
-		.join(' ')
-
-	const virtualizer = useVirtualizer({
-		count: tableRows.length,
-		getScrollElement: () => scrollRef.current,
-		estimateSize: () => 40,
-		overscan: 12,
-	})
-
-	// `getTotalSize()` reads virtualizer internals the compiler cannot see, and `useVirtualizer`
-	// hands back one identity-stable instance — so a memo keyed on `virtualizer` alone caches the
-	// first height forever and the scroll area keeps its unfiltered size. Naming `tableRows.length`
-	// is what moves the cache key when a filter changes.
-	const totalSize = tableRows.length > 0 ? virtualizer.getTotalSize() : 0
+	const fields = headers.map((header) => FIELD_BY_ID[header.column.id]!) // column ids are generated from FIELDS
+	const gridTemplate = fields.map((field) => `${field.width}px`).join(' ')
 
 	return (
 		<div ref={scrollRef} className='flex-1 overflow-auto'>
@@ -1288,9 +1261,8 @@ const TableGrid = ({ table, sorting, columnVisibility, filters, setFilter }: Tab
 					className='sticky top-0 z-20 grid bg-base-200 border-b border-base-content/15 text-xs font-semibold'
 					style={{ gridTemplateColumns: gridTemplate }}
 				>
-					{headers.map((header) => {
-						const field = FIELD_BY_ID[header.column.id]! // column ids are generated from FIELDS
-						const sorted = sorting.find((entry) => entry.id === header.column.id)
+					{headers.map((header, i) => {
+						const sorted = header.column.getIsSorted()
 						return (
 							<div key={header.id} className='flex items-center gap-1 px-2 py-1.5 min-w-0'>
 								<button
@@ -1298,39 +1270,32 @@ const TableGrid = ({ table, sorting, columnVisibility, filters, setFilter }: Tab
 									className={`truncate text-left ${header.column.getCanSort() ? 'cursor-pointer hover:text-primary' : 'cursor-default'}`}
 									onClick={header.column.getToggleSortingHandler()}
 								>
-									{flexRender(header.column.columnDef.header, header.getContext())}
+									<table.FlexRender header={header} />
 								</button>
-								{sorted?.desc === false && <LuChevronUp size={11} className='text-primary shrink-0' />}
-								{sorted?.desc === true && <LuChevronDown size={11} className='text-primary shrink-0' />}
+								{sorted === 'asc' && <LuChevronUp size={11} className='text-primary shrink-0' />}
+								{sorted === 'desc' && <LuChevronDown size={11} className='text-primary shrink-0' />}
 								<span className='flex-1' />
-								<HeaderFilter field={field} value={filters[field.id]} setFilter={setFilter} />
+								<HeaderFilter field={fields[i]!} value={filters[header.column.id]} setFilter={setFilter} />
 							</div>
 						)
 					})}
 				</div>
 
-				<div style={{ height: totalSize, position: 'relative' }}>
-					{virtualizer.getVirtualItems().map((virtualRow) => {
-						const row = tableRows[virtualRow.index]! // virtualizer only yields in-range indexes
-						return (
-							<div
-								key={row.id}
-								className='grid absolute left-0 top-0 w-full items-center border-b border-base-content/5 text-xs hover:bg-base-200/60'
-								style={{
-									gridTemplateColumns: gridTemplate,
-									height: virtualRow.size,
-									transform: `translateY(${virtualRow.start}px)`,
-								}}
-							>
-								{row.getVisibleCells().map((visibleCell) => (
-									<div key={visibleCell.id} className='px-2 min-w-0 truncate'>
-										{flexRender(visibleCell.column.columnDef.cell, visibleCell.getContext())}
-									</div>
-								))}
-							</div>
-						)
-					})}
-				</div>
+				<Virtualizer scrollRef={scrollRef} data={table.getRowModel().rows} itemSize={40} bufferSize={12 * 40}>
+					{(row) => (
+						<div
+							key={row.id}
+							className='grid h-10 items-center border-b border-base-content/5 text-xs hover:bg-base-200/60'
+							style={{ gridTemplateColumns: gridTemplate }}
+						>
+							{row.getVisibleCells().map((visibleCell) => (
+								<div key={visibleCell.id} className='px-2 min-w-0 truncate'>
+									<table.FlexRender cell={visibleCell} />
+								</div>
+							))}
+						</div>
+					)}
+				</Virtualizer>
 			</div>
 		</div>
 	)
@@ -1376,20 +1341,10 @@ const JsonDrawer = ({ streamText, onClose }: { streamText: string; onClose: () =
 	</div>
 )
 
-/**
- * React Compiler caches a derived value against the values it references, and `table` is a single
- * object for the life of the pen — keyed on that alone the count freezes at the empty first render.
- * The trailing arguments are unused on purpose: they are the cache key, and unlike `table` they move.
- * `TableGrid` needs no such thing because its own reads sit above a hook call, which the cache cannot
- * span. Anywhere else, read the table through this.
- */
-const countRows = (table: Table<Mon>, ..._cacheKey: unknown[]) => table.getRowModel().rows.length
-
-/** Never touches `table`, for the reason spelled out on `TableGridProps` — plain state only. */
 type StatusBarProps = {
 	filteredRows: number
 	totalRows: number
-	columnVisibility: VisibilityState
+	columnVisibility: ColumnVisibilityState
 	onToggleColumn: (id: string) => void
 	filters: Filters
 	setFilter: (id: string, value: FilterValue | undefined) => void
@@ -1459,7 +1414,7 @@ const Root = () => {
 	const { rows, loadError } = usePokedexRows()
 	const [filters, setFilters] = useState<Filters>({})
 	const [sorting, setSorting] = useState<SortingState>([])
-	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+	const [columnVisibility, setColumnVisibility] = useState<ColumnVisibilityState>(
 		R.mapValues(FIELD_BY_ID, (field) => DEFAULT_COLUMNS.has(field.id)),
 	)
 
@@ -1470,23 +1425,16 @@ const Root = () => {
 	const [rejection, setRejection] = useState<Rejection | null>(null)
 	const [showJson, setShowJson] = useState(false)
 
-	// Referentially stable via React Compiler. TanStack Table keys its filtered-row-model memo on this
-	// array's identity, so a fresh one each render invalidates it, firing auto-reset → onStateChange →
-	// setState → an endless render loop. Keep `Root` compilable or this needs memoizing by hand.
-	const columnFilters: ColumnFiltersState = R.entries(filters).map(([id, value]) => ({ id, value }))
+	const columnFilters = R.entries(filters).map(([id, value]) => ({ id, value }))
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: rows,
 		columns: COLUMNS,
 		state: { columnFilters, sorting, columnVisibility },
 		onSortingChange: setSorting,
 		onColumnVisibilityChange: setColumnVisibility,
-		getCoreRowModel: getCoreRowModel(),
-		getFilteredRowModel: getFilteredRowModel(),
-		getSortedRowModel: getSortedRowModel(),
 	})
-
-	const filteredRows = countRows(table, rows, filters, sorting)
 
 	const { engineRef, runIdRef, modelId, modelState, modelError, timing, setTiming, loadModel, selectModel } =
 		useEngine()
@@ -1562,8 +1510,6 @@ const Root = () => {
 					rows={rows}
 					loadError={loadError}
 					table={table}
-					sorting={sorting}
-					columnVisibility={columnVisibility}
 					filters={filters}
 					setFilter={setFilter}
 					touched={touched}
@@ -1573,7 +1519,7 @@ const Root = () => {
 				{showJson && <JsonDrawer streamText={streamText} onClose={() => setShowJson(false)} />}
 
 				<StatusBar
-					filteredRows={filteredRows}
+					filteredRows={table.getRowModel().rows.length}
 					totalRows={rows.length}
 					columnVisibility={columnVisibility}
 					onToggleColumn={toggleColumn}

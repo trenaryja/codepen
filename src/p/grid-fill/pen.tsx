@@ -11,16 +11,17 @@ import {
 	useInteractions,
 	useRole,
 } from 'https://esm.sh/@floating-ui/react'
-import { useVirtualizer } from 'https://esm.sh/@tanstack/react-virtual'
 import { Button, colorMix, Field, interpolateColors, ThemePicker, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import { strToU8, zipSync } from 'https://esm.sh/fflate'
 import { parseAsString, useQueryState } from 'https://esm.sh/nuqs'
 import { NuqsAdapter } from 'https://esm.sh/nuqs/adapters/react'
 import type { ReactNode } from 'https://esm.sh/react'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import { Fragment, useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { LuDownload, LuHeart, LuSlidersHorizontal } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
+import type { CustomItemComponentProps, VirtualizerHandle } from 'https://esm.sh/virtua'
+import { Virtualizer } from 'https://esm.sh/virtua'
 import { BASE62, decodeIntegers, encodeIntegers, triIndex, triInverse } from './codec'
 import { EdgeBadges, Stepper } from './migrate-to-ui'
 
@@ -575,6 +576,13 @@ const ExportButton = ({ recipe, W, H }: { recipe: Recipe | null; W: number; H: n
 	)
 }
 
+/** virtua measures contentRect, so padding here would overlap rows; the gap rides on the children's margins. */
+const RecipeItem = ({ ref, style, children }: CustomItemComponentProps) => (
+	<li ref={ref} style={style} className='list-none flex items-center gap-2 *:mt-3'>
+		{children}
+	</li>
+)
+
 type RecipeListProps = {
 	filteredRecipes: Recipe[]
 	totalCount: number
@@ -604,19 +612,12 @@ const RecipeList = ({
 	W,
 	H,
 }: RecipeListProps) => {
-	const scrollerRef = useRef<HTMLDivElement>(null)
-	const rowVirtualizer = useVirtualizer({
-		count: filteredRecipes.length,
-		getScrollElement: () => scrollerRef.current,
-		estimateSize: () => 62,
-		overscan: 8,
-		measureElement: (el) => el.getBoundingClientRect().height,
-	})
+	const listRef = useRef<VirtualizerHandle>(null)
 
 	useEffect(() => {
-		if (filteredIndex >= 0) rowVirtualizer.scrollToIndex(filteredIndex, { align: 'auto' })
-		else rowVirtualizer.scrollToOffset(0)
-	}, [W, H, filters, filteredIndex, rowVirtualizer])
+		if (filteredIndex >= 0) listRef.current?.scrollToIndex(filteredIndex, { align: 'nearest' })
+		else listRef.current?.scrollTo(0)
+	}, [W, H, filters, filteredIndex])
 
 	return (
 		<div className='grid grid-rows-[auto_minmax(0,1fr)] gap-2'>
@@ -631,10 +632,7 @@ const RecipeList = ({
 				)}
 			</div>
 
-			<div
-				className='overflow-hidden'
-				style={filteredRecipes.length > 0 ? { height: `min(100%, ${rowVirtualizer.getTotalSize()}px)` } : undefined}
-			>
+			<div className='overflow-hidden'>
 				{filteredRecipes.length === 0 ? (
 					<div className='size-full flex flex-col items-center justify-center gap-3 text-sm text-base-content/70'>
 						<span>No matching recipes.</span>
@@ -643,21 +641,20 @@ const RecipeList = ({
 						</button>
 					</div>
 				) : (
-					<div ref={scrollerRef} className='size-full scroll-fade-y'>
-						<ul className='relative' style={{ height: rowVirtualizer.getTotalSize() }}>
-							{rowVirtualizer.getVirtualItems().map((virtualItem) => {
-								// virtualizer count === filteredRecipes.length, so index is in range
-								const recipe = filteredRecipes[virtualItem.index]!
+					<div className='max-h-full scroll-fade-y'>
+						<Virtualizer
+							ref={listRef}
+							as='ul'
+							item={RecipeItem}
+							data={filteredRecipes}
+							itemSize={62}
+							bufferSize={8 * 62}
+						>
+							{(recipe) => {
 								const isSelected = recipe.key === selectedKey
 								const encoded = encodeRecipe(recipe.counts, W, H)
 								return (
-									<li
-										key={recipe.key}
-										data-index={virtualItem.index}
-										ref={rowVirtualizer.measureElement}
-										className='absolute top-0 left-0 w-full list-none pt-3 flex items-center gap-2'
-										style={{ transform: `translateY(${virtualItem.start}px)` }}
-									>
+									<Fragment key={recipe.key}>
 										<button
 											type='button'
 											onClick={() => onSelect(recipe.key, encoded)}
@@ -693,10 +690,10 @@ const RecipeList = ({
 												className={favorites.has(recipe.key) ? 'fill-primary text-primary' : 'text-base-content/30'}
 											/>
 										</button>
-									</li>
+									</Fragment>
 								)
-							})}
-						</ul>
+							}}
+						</Virtualizer>
 					</div>
 				)}
 			</div>

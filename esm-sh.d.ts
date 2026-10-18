@@ -26,12 +26,8 @@ declare module 'https://esm.sh/@t3-oss/env-core' {
 	export * from '@t3-oss/env-core'
 }
 
-declare module 'https://esm.sh/@tanstack/react-table@8' {
+declare module 'https://esm.sh/@tanstack/react-table' {
 	export * from '@tanstack/react-table'
-}
-
-declare module 'https://esm.sh/@tanstack/react-virtual' {
-	export * from '@tanstack/react-virtual'
 }
 
 declare module 'https://esm.sh/@trenaryja/ui' {
@@ -114,6 +110,10 @@ declare module 'https://esm.sh/react-icons/wi' {
 
 declare module 'https://esm.sh/remeda' {
 	export * from 'remeda'
+}
+
+declare module 'https://esm.sh/virtua' {
+	export * from 'virtua'
 }
 
 declare module 'https://esm.sh/zod' {
