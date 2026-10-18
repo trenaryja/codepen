@@ -1,6 +1,6 @@
 import { RadioGroup, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
 import type { ChangeEvent, Dispatch, ReactNode, SetStateAction } from 'https://esm.sh/react'
-import { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import * as R from 'https://esm.sh/remeda'
 

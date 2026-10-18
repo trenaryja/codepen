@@ -7,6 +7,7 @@
 import type { Placement } from 'https://esm.sh/@trenaryja/ui'
 import { cn } from 'https://esm.sh/@trenaryja/ui/utils'
 import type { ReactNode } from 'https://esm.sh/react'
+import React from 'https://esm.sh/react'
 
 // TODO: import { EdgeBadges } from '@trenaryja/ui' — clean lift, no open questions.
 const EDGE_PLACEMENT_CLASSES: Record<Placement, string> = {

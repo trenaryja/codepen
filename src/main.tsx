@@ -1,5 +1,5 @@
 import { Input, ThemePicker, ThemeProvider } from '@trenaryja/ui'
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { FiChevronRight } from 'react-icons/fi'
 import type { IconType } from 'react-icons/lib'

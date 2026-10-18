@@ -16,7 +16,7 @@ import {
 	useTheme,
 } from 'https://esm.sh/@trenaryja/ui'
 import mapboxgl from 'https://esm.sh/mapbox-gl'
-import { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
+import React, { useEffect, useEffectEvent, useRef, useState } from 'https://esm.sh/react'
 import { flushSync } from 'https://esm.sh/react-dom'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import {
