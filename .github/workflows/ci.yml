@@ -1,0 +1,8 @@
+name: CI
+on:
+  push:
+    branches: [main, 'renovate/**']
+  workflow_dispatch:
+jobs:
+  ci:
+    uses: trenaryja/config/.github/workflows/ci.yml@main

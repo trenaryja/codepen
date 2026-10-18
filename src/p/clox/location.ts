@@ -121,12 +121,12 @@ export const useCitySearch = (query: string) => {
 				)
 				const cities = (parsed.results ?? [])
 					.filter((result) => result.timezone)
-					.map(({ name, admin1, country_code: countryCode, latitude, longitude, timezone }) => ({
+					.map(({ name, admin1, country_code: countryCode, latitude, longitude, timezone = 'UTC' }) => ({
 						name,
 						country: [admin1, countryCode].filter(Boolean).join(', '),
 						latitude,
 						longitude,
-						timeZone: timezone ?? 'UTC',
+						timeZone: timezone,
 					}))
 				setMatches([...utcMatch, ...cities])
 				setSearching(false)

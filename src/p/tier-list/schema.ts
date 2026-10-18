@@ -111,9 +111,9 @@ export const defaultTierList: TierList = tierListSchema.parse({
 export const BANK_ID = 'option-bank'
 export const STORAGE_KEY = 'tier-list'
 
-export const deserializeTierList = (value: string | undefined) => {
+export const deserializeTierList = (value = '') => {
 	try {
-		const result = tierListSchema.safeParse(JSON.parse(value ?? ''))
+		const result = tierListSchema.safeParse(JSON.parse(value))
 		return result.success ? result.data : defaultTierList
 	} catch {
 		return defaultTierList

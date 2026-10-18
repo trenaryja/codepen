@@ -1,3 +1,3 @@
 {
-	"extends": ["github>trenaryja/config"]
+	"extends": ["github>trenaryja/config//renovate/base"]
 }

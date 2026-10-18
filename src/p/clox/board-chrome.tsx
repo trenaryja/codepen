@@ -19,10 +19,6 @@ import { useCitySearch } from './location'
 import { PlaceCard } from './place-card'
 import { type City, FINE_POINTER, formatTime, isUtc } from './time'
 
-type SearchMode = { kind: 'add' } | { kind: 'place'; id: string }
-
-type Toggle = { key: string; content: ReactNode; label?: string; onClick: () => void }
-
 export const BoardHeader = ({
 	view,
 	onView,
@@ -40,6 +36,7 @@ export const BoardHeader = ({
 	expandedIds: string[]
 	onExpandedIds: (ids: string[]) => void
 }) => {
+	type Toggle = { key: string; content: ReactNode; label?: string; onClick: () => void }
 	const { hour12, fahrenheit, showSeconds, forecastMode } = preferences
 	const expandableIds = places.filter((place) => !isUtc(place.city)).map((place) => place.id)
 	const allExpanded = expandableIds.every((id) => expandedIds.includes(id))
@@ -273,6 +270,7 @@ export const SearchDialog = ({
 }
 
 export const useSearch = () => {
+	type SearchMode = { kind: 'add' } | { kind: 'place'; id: string }
 	const [searchMode, setSearchMode] = useState<SearchMode | null>(null)
 	const [query, setQuery] = useState('')
 	const searchInputRef = useRef<HTMLInputElement>(null)

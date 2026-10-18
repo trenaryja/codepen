@@ -29,7 +29,7 @@ const Editable = ({
 	commit,
 	title,
 	placeholder,
-	className,
+	className = '',
 }: {
 	display: ReactNode
 	edit: string
@@ -41,7 +41,7 @@ const Editable = ({
 	const [draft, setDraft] = useState<string | null>(null)
 	const inputRef = useRef<HTMLInputElement>(null)
 	// display and input share one box so swapping shifts nothing — 1lh is exactly one line of the caller's own text size
-	const shared = `h-[1lh] leading-tight field-sizing-content ${className ?? ''}`
+	const shared = `h-[1lh] leading-tight field-sizing-content ${className}`
 	if (draft === null)
 		return (
 			<button
@@ -75,7 +75,7 @@ const Editable = ({
 	)
 }
 
-const EditableTime = ({ timeZone, className }: { timeZone: string; className?: string }) => {
+const EditableTime = ({ timeZone, className = '' }: { timeZone: string; className?: string }) => {
 	const { instant, hour12, showSeconds, scrubToWall } = useSettings()
 	const pickerRef = useRef<HTMLInputElement>(null)
 	return (
@@ -120,7 +120,7 @@ const EditableTime = ({ timeZone, className }: { timeZone: string; className?: s
 				}}
 				title='type a time to scrub there'
 				placeholder={hour12 ? '9:30p' : '21:30'}
-				className={`font-mono ${className ?? ''}`}
+				className={`font-mono ${className}`}
 			/>
 		</span>
 	)

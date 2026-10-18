@@ -71,8 +71,8 @@ export const TYPOGRAPHY_GROUPS: Group[] = [
 				fontSize: 64,
 				definition:
 					'Uniform horizontal spacing applied equally between all glyphs in a text run. Called letter-spacing in CSS. Unlike kerning, tracking is a constant additive value—not glyph-pair-specific.',
-				draw: ({ baselineY, font, fontDescent, fontSize, sample, trackingEm, width: panelWidth, xHeight }) => {
-					const track = (trackingEm ?? 0.1) * fontSize
+				draw: ({ baselineY, font, fontDescent, fontSize, sample, trackingEm = 0.1, width: panelWidth, xHeight }) => {
+					const track = trackingEm * fontSize
 					const chars = sample.split('').map((char) => ({ char, width: measure(char, font).width }))
 					const totalWidth = R.sumBy(chars, (x) => x.width) + track * (chars.length - 1)
 					const glyphs: { char: string; x: number; width: number }[] = []
@@ -333,16 +333,15 @@ export const TYPOGRAPHY_GROUPS: Group[] = [
 					fontSize,
 					inkRight,
 					sample,
-					textBoxTrim,
+					textBoxTrim = 'both',
 				}) => {
 					const halfLeading = fontSize * 0.125
 					const [defaultTop, defaultBottom] = [
 						baselineY - fontAscent - halfLeading,
 						baselineY + fontDescent + halfLeading,
 					]
-					const trim = textBoxTrim ?? 'both'
-					const trimTop = trim === 'end' ? defaultTop : baselineY - capHeight
-					const trimBottom = trim === 'start' ? defaultBottom : baselineY + descenderDepth
+					const trimTop = textBoxTrim === 'end' ? defaultTop : baselineY - capHeight
+					const trimBottom = textBoxTrim === 'start' ? defaultBottom : baselineY + descenderDepth
 					return (
 						<>
 							<Char text={sample} font={font} x={charX} baseline={baselineY} />
@@ -361,9 +360,9 @@ export const TYPOGRAPHY_GROUPS: Group[] = [
 								y={defaultTop - 7}
 								color={FG}
 								align='left'
-								alpha={trim === 'none' ? 0.7 : 0.35}
+								alpha={textBoxTrim === 'none' ? 0.7 : 0.35}
 							/>
-							{trim !== 'none' && (
+							{textBoxTrim !== 'none' && (
 								<>
 									<Rect
 										x1={charX - 8}
@@ -374,7 +373,7 @@ export const TYPOGRAPHY_GROUPS: Group[] = [
 										fillOpacity={0.08}
 										strokeWidth={1.5}
 									/>
-									<Label text={`trim-${trim}`} x={inkRight + 12} y={trimTop - 7} align='left' />
+									<Label text={`trim-${textBoxTrim}`} x={inkRight + 12} y={trimTop - 7} align='left' />
 								</>
 							)}
 						</>
