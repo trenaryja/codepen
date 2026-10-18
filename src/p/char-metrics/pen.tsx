@@ -1,7 +1,8 @@
 import { RadioGroup, ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import type { Dispatch, ReactNode, SetStateAction } from 'https://esm.sh/react'
+import type { ChangeEvent, Dispatch, ReactNode, SetStateAction } from 'https://esm.sh/react'
 import { useEffect, useRef, useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
+import * as R from 'https://esm.sh/remeda'
 
 const FONTS: Record<string, string> = {
 	serif: 'Georgia, "Times New Roman", serif',
@@ -21,7 +22,8 @@ function cssFont(size: number, family: string, weight = 400) {
 // on the line before it is read. Closing over it rather than declaring it at module scope makes
 // that scratch state private to `measure`, which is the only thing allowed to touch it.
 const measure = (() => {
-	const ctx = document.createElement('canvas').getContext('2d')!
+	const ctx = document.createElement('canvas').getContext('2d')
+	if (!ctx) throw new Error('char-metrics: canvas 2D context unavailable')
 
 	return (text: string, font: string) => {
 		ctx.font = font
@@ -46,14 +48,15 @@ function rasterize(char: string, font: string): Raster {
 	const canvas = document.createElement('canvas')
 	canvas.width = SCAN
 	canvas.height = SCAN
-	const ctx = canvas.getContext('2d')!
+	const ctx = canvas.getContext('2d')
+	if (!ctx) throw new Error('char-metrics: canvas 2D context unavailable')
 	ctx.font = font
 	ctx.fillStyle = '#fff'
 	ctx.textBaseline = 'alphabetic'
 	ctx.fillText(char, 0, SCAN_BASELINE)
 	const { data } = ctx.getImageData(0, 0, SCAN, SCAN)
 	return {
-		ink: (x, y) => x >= 0 && x < SCAN && y >= 0 && y < SCAN && data[(y * SCAN + x) * 4 + 3]! > INK,
+		ink: (x, y) => x >= 0 && x < SCAN && y >= 0 && y < SCAN && (data[(y * SCAN + x) * 4 + 3] ?? 0) > INK,
 		advance: ctx.measureText(char).width,
 	}
 }
@@ -413,43 +416,27 @@ function multiLayout(request: LayoutRequest): [Layout, Layout] {
 	]
 }
 
-const WEIGHT_OPTIONS = [
-	{ value: 'thin', label: 'thin', weight: 100 },
-	{ value: 'light', label: 'light', weight: 300 },
-	{ value: 'normal', label: 'normal', weight: 400 },
-	{ value: 'bold', label: 'bold', weight: 700 },
-	{ value: 'black', label: 'black', weight: 900 },
-] as const
-type FontWeightSize = (typeof WEIGHT_OPTIONS)[number]['value']
+const FONT_WEIGHTS = { thin: 100, light: 300, normal: 400, bold: 700, black: 900 } as const
+type FontWeightSize = keyof typeof FONT_WEIGHTS
 
-const TRACKING_OPTIONS = [
-	{ value: 'tighter', label: 'tighter', em: -0.05 },
-	{ value: 'tight', label: 'tight', em: -0.025 },
-	{ value: 'normal', label: 'normal', em: 0 },
-	{ value: 'wide', label: 'wide', em: 0.025 },
-	{ value: 'wider', label: 'wider', em: 0.05 },
-	{ value: 'widest', label: 'widest', em: 0.1 },
-] as const
-type TrackingSize = (typeof TRACKING_OPTIONS)[number]['value']
+const TRACKING_EMS = { tighter: -0.05, tight: -0.025, normal: 0, wide: 0.025, wider: 0.05, widest: 0.1 } as const
+type TrackingSize = keyof typeof TRACKING_EMS
 
-const TEXT_BOX_OPTIONS = [
-	{ value: 'none', label: 'none' },
-	{ value: 'start', label: 'start' },
-	{ value: 'end', label: 'end' },
-	{ value: 'both', label: 'both' },
-] as const
-type TextBoxTrim = (typeof TEXT_BOX_OPTIONS)[number]['value']
+const TEXT_BOX_TRIMS = ['none', 'start', 'end', 'both'] as const
+type TextBoxTrim = (typeof TEXT_BOX_TRIMS)[number]
 
 // ratio: 0 is a sentinel meaning lineHeight = fontAscent + fontDescent (zero extra leading, lines touch)
-const LEADING_OPTIONS = [
-	{ value: 'none', label: 'none', ratio: 0 },
-	{ value: 'xs', label: 'xs', ratio: 1.25 },
-	{ value: 'sm', label: 'sm', ratio: 1.375 },
-	{ value: 'md', label: 'md', ratio: 1.5 },
-	{ value: 'lg', label: 'lg', ratio: 1.75 },
-	{ value: 'xl', label: 'xl', ratio: 2 },
-] as const
-type LeadingSize = (typeof LEADING_OPTIONS)[number]['value']
+const LEADING_RATIOS = { none: 0, xs: 1.25, sm: 1.375, md: 1.5, lg: 1.75, xl: 2 } as const
+type LeadingSize = keyof typeof LEADING_RATIOS
+
+/** RadioGroup options labelled by their values, with the change event's string narrowed back to one of them. */
+const radioProps = <Value extends string>(values: readonly Value[], select: (value: Value) => void) => ({
+	options: values.map((value) => ({ value, label: value })),
+	onChange: (event: ChangeEvent<HTMLInputElement>) => {
+		const value = values.find((x) => x === event.target.value)
+		if (value !== undefined) select(value)
+	},
+})
 
 type Term = {
 	id: string
@@ -860,13 +847,13 @@ const GROUPS: Group[] = [
 					'Uniform horizontal spacing applied equally between all glyphs in a text run. Called letter-spacing in CSS. Unlike kerning, tracking is a constant additive value—not glyph-pair-specific.',
 				draw: ({ baselineY, font, fontDescent, fontSize, sample, trackingEm, width: panelWidth, xHeight }) => {
 					const track = (trackingEm ?? 0.1) * fontSize
-					const widths = sample.split('').map((char) => measure(char, font).width)
-					const totalWidth = widths.reduce((sum, width) => sum + width, 0) + track * (widths.length - 1)
+					const chars = sample.split('').map((char) => ({ char, width: measure(char, font).width }))
+					const totalWidth = R.sumBy(chars, (x) => x.width) + track * (chars.length - 1)
 					const glyphs: { char: string; x: number; width: number }[] = []
 					let cursorX = (panelWidth - totalWidth) / 2
 
-					for (const [i, width] of widths.entries()) {
-						glyphs.push({ char: sample[i]!, x: cursorX, width })
+					for (const { char, width } of chars) {
+						glyphs.push({ char, x: cursorX, width })
 						cursorX += width + track
 					}
 
@@ -1264,8 +1251,7 @@ function FontControls({
 				<RadioGroup
 					variant='btn'
 					value={fontWeightSize}
-					onChange={(event) => setFontWeightSize(event.target.value as FontWeightSize)}
-					options={[...WEIGHT_OPTIONS]}
+					{...radioProps(R.keys(FONT_WEIGHTS), setFontWeightSize)}
 					className='join'
 					classNames={{ item: 'join-item btn-xs' }}
 				/>
@@ -1302,8 +1288,7 @@ function DiagramFooter({
 				<RadioGroup
 					variant='btn'
 					value={leadingSize}
-					onChange={(event) => setLeadingSize(event.target.value as LeadingSize)}
-					options={[...LEADING_OPTIONS]}
+					{...radioProps(R.keys(LEADING_RATIOS), setLeadingSize)}
 					className='join'
 					classNames={{ item: 'join-item btn-xs' }}
 				/>
@@ -1312,8 +1297,7 @@ function DiagramFooter({
 				<RadioGroup
 					variant='btn'
 					value={trackingSize}
-					onChange={(event) => setTrackingSize(event.target.value as TrackingSize)}
-					options={[...TRACKING_OPTIONS]}
+					{...radioProps(R.keys(TRACKING_EMS), setTrackingSize)}
 					className='join'
 					classNames={{ item: 'join-item btn-xs' }}
 				/>
@@ -1322,8 +1306,7 @@ function DiagramFooter({
 				<RadioGroup
 					variant='btn'
 					value={textBoxTrim}
-					onChange={(event) => setTextBoxTrim(event.target.value as TextBoxTrim)}
-					options={[...TEXT_BOX_OPTIONS]}
+					{...radioProps(TEXT_BOX_TRIMS, setTextBoxTrim)}
 					className='join'
 					classNames={{ item: 'join-item btn-xs' }}
 				/>
@@ -1387,9 +1370,9 @@ function App() {
 		family,
 		width,
 		height,
-		fontWeight: WEIGHT_OPTIONS.find((option) => option.value === fontWeightSize)!.weight,
-		lineHeightRatio: LEADING_OPTIONS.find((option) => option.value === leadingSize)!.ratio,
-		trackingEm: TRACKING_OPTIONS.find((option) => option.value === trackingSize)!.em,
+		fontWeight: FONT_WEIGHTS[fontWeightSize],
+		lineHeightRatio: LEADING_RATIOS[leadingSize],
+		trackingEm: TRACKING_EMS[trackingSize],
 		textBoxTrim,
 	}
 
@@ -1397,7 +1380,8 @@ function App() {
 	const activeTerm = activeId ? findTerm(activeId) : null
 
 	useEffect(() => {
-		const panel = panelRef.current!
+		const panel = panelRef.current
+		if (!panel) return
 		let rafId: number | null = null
 		const observer = new ResizeObserver(() => {
 			if (rafId !== null) cancelAnimationFrame(rafId)
@@ -1497,4 +1481,6 @@ function App() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(<App />)
