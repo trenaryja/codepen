@@ -11,15 +11,18 @@ function getElapsed(from: Date, now: Date) {
 	const months = days / 30.4375
 	const years = days / 365.25
 
-	return [
+	const secondsUnit = { label: 'seconds', value: seconds }
+	const units = [
 		{ label: 'years', value: years },
 		{ label: 'months', value: months },
 		{ label: 'weeks', value: weeks },
 		{ label: 'days', value: days },
 		{ label: 'hours', value: hours },
 		{ label: 'minutes', value: minutes },
-		{ label: 'seconds', value: seconds },
+		secondsUnit,
 	]
+
+	return { units, primaryUnit: units.find((unit) => unit.value >= 1) ?? secondsUnit }
 }
 
 function formatValue(value: number) {
@@ -34,14 +37,13 @@ function Root() {
 	const [now, setNow] = useState(() => new Date())
 	const target = new Date(targetDate)
 	const isFuture = target.getTime() > now.getTime()
-	const elapsed = getElapsed(target, now)
+	const { units, primaryUnit } = getElapsed(target, now)
 
 	useEffect(() => {
 		const id = setInterval(() => setNow(new Date()), 100)
 		return () => clearInterval(id)
 	}, [])
 
-	const primaryUnit = elapsed.find((unit) => unit.value >= 1) ?? elapsed.at(-1)!
 	const directionLabel = isFuture ? 'until' : 'since'
 
 	return (
@@ -61,7 +63,7 @@ function Root() {
 						</div>
 
 						<div className='grid grid-cols-2 sm:grid-cols-3 gap-4 w-full'>
-							{elapsed.map((unit) => (
+							{units.map((unit) => (
 								<div key={unit.label} className='surface p-4 text-center'>
 									<h3 className='text-2xl font-semibold font-mono'>{formatValue(unit.value)}</h3>
 									<p className='text-xs opacity-60 mt-1'>
@@ -77,4 +79,6 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(<Root />)
