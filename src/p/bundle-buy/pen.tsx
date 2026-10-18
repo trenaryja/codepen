@@ -98,16 +98,23 @@ function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
 	})
 
 	let best: Solution | null = null
-	const counts = new Array(bundles.length).fill(0)
+	const counts = bundles.map(() => 0)
 
-	function search(depth: number) {
-		if (depth === bundles.length) {
+	function search(depth: number, partialCost: number) {
+		const bundle = bundles[depth]
+		const limit = maxPerBundle[depth]
+		if (bundle === undefined || limit === undefined) {
 			const { totals, cost } = tallyPurchase(bundles, itemIds, counts)
 			if (!coversNeeds(itemIds, totals, needs)) return
 			if (best !== null && cost >= best.totalCost) return
 
 			best = {
-				bundleCounts: Object.fromEntries(bundles.map((b, i) => [b.id, counts[i]])),
+				bundleCounts: Object.fromEntries(
+					R.zip(
+						bundles.map((x) => x.id),
+						counts,
+					),
+				),
 				totalCost: cost,
 				totalItems: { ...totals },
 				surplus: surplusOver(itemIds, totals, needs),
@@ -116,27 +123,22 @@ function solve(bundles: Bundle[], items: Item[], needs: Need): Solution | null {
 			return
 		}
 
-		// depth < bundles.length: the depth === bundles.length branch returned above
-		for (let count = 0; count <= maxPerBundle[depth]!; count++) {
+		for (let count = 0; count <= limit; count++) {
 			counts[depth] = count
+			const cost = partialCost + bundle.price * count
 
-			if (best !== null) {
-				let partialCost = 0
-				for (let i = 0; i <= depth; i++) partialCost += bundles[i]!.price * counts[i] // i <= depth < bundles.length
-
-				if (partialCost >= best.totalCost) {
-					counts[depth] = 0
-					return
-				}
+			if (best !== null && cost >= best.totalCost) {
+				counts[depth] = 0
+				return
 			}
 
-			search(depth + 1)
+			search(depth + 1, cost)
 		}
 
 		counts[depth] = 0
 	}
 
-	search(0)
+	search(0, 0)
 	return best
 }
 
@@ -145,43 +147,38 @@ function deriveImpliedValues(bundles: Bundle[], items: Item[]): ImpliedValue[] {
 	if (bundles.length === 0 || items.length === 0) return []
 
 	const n = items.length
-	const A: number[][] = bundles.map((bundle) => items.map((item) => bundle.quantities[item.id] ?? 0))
-	const b = bundles.map((bundle) => bundle.price)
+	const columns = items.map((item) => bundles.map((bundle) => bundle.quantities[item.id] ?? 0))
+	const prices = bundles.map((bundle) => bundle.price)
+	const dot = (left: number[], right: number[]) =>
+		R.zip(left, right).reduce((sum, [leftValue, rightValue]) => sum + leftValue * rightValue, 0)
 
-	// A rows have length n; b.length === A.length
-	const AtA = Array.from({ length: n }, (_, i) =>
-		Array.from({ length: n }, (_cell, j) => A.reduce((sum, row) => sum + row[i]! * row[j]!, 0)),
-	)
-	const Atb = Array.from({ length: n }, (_, i) => A.reduce((sum, row, k) => sum + row[i]! * b[k]!, 0))
+	// Normal equations, augmented: row i is [(AᵀA)ᵢ…, (Aᵀb)ᵢ].
+	let rows = columns.map((column) => [...columns.map((other) => dot(column, other)), dot(column, prices)])
 
-	const aug: number[][] = AtA.map((row, i) => [...row, Atb[i]!])
-
-	// aug has n rows of length n + 1; every row/col index below stays in bounds
 	for (let col = 0; col < n; col++) {
-		let maxRow = col
-		for (let row = col + 1; row < n; row++) if (Math.abs(aug[row]![col]!) > Math.abs(aug[maxRow]![col]!)) maxRow = row
-		;[aug[col], aug[maxRow]] = [aug[maxRow]!, aug[col]!]
-		const pivotRow = aug[col]!
-		if (Math.abs(pivotRow[col]!) < 1e-10) continue
+		const magnitude = (row: number[]) => Math.abs(row[col] ?? 0)
+		const pivotRow = rows.slice(col).reduce((best, row) => (magnitude(row) > magnitude(best) ? row : best))
+		rows = R.swapIndices(rows, col, rows.indexOf(pivotRow))
+		const pivot = pivotRow[col] ?? 0
+		if (Math.abs(pivot) < 1e-10) continue
 
-		for (let row = col + 1; row < n; row++) {
-			const currentRow = aug[row]!
-			const factor = currentRow[col]! / pivotRow[col]!
-			for (let j = col; j <= n; j++) currentRow[j]! -= factor * pivotRow[j]!
-		}
+		rows = rows.map((row, index) => {
+			if (index <= col) return row
+			const factor = (row[col] ?? 0) / pivot
+			return R.zip(row, pivotRow).map(([value, pivotValue], j) => (j < col ? value : value - factor * pivotValue))
+		})
 	}
 
-	const x = new Array(n).fill(0)
+	const solution = rows.map(() => 0)
 
-	for (let i = n - 1; i >= 0; i--) {
-		const row = aug[i]!
-		if (Math.abs(row[i]!) < 1e-10) continue
-		x[i] = row[n]
-		for (let j = i + 1; j < n; j++) x[i] -= row[j]! * x[j]
-		x[i] /= row[i]!
+	for (const [i, row] of [...rows.entries()].reverse()) {
+		const diagonal = row[i] ?? 0
+		if (Math.abs(diagonal) < 1e-10) continue
+		const rest = R.zip(row, solution).slice(i + 1)
+		solution[i] = rest.reduce((total, [coefficient, solved]) => total - coefficient * solved, row[n] ?? 0) / diagonal
 	}
 
-	return items.map((item, i) => ({ itemId: item.id, value: x[i] }))
+	return R.zip(items, solution).map(([item, value]) => ({ itemId: item.id, value }))
 }
 
 const USB_C_SCENARIO: Scenario = {
@@ -473,9 +470,8 @@ function ValueDecomposition({
 		const discountPct = predicted > 0 ? ((predicted - bundle.price) / predicted) * 100 : 0
 		return { bundle, predicted, error, discountPct }
 	})
-	// impliedValues nonempty -> bundles nonempty (deriveImpliedValues returns [] otherwise), so bundleErrors is nonempty
-	const bestDealIdx = bundleErrors.reduce((best, curr, i) => (curr.error < bundleErrors[best]!.error ? i : best), 0)
-	const bestDeal = bundleErrors[bestDealIdx]!
+	const bestDeal = R.firstBy(bundleErrors, (x) => x.error)
+	if (!bestDeal) return null
 	const hasMeaningfulBestDeal = bestDeal.error < -0.01
 
 	return (
@@ -524,8 +520,8 @@ function ValueDecomposition({
 						</tr>
 					</thead>
 					<tbody>
-						{bundleErrors.map(({ bundle, predicted, error }, i) => {
-							const isBest = hasMeaningfulBestDeal && i === bestDealIdx
+						{bundleErrors.map(({ bundle, predicted, error }) => {
+							const isBest = hasMeaningfulBestDeal && bundle === bestDeal.bundle
 							const parts = items
 								.filter((item) => (bundle.quantities[item.id] ?? 0) > 0)
 								.map((item) => `${bundle.quantities[item.id]}${item.variable}`)
@@ -660,18 +656,18 @@ function AllCombinationsTable({
 	type Combo = { counts: number[]; cost: number; totals: Record<string, number> }
 
 	const combos: Combo[] = []
-	const counts = new Array(bundles.length).fill(0)
+	const counts = bundles.map(() => 0)
 
 	function enumerate(depth: number) {
 		if (combos.length > 200) return
-		if (depth === bundles.length) {
+		const limit = maxPerBundle[depth]
+		if (limit === undefined) {
 			const { totals, cost } = tallyPurchase(bundles, itemIds, counts)
 			if (coversNeeds(itemIds, totals, needs)) combos.push({ counts: [...counts], cost, totals })
 			return
 		}
 
-		// depth < bundles.length: the depth === bundles.length branch returned above
-		for (let count = 0; count <= maxPerBundle[depth]!; count++) {
+		for (let count = 0; count <= limit; count++) {
 			counts[depth] = count
 			enumerate(depth + 1)
 		}
@@ -1071,4 +1067,6 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('#root is missing from index.html')
+createRoot(rootElement).render(<Root />)
