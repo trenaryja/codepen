@@ -346,8 +346,10 @@ const NewUserSecurity = ({
 				.filter((orgRole) => orgRole.roles.length > 0),
 		})
 
-	const addOrg = (org: string) =>
-		onUpdate({ ...user, orgRoles: [...user.orgRoles, { org, roles: [roleNames.at(-1)!] }] })
+	const addOrg = (org: string) => {
+		const lowestRole = roleNames.at(-1)
+		if (lowestRole !== undefined) onUpdate({ ...user, orgRoles: [...user.orgRoles, { org, roles: [lowestRole] }] })
+	}
 
 	const removeOrg = (orgIndex: number) =>
 		onUpdate({ ...user, orgRoles: user.orgRoles.filter((_, i) => i !== orgIndex) })
