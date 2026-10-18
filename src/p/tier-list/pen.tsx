@@ -741,7 +741,8 @@ const importSchema = z
 	.string()
 	.transform((value, context) => {
 		try {
-			return JSON.parse(value)
+			const parsed: unknown = JSON.parse(value)
+			return parsed
 		} catch {
 			context.addIssue({ code: 'custom', message: 'Invalid JSON format' })
 			return z.NEVER
@@ -783,30 +784,28 @@ const ImportDialog = () => {
 			<p className='py-2 text-sm opacity-70'>Paste your tier list JSON below or drag and drop a JSON file.</p>
 
 			<div className='space-y-4 mt-2'>
-				<div
-					className={cn('relative', isDraggingFile && 'ring-2 ring-primary')}
-					onDragOver={(event) => {
-						event.preventDefault()
-						setIsDraggingFile(true)
-					}}
-					onDragLeave={(event) => {
-						event.preventDefault()
-						setIsDraggingFile(false)
-					}}
-					onDrop={(event) => {
-						event.preventDefault()
-						setIsDraggingFile(false)
-						const file = event.dataTransfer.files[0]
-						if (file?.type !== 'application/json') return toast.error('Please drop a valid JSON file.')
-						const reader = new FileReader()
-						reader.onload = () => setJsonInput(typeof reader.result === 'string' ? reader.result : '')
-						reader.readAsText(file)
-					}}
-				>
+				<div className={cn('relative', isDraggingFile && 'ring-2 ring-primary')}>
 					<TextArea
 						value={jsonInput}
 						onChange={(event) => setJsonInput(event.target.value)}
 						className='font-mono text-xs w-full min-h-32 max-h-[60ch]'
+						onDragOver={(event) => {
+							event.preventDefault()
+							setIsDraggingFile(true)
+						}}
+						onDragLeave={(event) => {
+							event.preventDefault()
+							setIsDraggingFile(false)
+						}}
+						onDrop={(event) => {
+							event.preventDefault()
+							setIsDraggingFile(false)
+							const file = event.dataTransfer.files[0]
+							if (file?.type !== 'application/json') return toast.error('Please drop a valid JSON file.')
+							const reader = new FileReader()
+							reader.onload = () => setJsonInput(typeof reader.result === 'string' ? reader.result : '')
+							reader.readAsText(file)
+						}}
 					/>
 					{isDraggingFile && (
 						<div className='absolute inset-0 bg-primary/10 rounded-md flex items-center justify-center pointer-events-none text-primary font-medium'>
@@ -1086,4 +1085,6 @@ const Root = () => (
 	</ThemeProvider>
 )
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('#root is missing from index.html')
+createRoot(rootElement).render(<Root />)
