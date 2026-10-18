@@ -81,6 +81,8 @@ const STRATEGIES = {
 
 type StrategyName = keyof typeof STRATEGIES
 
+const isStrategyName = (name: string): name is StrategyName => Object.hasOwn(STRATEGIES, name)
+
 type Params = {
 	border: number
 	chromaMax: number
@@ -147,7 +149,8 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 
 	canvas.width = width
 	canvas.height = height
-	const context = canvas.getContext('2d')!
+	const context = canvas.getContext('2d')
+	if (!context) throw new Error('hex-grid: canvas 2D context unavailable')
 	const { getColor } = STRATEGIES[strategy]
 
 	const Hex = defineHex({
@@ -174,8 +177,8 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 		}
 
 		context.beginPath()
-		context.moveTo(x + corners[0]!.x, y + corners[0]!.y) // a hex always has 6 corners
-		for (const corner of corners.values().drop(1)) context.lineTo(x + corner.x, y + corner.y)
+		// lineTo on an empty path starts the subpath, per the canvas spec, so no moveTo is needed
+		for (const corner of corners) context.lineTo(x + corner.x, y + corner.y)
 		context.closePath()
 		context.fillStyle = buildOklch(fill.lightness, fill.chroma, fill.hue)
 		context.fill()
@@ -215,7 +218,10 @@ function SettingsModal({
 	return (
 		<Modal open={open} onOpenChange={onOpenChange} className='w-fit'>
 			<Field label='Strategy'>
-				<Select value={params.strategy} onChange={(e) => set('strategy', e.target.value as StrategyName)}>
+				<Select
+					value={params.strategy}
+					onChange={(e) => isStrategyName(e.target.value) && set('strategy', e.target.value)}
+				>
 					{Object.entries(STRATEGIES).map(([name, strategy]) => (
 						<option key={name} value={name}>
 							{strategy.label}
@@ -276,4 +282,6 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('#root is missing from index.html')
+createRoot(rootElement).render(<Root />)
