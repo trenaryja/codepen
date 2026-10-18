@@ -25,7 +25,11 @@ export const stringToBits = (encoded: string, alphabet = BASE94) => {
 	const lookup = new Map(alphabet.split('').map((char, i) => [char, i]))
 	const base = BigInt(alphabet.length)
 	let accumulator = 0n
-	for (const char of encoded) accumulator = accumulator * base + BigInt(lookup.get(char)!)
+	for (const char of encoded) {
+		const digit = lookup.get(char)
+		if (digit === undefined) throw new Error(`stringToBits: '${char}' is not in the alphabet`)
+		accumulator = accumulator * base + BigInt(digit)
+	}
 	return Array.from(accumulator.toString(2).slice(1), (char) => char === '1')
 }
 

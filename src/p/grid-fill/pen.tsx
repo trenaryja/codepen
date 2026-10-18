@@ -22,6 +22,7 @@ import { LuDownload, LuHeart, LuSlidersHorizontal } from 'https://esm.sh/react-i
 import * as R from 'https://esm.sh/remeda'
 import type { CustomItemComponentProps, VirtualizerHandle } from 'https://esm.sh/virtua'
 import { Virtualizer } from 'https://esm.sh/virtua'
+import { z } from 'https://esm.sh/zod'
 import { BASE62, decodeIntegers, encodeIntegers, triIndex, triInverse } from './codec'
 import { EdgeBadges, Stepper } from './migrate-to-ui'
 
@@ -173,7 +174,7 @@ const useFavorites = () => {
 	const [favorites, setFavorites] = useState<Set<string>>(() => {
 		try {
 			const stored = localStorage.getItem('grid-fill:favorites')
-			return new Set(stored ? JSON.parse(stored) : [])
+			return new Set(stored ? z.array(z.string()).parse(JSON.parse(stored)) : [])
 		} catch {
 			return new Set<string>()
 		}
@@ -228,55 +229,54 @@ const solve = ({ W, H }: { W: number; H: number }) => {
 	for (const [keyIndex, sizeKey] of sizeKeys.entries()) {
 		const [w, h] = parseSize(sizeKey)
 		keyArea[keyIndex] = w * h
-		const dims: [number, number][] = [[w, h]]
-		if (w !== h) dims.push([h, w])
-		keyDimensions.push(dims.filter(([width, height]) => width <= W && height <= H))
+		const dimensions: [number, number][] = [[w, h]]
+		if (w !== h) dimensions.push([h, w])
+		keyDimensions.push(dimensions.filter(([width, height]) => width <= W && height <= H))
 	}
 
 	const tryPack = (targetCounts: Int8Array) => {
 		const rows = new Int32Array(H)
-		const counts = Int8Array.from(targetCounts)
+		const pieces = sizeKeys.map((key, keyIndex) => ({
+			key,
+			dimensions: keyDimensions[keyIndex] ?? [],
+			remaining: targetCounts[keyIndex] ?? 0,
+		}))
 		const layout: Bin[] = []
 
 		const firstEmpty = (): [number, number] | null => {
 			for (let y = 0; y < H; y++) {
-				const emptyMask = ~rows[y]! & FULL
+				const emptyMask = ~(rows[y] ?? 0) & FULL
 				if (emptyMask) return [31 - Math.clz32(emptyMask & -emptyMask), y]
 			}
 
 			return null
 		}
 
-		const allCountsSpent = () => {
-			for (let keyIndex = 0; keyIndex < K; keyIndex++) if (counts[keyIndex] !== 0) return false
-			return true
-		}
-
 		const canPlace = ({ x, y, w, h }: Omit<Bin, 'key'>) => {
 			if (x + w > W || y + h > H) return false
 			const mask = ((1 << w) - 1) << x
-			for (let dy = 0; dy < h; dy++) if (rows[y + dy]! & mask) return false
+			for (let row = y; row < y + h; row++) if ((rows[row] ?? 0) & mask) return false
 			return true
 		}
 
 		const recurse = (): boolean => {
 			const cell = firstEmpty()
-			if (!cell) return allCountsSpent()
+			if (!cell) return pieces.every((piece) => piece.remaining === 0)
 			const [x, y] = cell
 
-			for (let keyIndex = 0; keyIndex < K; keyIndex++) {
-				if (counts[keyIndex]! <= 0) continue
+			for (const piece of pieces) {
+				if (piece.remaining <= 0) continue
 
-				for (const [w, h] of keyDimensions[keyIndex]!) {
+				for (const [w, h] of piece.dimensions) {
 					if (!canPlace({ x, y, w, h })) continue
 					const mask = ((1 << w) - 1) << x
-					for (let dy = 0; dy < h; dy++) rows[y + dy]! |= mask
-					counts[keyIndex]!--
-					layout.push({ x, y, w, h, key: sizeKeys[keyIndex]! })
+					for (let row = y; row < y + h; row++) rows[row] = (rows[row] ?? 0) | mask
+					piece.remaining--
+					layout.push({ x, y, w, h, key: piece.key })
 					if (recurse()) return true
 					layout.pop()
-					counts[keyIndex]!++
-					for (let dy = 0; dy < h; dy++) rows[y + dy]! &= ~mask
+					piece.remaining++
+					for (let row = y; row < y + h; row++) rows[row] = (rows[row] ?? 0) & ~mask
 				}
 			}
 
@@ -294,10 +294,9 @@ const solve = ({ W, H }: { W: number; H: number }) => {
 				if (remainingArea === 0) yield Int8Array.from(counts)
 				return
 			}
-			if (keyIndex >= K) return
-			if (K - keyIndex < remainingUnique) return
+			const area = keyArea[keyIndex]
+			if (area === undefined || K - keyIndex < remainingUnique) return
 			yield* emit(keyIndex + 1, remainingArea, remainingUnique)
-			const area = keyArea[keyIndex]!
 			const maxCount = Math.floor(remainingArea / area)
 
 			for (let count = 1; count <= maxCount; count++) {
@@ -311,24 +310,24 @@ const solve = ({ W, H }: { W: number; H: number }) => {
 		yield* emit(0, AREA, uniqueTarget)
 	}
 
-	const recipeKeyOf = (counts: Int8Array) => {
-		const parts: string[] = []
-		for (let keyIndex = 0; keyIndex < K; keyIndex++)
-			if (counts[keyIndex]! > 0) parts.push(`${sizeKeys[keyIndex]}:${counts[keyIndex]}`)
-		parts.sort()
-		return parts.join('|')
-	}
-
 	const found: Recipe[] = []
 
 	for (let uniqueCount = 1; uniqueCount <= K; uniqueCount++) {
 		for (const counts of enumerateMultisets(uniqueCount)) {
 			const layout = tryPack(counts)
 			if (!layout) continue
-			const countsObj: Record<string, number> = {}
-			for (let keyIndex = 0; keyIndex < K; keyIndex++)
-				if (counts[keyIndex]! > 0) countsObj[sizeKeys[keyIndex]!] = counts[keyIndex]!
-			found.push({ key: recipeKeyOf(counts), counts: countsObj, unique: uniqueCount, layout, tags: [] })
+			const recipeCounts: Record<string, number> = {}
+			const parts: string[] = []
+
+			for (let keyIndex = 0; keyIndex < K; keyIndex++) {
+				const sizeKey = sizeKeys[keyIndex]
+				const count = counts[keyIndex] ?? 0
+				if (sizeKey === undefined || count <= 0) continue
+				recipeCounts[sizeKey] = count
+				parts.push(`${sizeKey}:${count}`)
+			}
+
+			found.push({ key: parts.sort().join('|'), counts: recipeCounts, unique: uniqueCount, layout, tags: [] })
 		}
 	}
 
@@ -341,30 +340,30 @@ const parseSTL = (buf: ArrayBuffer) => {
 	const view = new DataView(buf)
 	const count = view.getUint32(80, true)
 	const vertMap = new Map<string, number>()
-	const verts: number[] = []
-	const tris: number[] = []
+	const verts: [number, number, number][] = []
+	const tris: [number, number, number][] = []
+
+	const vertexIndex = (start: number) => {
+		const vertex: [number, number, number] = [
+			view.getFloat32(start, true),
+			view.getFloat32(start + 4, true),
+			view.getFloat32(start + 8, true),
+		]
+		const key = vertex.join(',')
+		let index = vertMap.get(key)
+
+		if (index === undefined) {
+			index = verts.length
+			vertMap.set(key, index)
+			verts.push(vertex)
+		}
+
+		return index
+	}
 
 	for (let i = 0; i < count; i++) {
 		const base = 84 + i * 50 + 12
-		const tri: number[] = []
-
-		for (let j = 0; j < 3; j++) {
-			const x = view.getFloat32(base + j * 12, true)
-			const y = view.getFloat32(base + j * 12 + 4, true)
-			const z = view.getFloat32(base + j * 12 + 8, true)
-			const k = `${x},${y},${z}`
-			let idx = vertMap.get(k)
-
-			if (idx === undefined) {
-				idx = verts.length / 3
-				vertMap.set(k, idx)
-				verts.push(x, y, z)
-			}
-
-			tri.push(idx)
-		}
-
-		tris.push(...tri)
+		tris.push([vertexIndex(base), vertexIndex(base + 12), vertexIndex(base + 24)])
 	}
 
 	return { verts, tris }
@@ -372,7 +371,7 @@ const parseSTL = (buf: ArrayBuffer) => {
 
 const build3mf = async (recipe: Recipe): Promise<Blob> => {
 	const uniqueSizes = [...new Set(recipe.layout.map((b) => b.key))]
-	const geoms = new Map<string, { verts: number[]; tris: number[] }>()
+	const geoms = new Map<string, ReturnType<typeof parseSTL>>()
 	await Promise.all(
 		uniqueSizes.map(async (key) => {
 			const buf = await fetch(`/gridfinity/bin_${key.replace('×', 'x')}.stl`).then((r) => r.arrayBuffer())
@@ -388,12 +387,10 @@ const build3mf = async (recipe: Recipe): Promise<Blob> => {
 
 	for (const [key, { verts, tris }] of geoms) {
 		xml += `  <object id="${sizeId.get(key)}" type="model">\n   <mesh>\n    <vertices>\n`
-		// verts holds x,y,z triples, so i + 2 stays in bounds
-		for (let i = 0; i < verts.length; i += 3)
-			xml += `     <vertex x="${verts[i]!.toFixed(4)}" y="${verts[i + 1]!.toFixed(4)}" z="${verts[i + 2]!.toFixed(4)}"/>\n`
+		for (const [vertexX, vertexY, vertexZ] of verts)
+			xml += `     <vertex x="${vertexX.toFixed(4)}" y="${vertexY.toFixed(4)}" z="${vertexZ.toFixed(4)}"/>\n`
 		xml += `    </vertices>\n    <triangles>\n`
-		for (let i = 0; i < tris.length; i += 3)
-			xml += `     <triangle v1="${tris[i]}" v2="${tris[i + 1]}" v3="${tris[i + 2]}"/>\n`
+		for (const [v1, v2, v3] of tris) xml += `     <triangle v1="${v1}" v2="${v2}" v3="${v3}"/>\n`
 		xml += `    </triangles>\n   </mesh>\n  </object>\n`
 	}
 
@@ -711,19 +708,14 @@ const parseInitialDims = (id: string | null) => {
 }
 
 const sortRecipes = (solved: Recipe[]) => {
-	const allKeys = sortWith(R.unique(solved.flatMap((x) => R.keys(x.counts))), byFamily)
-	const familyOrder = R.fromEntries(allKeys.map((k, i) => [k, i] as const))
-	// familyOrder covers every size key that appears in any recipe
-	const sortedEntries = (recipe: Recipe) => R.sortBy(R.entries(recipe.counts), ([s]) => familyOrder[s]!)
+	const sortedEntries = (recipe: Recipe) => sortWith(R.entries(recipe.counts), ([a], [b]) => byFamily(a, b))
 	return sortWith(solved, (a, b) => {
 		if (a.unique !== b.unique) return a.unique - b.unique
 		const sortedA = sortedEntries(a)
 		const sortedB = sortedEntries(b)
 
-		for (let i = 0; i < sortedA.length && i < sortedB.length; i++) {
-			const [sizeA, countA] = sortedA[i]!
-			const [sizeB, countB] = sortedB[i]!
-			const diff = familyOrder[sizeA]! - familyOrder[sizeB]!
+		for (const [[sizeA, countA], [sizeB, countB]] of R.zip(sortedA, sortedB)) {
+			const diff = byFamily(sizeA, sizeB)
 			if (diff) return diff
 			if (countA !== countB) return countA - countB
 		}
@@ -927,7 +919,7 @@ const Root = () => {
 
 	const filteredRecipes = recipes.filter((r) => matchesFilter(r, filters, favorites))
 	const filteredIndex = selectedKey ? filteredRecipes.findIndex((r) => r.key === selectedKey) : -1
-	const selectedRecipe = filteredIndex >= 0 ? filteredRecipes[filteredIndex]! : null
+	const selectedRecipe = filteredRecipes[filteredIndex] ?? null
 	const filtersActive = filters.tags.size > 0 || filters.favoriteOnly || filters.constraints.length > 0
 
 	// Deselect during render when filtering removes the selected recipe. Skipped on a grid change:
@@ -1022,7 +1014,9 @@ const Root = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(
 	<NuqsAdapter>
 		<Root />
 	</NuqsAdapter>,
