@@ -5,6 +5,8 @@ import {
 	Field,
 	gcd,
 	Input,
+	isDaisyThemeName,
+	makeTypeGuard,
 	Modal,
 	RadioGroup,
 	Select,
@@ -52,8 +54,11 @@ const STYLES = {
 } as const
 
 type MapStyle = keyof typeof STYLES
+const isMapStyle = (value: string): value is MapStyle => Object.hasOwn(STYLES, value)
 
-type Format = 'jpg' | 'png'
+const FORMATS = ['png', 'jpg'] as const
+type Format = (typeof FORMATS)[number]
+const isFormat = makeTypeGuard(FORMATS)
 
 type TileBounds = { north: number; south: number; east: number; west: number }
 
@@ -90,7 +95,7 @@ const { CANVAS_MAX_TILES_PER_DIM, CANVAS_MAX_TILE_AREA } = (() => {
 			const ctx = c.getContext('2d')
 			if (!ctx) return false
 			ctx.fillRect(0, 0, 1, 1)
-			return ctx.getImageData(0, 0, 1, 1).data[3]! > 0
+			return (ctx.getImageData(0, 0, 1, 1).data[3] ?? 0) > 0
 		} catch {
 			return false
 		}
@@ -446,7 +451,7 @@ const ZoomControl = ({ zoom, locked, onToggleLock, onStep }: ZoomControlProps) =
 type StyleSelectProps = { value: MapStyle; onChange: (style: MapStyle) => void }
 
 const StyleSelect = ({ value, onChange }: StyleSelectProps) => (
-	<Select className='w-fit' value={value} onChange={(e) => onChange(e.target.value as MapStyle)}>
+	<Select className='w-fit' value={value} onChange={(e) => isMapStyle(e.target.value) && onChange(e.target.value)}>
 		{Object.entries(STYLES).map(([styleId, label]) => (
 			<option key={styleId} value={styleId}>
 				{label}
@@ -480,10 +485,7 @@ const MapStats = ({ bounds, format }: { bounds: TileBounds; format: Format }) =>
 
 const MapPrinter = () => {
 	const { resolvedTheme } = useTheme()
-	const colorScheme =
-		resolvedTheme && resolvedTheme in daisyThemeMap
-			? daisyThemeMap[resolvedTheme as keyof typeof daisyThemeMap].colorScheme
-			: 'dark'
+	const colorScheme = isDaisyThemeName(resolvedTheme) ? daisyThemeMap[resolvedTheme].colorScheme : 'dark'
 
 	const containerRef = useRef<HTMLDivElement>(null)
 	// State, not a ref: the toolbar renders from the map, and the listeners below can only be wired
@@ -610,9 +612,9 @@ const MapPrinter = () => {
 						<StyleSelect value={style} onChange={setStyle} />
 						<RadioGroup
 							variant='btn'
-							options={['png', 'jpg']}
+							options={FORMATS}
 							value={format}
-							onChange={(e) => setFormat(e.target.value as Format)}
+							onChange={(e) => isFormat(e.target.value) && setFormat(e.target.value)}
 						/>
 						<Button
 							className={cn(showGrid ? 'btn-primary' : '', 'btn-square')}
@@ -629,7 +631,9 @@ const MapPrinter = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(
 	<ThemeProvider>
 		<MapPrinter />
 	</ThemeProvider>,
