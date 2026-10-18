@@ -26,7 +26,9 @@ const PenCard = ({ slug, href, Icon }: Item) => {
 	useEffect(() => {
 		const el = containerRef.current
 		if (!el) return
-		const observer = new ResizeObserver(([entry]) => setScale(entry!.contentRect.width / IFRAME_W))
+		const observer = new ResizeObserver(([entry]) => {
+			if (entry) setScale(entry.contentRect.width / IFRAME_W)
+		})
 		observer.observe(el)
 		return () => observer.disconnect()
 	}, [])
@@ -85,4 +87,6 @@ const App = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(<App />)
