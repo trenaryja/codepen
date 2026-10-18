@@ -693,10 +693,20 @@ type CropStageProps = {
 	savedStateRef: React.RefObject<CropperState | null>
 	onStatus: (label: string) => void
 	onCropped: (blob: Blob, previewUrl: string) => Promise<void>
+	onError: (error: unknown) => void
 	onCancel: () => void
 }
 
-function CropStage({ imageUrl, model, onModelChange, savedStateRef, onStatus, onCropped, onCancel }: CropStageProps) {
+function CropStage({
+	imageUrl,
+	model,
+	onModelChange,
+	savedStateRef,
+	onStatus,
+	onCropped,
+	onError,
+	onCancel,
+}: CropStageProps) {
 	const cropperRef = useRef<CropperRef>(null)
 
 	const cropAndRemove = async () => {
@@ -732,7 +742,7 @@ function CropStage({ imageUrl, model, onModelChange, savedStateRef, onStatus, on
 	}
 
 	useHotkeys([
-		['Enter', cropAndRemove],
+		['Enter', () => void cropAndRemove().catch(onError)],
 		['Escape', onCancel],
 	])
 
@@ -782,10 +792,10 @@ function CropStage({ imageUrl, model, onModelChange, savedStateRef, onStatus, on
 					<button type='button' className='btn btn-sm btn-ghost' onClick={onCancel}>
 						Cancel
 					</button>
-					<button type='button' className='btn btn-sm btn-outline' onClick={skipCrop}>
+					<button type='button' className='btn btn-sm btn-outline' onClick={() => void skipCrop().catch(onError)}>
 						Skip Crop
 					</button>
-					<button type='button' className='btn btn-sm btn-primary' onClick={cropAndRemove}>
+					<button type='button' className='btn btn-sm btn-primary' onClick={() => void cropAndRemove().catch(onError)}>
 						Crop & Remove Background
 					</button>
 				</div>
@@ -1038,7 +1048,7 @@ const Root = () => {
 	return (
 		<ThemeProvider>
 			<div className='h-screen w-screen flex flex-col overflow-hidden'>
-				{stage === 'idle' && <DropZone inputRef={inputRef} onFile={handleFile} />}
+				{stage === 'idle' && <DropZone inputRef={inputRef} onFile={(file) => void handleFile(file)} />}
 				{stage === 'loading' && <LoadingStage label={progressInfo.label} />}
 				{stage === 'cropping' && imageUrl && (
 					<CropStage
@@ -1048,6 +1058,7 @@ const Root = () => {
 						savedStateRef={savedCropperStateRef}
 						onStatus={announce}
 						onCropped={processImage}
+						onError={fail}
 						onCancel={reset}
 					/>
 				)}
@@ -1064,7 +1075,7 @@ const Root = () => {
 						onBgColorChange={setBgColor}
 						onEditUpdate={handleEditUpdate}
 						onBackToCrop={handleBackToCrop}
-						onDownload={download}
+						onDownload={() => void download().catch(fail)}
 						onReset={reset}
 					/>
 				)}
