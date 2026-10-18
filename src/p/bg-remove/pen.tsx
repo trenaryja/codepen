@@ -6,6 +6,8 @@ import type { CropperRef, CropperState } from 'https://esm.sh/react-advanced-cro
 import { Cropper } from 'https://esm.sh/react-advanced-cropper'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import { ImageRestriction } from 'https://esm.sh/advanced-cropper'
+import * as R from 'https://esm.sh/remeda'
+import { z } from 'https://esm.sh/zod'
 
 type Stage = 'cropping' | 'done' | 'error' | 'idle' | 'loading' | 'processing'
 
@@ -40,6 +42,12 @@ const createCanvas = (width: number, height: number) => {
 	canvas.width = width
 	canvas.height = height
 	return canvas
+}
+
+const context2d = (canvas: HTMLCanvasElement) => {
+	const context = canvas.getContext('2d')
+	if (!context) throw new Error('This browser gave no 2D canvas context')
+	return context
 }
 
 const revokeUrls = (urls: (string | null)[]) => {
@@ -78,7 +86,8 @@ self.onmessage = async (e) => {
 async function normalizeFile(file: File) {
 	if (isHeicFile(file)) {
 		const converted = await heic2any({ blob: file, toType: 'image/png' })
-		const blob = Array.isArray(converted) ? converted[0]! : converted
+		const blob = Array.isArray(converted) ? converted[0] : converted
+		if (!blob) throw new Error(`heic2any returned no image for ${file.name}`)
 		return URL.createObjectURL(blob)
 	}
 
@@ -96,28 +105,43 @@ const PHASE_LABELS: Record<string, string> = {
 const DETERMINISTIC_PHASES = new Set(['fetch:model'])
 
 function phaseLabel(key: string) {
-	if (key in PHASE_LABELS) return PHASE_LABELS[key]!
+	const known = PHASE_LABELS[key]
+	if (known) return known
 	if (key.startsWith('fetch:')) return 'Downloading resources…'
 	if (key.startsWith('compute:')) return 'Processing…'
 	return 'Working…'
 }
 
+const workerMessageSchema = z.discriminatedUnion('type', [
+	z.object({ type: z.literal('progress'), key: z.string(), current: z.number(), total: z.number() }),
+	z.object({ type: z.literal('done'), blob: z.instanceof(Blob) }),
+	z.object({ type: z.literal('error'), message: z.string() }),
+])
+
 function runBgRemoval(blob: Blob, model: ModelSize, onProgress: (info: ProgressInfo) => void): Promise<Blob> {
 	return new Promise((resolve, reject) => {
 		const worker = createBgWorker(model)
 
-		worker.onmessage = (e: MessageEvent) => {
-			const { type } = e.data
+		worker.onmessage = (e) => {
+			const parsed = workerMessageSchema.safeParse(e.data)
 
-			if (type === 'progress') {
-				const { key, current, total } = e.data
+			if (!parsed.success) {
+				reject(new Error(`Background-removal worker sent an unexpected message: ${z.prettifyError(parsed.error)}`))
+				worker.terminate()
+				return
+			}
+
+			const message = parsed.data
+
+			if (message.type === 'progress') {
+				const { key, current, total } = message
 				const percent = DETERMINISTIC_PHASES.has(key) && total > 0 ? Math.round((current / total) * 100) : null
 				onProgress({ label: phaseLabel(key), percent })
-			} else if (type === 'done') {
-				resolve(e.data.blob)
+			} else if (message.type === 'done') {
+				resolve(message.blob)
 				worker.terminate()
-			} else if (type === 'error') {
-				reject(new Error(e.data.message))
+			} else {
+				reject(new Error(message.message))
 				worker.terminate()
 			}
 		}
@@ -137,7 +161,7 @@ function imageToBlobUrl(src: string): Promise<Blob> {
 
 		img.onload = () => {
 			const canvas = createCanvas(img.naturalWidth, img.naturalHeight)
-			canvas.getContext('2d')!.drawImage(img, 0, 0)
+			context2d(canvas).drawImage(img, 0, 0)
 			canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Canvas export failed'))), 'image/png')
 		}
 
@@ -149,7 +173,7 @@ function imageToBlobUrl(src: string): Promise<Blob> {
 async function renderForDownload({ url, format, bgColor }: { url: string; format: Format; bgColor: string }) {
 	const image = await loadImage(url)
 	const canvas = createCanvas(image.naturalWidth, image.naturalHeight)
-	const context = canvas.getContext('2d')!
+	const context = context2d(canvas)
 
 	if (!FORMAT_META[format].transparency) {
 		context.fillStyle = bgColor
@@ -212,7 +236,7 @@ type RestoreDab = Dab & {
 }
 
 function restoreDab({ context, canvas, scratchCanvas, croppedImage, x, y, radius, hardness }: RestoreDab) {
-	const scratchContext = scratchCanvas.getContext('2d')!
+	const scratchContext = context2d(scratchCanvas)
 	const brushSize = radius * 2
 	const left = Math.max(0, Math.floor(x - radius))
 	const top = Math.max(0, Math.floor(y - radius))
@@ -248,7 +272,7 @@ type StrokeSettings = {
 
 function paintStroke(from: Point, to: Point, settings: StrokeSettings) {
 	const { canvas, scratchCanvas, croppedImage, brushSize, hardness, mode } = settings
-	const context = canvas.getContext('2d')!
+	const context = context2d(canvas)
 	const radius = brushSize / 2
 	const distance = Math.hypot(to.x - from.x, to.y - from.y)
 	const steps = Math.max(1, Math.ceil(distance / (brushSize * 0.25)))
@@ -266,14 +290,14 @@ function paintStroke(from: Point, to: Point, settings: StrokeSettings) {
 function primeCanvas(canvas: HTMLCanvasElement, resultImage: HTMLImageElement) {
 	canvas.width = resultImage.naturalWidth
 	canvas.height = resultImage.naturalHeight
-	canvas.getContext('2d')!.drawImage(resultImage, 0, 0)
+	context2d(canvas).drawImage(resultImage, 0, 0)
 	return createCanvas(canvas.width, canvas.height)
 }
 
 function canvasPointFromEvent(canvas: HTMLCanvasElement, e: React.MouseEvent | React.TouchEvent) {
+	const { clientX, clientY } = ('touches' in e ? e.touches[0] : e) ?? {}
+	if (clientX === undefined || clientY === undefined) return null
 	const rect = canvas.getBoundingClientRect()
-	const clientX = 'touches' in e ? e.touches[0]!.clientX : e.clientX
-	const clientY = 'touches' in e ? e.touches[0]!.clientY : e.clientY
 	return {
 		x: ((clientX - rect.left) / rect.width) * canvas.width,
 		y: ((clientY - rect.top) / rect.height) * canvas.height,
@@ -521,9 +545,9 @@ function EraserCanvas({
 		let cancelled = false
 		Promise.all([loadImage(seedUrl), loadImage(croppedUrl)])
 			.then(([resultImage, croppedImage]) => {
-				if (cancelled) return
+				if (cancelled || !canvasRef.current) return
 				croppedImageRef.current = croppedImage
-				scratchCanvasRef.current = primeCanvas(canvasRef.current!, resultImage)
+				scratchCanvasRef.current = primeCanvas(canvasRef.current, resultImage)
 				setReady(true)
 			})
 			.catch((error) => console.error('Touch-up canvas could not load its source images:', error))
@@ -534,33 +558,34 @@ function EraserCanvas({
 	}, [seedUrl, croppedUrl])
 
 	const saveUndo = () => {
-		const canvas = canvasRef.current!
-		undoStackRef.current.push(canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height))
+		const canvas = canvasRef.current
+		if (!canvas) return
+		undoStackRef.current.push(context2d(canvas).getImageData(0, 0, canvas.width, canvas.height))
 		if (undoStackRef.current.length > 30) undoStackRef.current.shift()
 	}
 
 	const emitUpdate = () => {
-		canvasRef.current!.toBlob((blob) => {
+		canvasRef.current?.toBlob((blob) => {
 			if (blob) onUpdate(URL.createObjectURL(blob))
 		}, 'image/png')
 	}
 
 	const undo = () => {
+		const canvas = canvasRef.current
+		if (!canvas) return
 		const data = undoStackRef.current.pop()
 		if (!data) return
-		canvasRef.current!.getContext('2d')!.putImageData(data, 0, 0)
+		context2d(canvas).putImageData(data, 0, 0)
 		emitUpdate()
 	}
 
-	const stroke = (from: Point, to: Point) =>
-		paintStroke(from, to, {
-			canvas: canvasRef.current!,
-			scratchCanvas: scratchCanvasRef.current!,
-			croppedImage: croppedImageRef.current!,
-			brushSize,
-			hardness,
-			mode,
-		})
+	const stroke = (from: Point, to: Point) => {
+		const canvas = canvasRef.current
+		const scratchCanvas = scratchCanvasRef.current
+		const croppedImage = croppedImageRef.current
+		if (!canvas || !scratchCanvas || !croppedImage) return
+		paintStroke(from, to, { canvas, scratchCanvas, croppedImage, brushSize, hardness, mode })
+	}
 
 	const startPaint = (e: React.MouseEvent | React.TouchEvent) => {
 		if (!ready) return
@@ -572,9 +597,10 @@ function EraserCanvas({
 		}
 
 		e.preventDefault()
+		const point = canvasRef.current && canvasPointFromEvent(canvasRef.current, e)
+		if (!point) return
 		saveUndo()
 		paintingRef.current = true
-		const point = canvasPointFromEvent(canvasRef.current!, e)
 		lastPointRef.current = point
 		stroke(point, point)
 	}
@@ -587,7 +613,8 @@ function EraserCanvas({
 
 		if (!paintingRef.current || !lastPointRef.current) return
 		e.preventDefault()
-		const point = canvasPointFromEvent(canvasRef.current!, e)
+		const point = canvasRef.current && canvasPointFromEvent(canvasRef.current, e)
+		if (!point) return
 		stroke(lastPointRef.current, point)
 		lastPointRef.current = point
 	}
@@ -778,7 +805,10 @@ function CropStage({
 					<select
 						className='select select-sm select-bordered'
 						value={model}
-						onChange={(e) => onModelChange(e.target.value as ModelSize)}
+						onChange={(e) => {
+							const size = R.keys(MODEL_META).find((key) => key === e.target.value)
+							if (size) onModelChange(size)
+						}}
 					>
 						{Object.entries(MODEL_META).map(([key, { label, size }]) => (
 							<option key={key} value={key}>
@@ -876,7 +906,10 @@ function ResultToolbar(props: ResultToolbarProps) {
 			<select
 				className='select select-sm select-bordered'
 				value={format}
-				onChange={(e) => props.onFormatChange(e.target.value as Format)}
+				onChange={(e) => {
+					const mime = R.keys(FORMAT_META).find((key) => key === e.target.value)
+					if (mime) props.onFormatChange(mime)
+				}}
 			>
 				{Object.entries(FORMAT_META).map(([mime, { label, transparency }]) => (
 					<option key={mime} value={mime}>
@@ -924,7 +957,7 @@ function ResultStage({ resultUrl, editedUrl, croppedUrl, onEditUpdate, ...toolba
 				<>
 					<div className='flex-1 min-h-0 flex items-center justify-center p-4'>
 						<img
-							src={showOriginal ? croppedUrl! : activeResultUrl}
+							src={showOriginal ? (croppedUrl ?? undefined) : activeResultUrl}
 							alt={showOriginal ? 'Cropped original' : 'Background removed'}
 							className={`max-w-full max-h-full rounded-lg object-contain ${!showOriginal ? 'checkerboard' : ''}`}
 						/>
@@ -1084,4 +1117,6 @@ const Root = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('#root is missing from index.html')
+createRoot(rootElement).render(<Root />)
