@@ -115,7 +115,7 @@ ${fragment}
 		},
 
 		configureServer(server) {
-			server.middlewares.use(async (req, res, next) => {
+			server.middlewares.use((req, res, next) => {
 				const url = req.url ?? ''
 				const match = penUrlRe.exec(url)
 				if (!match) return next()
@@ -124,12 +124,15 @@ ${fragment}
 				const slug = match[2]!
 				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return next()
 
-				const html = await buildWrapper(slug, dir)
-				const transformed = await server.transformIndexHtml(url, html)
-				res.setHeader('Content-Type', 'text/html')
-				res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
-				res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless')
-				res.end(transformed)
+				buildWrapper(slug, dir)
+					.then((html) => server.transformIndexHtml(url, html))
+					.then((transformed) => {
+						res.setHeader('Content-Type', 'text/html')
+						res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+						res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless')
+						res.end(transformed)
+					})
+					.catch(next)
 			})
 		},
 
