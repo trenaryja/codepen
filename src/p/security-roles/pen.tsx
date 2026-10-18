@@ -584,13 +584,14 @@ const Root = () => {
 	const [proposed, setProposed] = useState(false)
 
 	// Stored users predating firstName/lastName are unusable — regenerate rather than migrate.
-	const safeUsers = (users.length > 0 && 'firstName' in users[0]! ? users : null) ?? generateUsers(newRoleNames)
+	const [firstUser] = users
+	const safeUsers = firstUser && 'firstName' in firstUser ? users : generateUsers(newRoleNames)
 
 	const updateUser = (index: number, user: UserData) =>
 		setUsers((previous) => previous.map((existing, i) => (i === index ? user : existing)))
 
-	const updateOldRole = (index: number, role: OldRole) =>
-		setOldRoles((previous) => previous.map((existing, i) => (i === index ? role : existing)))
+	const updateOldRole = (index: number, patch: Partial<OldRole>) =>
+		setOldRoles((previous) => previous.map((existing, i) => (i === index ? { ...existing, ...patch } : existing)))
 
 	const updateNewRole = (index: number, role: NewRole) =>
 		setNewRoles((previous) => previous.map((existing, i) => (i === index ? role : existing)))
@@ -649,9 +650,9 @@ const Root = () => {
 							search={search}
 							orgsFor={(role, index) => ({
 								active: role.orgs,
-								onToggle: (org) => updateOldRole(index, { ...role, orgs: toggle(role.orgs, org) }),
+								onToggle: (org) => updateOldRole(index, { orgs: toggle(role.orgs, org) }),
 							})}
-							onUpdate={(index, updated) => updateOldRole(index, { ...oldRoles[index]!, ...updated })}
+							onUpdate={updateOldRole}
 							onDelete={deleteOldRole}
 						/>
 					)}
@@ -663,4 +664,6 @@ const Root = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(<Root />)
