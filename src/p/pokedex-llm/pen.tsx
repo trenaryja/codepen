@@ -27,6 +27,7 @@ import {
 } from 'https://esm.sh/react-icons/lu'
 import * as R from 'https://esm.sh/remeda'
 import { Virtualizer } from 'https://esm.sh/virtua'
+import { z } from 'https://esm.sh/zod'
 
 // PokéAPI has `color` and the legendary/mythical flags; the Purukitto dump doesn't.
 // Rather than ship a data file (pens are 3 files, copy-pasteable to CodePen) these are
@@ -90,7 +91,11 @@ type RangeValue = { level: Level } | { min?: number; max?: number }
 
 type FilterValue = boolean | string | RangeValue | string[]
 
-const textOf = (value: FilterValue) => (typeof value === 'string' ? value : '')
+const textOf = (value: FilterValue | undefined) => (typeof value === 'string' ? value : '')
+const listOf = (value: FilterValue | undefined) => (Array.isArray(value) ? value : [])
+const rangeOf = (value: FilterValue | undefined): RangeValue =>
+	typeof value === 'object' && !Array.isArray(value) ? value : {}
+const isLevel = (value: unknown): value is Level => LEVELS.some((level) => level === value)
 
 type Filters = Record<string, FilterValue>
 
@@ -188,17 +193,24 @@ const DEFAULT_COLUMNS = new Set(
 	'name type color generation total hp attack defense spAttack spDefense speed legendary'.split(' '),
 )
 
-type RawMon = {
-	id: number
-	name: { english: string }
-	type: string[]
-	base: Record<string, number>
-	species: string
-	description: string
-	evolution?: { next?: unknown[] }
-	profile: { height: string; weight: string; egg?: string[]; ability?: string[][] }
-	image: { thumbnail: string }
-}
+const rawMonSchema = z.object({
+	id: z.number(),
+	name: z.object({ english: z.string() }),
+	type: z.array(z.string()),
+	base: z.record(z.string(), z.number()),
+	species: z.string(),
+	description: z.string(),
+	evolution: z.object({ next: z.array(z.unknown()).optional() }).optional(),
+	profile: z.object({
+		height: z.string(),
+		weight: z.string(),
+		egg: z.array(z.string()).optional(),
+		ability: z.array(z.tuple([z.string(), z.string()])).optional(), // [name, hidden] pairs
+	}),
+	image: z.object({ thumbnail: z.string() }),
+})
+
+type RawMon = z.infer<typeof rawMonSchema>
 
 /** Our camelCase stat ids -> the keys the dump uses. Doubles as the "is this a stat column?" test. */
 const STAT_KEYS = {
@@ -215,7 +227,7 @@ const deriveProfile = (profile: RawMon['profile'] | undefined) => ({
 	height: Number.parseFloat(profile?.height ?? '0') || 0,
 	weight: Number.parseFloat(profile?.weight ?? '0') || 0,
 	eggGroups: profile?.egg ?? [],
-	abilities: (profile?.ability ?? []).map(([name]) => name!), // dataset ability entries are [name, hidden] pairs
+	abilities: (profile?.ability ?? []).map(([name]) => name),
 })
 
 const deriveMon = (raw: RawMon): Mon => {
@@ -225,7 +237,7 @@ const deriveMon = (raw: RawMon): Mon => {
 		name: raw.name.english,
 		thumbnail: raw.image.thumbnail,
 		types: raw.type,
-		color: COLORS[Number(COLOR_CODES[raw.id - 1] ?? 0)]!, // COLOR_CODES digits are all < COLORS.length
+		color: COLORS[Number(COLOR_CODES.charAt(raw.id - 1))] ?? COLORS[0],
 		generation: GENERATION_ENDS.findIndex((end) => raw.id <= end) + 1,
 		...stats,
 		total: R.sum(R.values(stats)),
@@ -248,15 +260,15 @@ type RangeStat = { min: number; max: number; levels: Record<Level, [number | nul
 const RANGE_STATS: Record<string, RangeStat> = {}
 
 const percentile = (sorted: number[], p: number) =>
-	sorted[Math.min(sorted.length - 1, Math.round((p / 100) * (sorted.length - 1)))]! // index clamped to length - 1
+	sorted[Math.min(sorted.length - 1, Math.round((p / 100) * (sorted.length - 1)))] ?? null
 
 const computeRangeStats = (rows: Mon[]) => {
 	for (const field of FIELDS) {
 		if (field.kind !== 'range') continue
 		const sorted = R.sortBy(rows.map(field.get), R.identity())
 		RANGE_STATS[field.id] = {
-			min: sorted[0]!,
-			max: sorted.at(-1)!,
+			min: sorted[0] ?? 0,
+			max: sorted.at(-1) ?? 0,
 			levels: {
 				very_low: [null, percentile(sorted, 10)],
 				low: [null, percentile(sorted, 25)],
@@ -275,12 +287,12 @@ const resolveRange = (fieldId: string, value: RangeValue): [number | null, numbe
 
 const matchField = (field: Field, mon: Mon, value: FilterValue) => {
 	if (field.kind === 'enum') {
-		const wanted = value as string[]
+		const wanted = listOf(value)
 		if (!wanted.length) return true
 		return field.get(mon).some((own) => wanted.includes(own))
 	}
 	if (field.kind === 'range') {
-		const [min, max] = resolveRange(field.id, value as RangeValue)
+		const [min, max] = resolveRange(field.id, rangeOf(value))
 		const own = field.get(mon)
 		return (min == null || own >= min) && (max == null || own <= max)
 	}
@@ -299,7 +311,7 @@ const sanitizeEnum = (values: readonly string[], value: unknown) => {
 
 const sanitizeRange = (value: unknown): RangeValue | undefined => {
 	if (!R.isPlainObject(value)) return undefined
-	if ('level' in value && LEVELS.includes(value.level as Level)) return { level: value.level as Level }
+	if ('level' in value && isLevel(value.level)) return { level: value.level }
 	const min = typeof value.min === 'number' ? value.min : undefined
 	const max = typeof value.max === 'number' ? value.max : undefined
 	if (min == null && max == null) return undefined
@@ -590,7 +602,7 @@ const MODELS = [
 	{ id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', label: 'SmolLM2 360M', size: '376 MB' },
 	{ id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', label: 'Llama 3.2 1B', size: '879 MB' },
 	{ id: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', label: 'Qwen2.5 1.5B', size: '1.6 GB' },
-]
+] as const
 
 /**
  * jsDelivr, not esm.sh: esm.sh's build of web-llm shims node's `path` badly and dies with
@@ -662,6 +674,17 @@ type Engine = {
 	unload: () => Promise<void>
 }
 
+type WebLlm = {
+	CreateWebWorkerMLCEngine: (worker: Worker, id: string, options: object) => Promise<Engine>
+}
+
+/** esm.run has no types for web-llm, so the import is checked for the one export we call. */
+const isWebLlm = (module: unknown): module is WebLlm =>
+	typeof module === 'object' &&
+	module !== null &&
+	'CreateWebWorkerMLCEngine' in module &&
+	typeof module.CreateWebWorkerMLCEngine === 'function'
+
 type StreamChunk = {
 	choices: { delta?: { content?: string } }[]
 	usage?: { completion_tokens?: number; extra?: { decode_tokens_per_s?: number } }
@@ -699,7 +722,7 @@ type ControlProps = {
 }
 
 const EnumControl = ({ field, value, onChange }: ControlProps) => {
-	const selected = (value as string[] | undefined) ?? []
+	const selected = listOf(value)
 	const values = field.kind === 'enum' ? field.values : []
 
 	const toggle = (entry: string) => {
@@ -729,8 +752,9 @@ const EnumControl = ({ field, value, onChange }: ControlProps) => {
 
 const RangeControl = ({ field, value, onChange }: ControlProps) => {
 	const stat = RANGE_STATS[field.id]
-	const level = value && 'level' in (value as object) ? (value as { level: Level }).level : null
-	const bounds: { min?: number; max?: number } = value && !level ? (value as { min?: number; max?: number }) : {}
+	const range = rangeOf(value)
+	const level = 'level' in range ? range.level : null
+	const bounds: { min?: number; max?: number } = 'level' in range ? {} : range
 	const bound = (which: 'max' | 'min') => (
 		<Input
 			type='number'
@@ -785,7 +809,7 @@ const TextControl = ({ field, value, onChange }: ControlProps) => (
 	<Input
 		className='input input-xs w-full'
 		placeholder={`Search ${field.label.toLowerCase()}…`}
-		value={(value as string | undefined) ?? ''}
+		value={textOf(value)}
 		onChange={(event) => onChange(event.target.value || undefined)}
 	/>
 )
@@ -799,10 +823,11 @@ const FilterControl = (props: ControlProps) => {
 
 /** One-line summary of an active filter, for header badges and the panel. */
 const summarize = (field: Field, value: FilterValue): string => {
-	if (field.kind === 'enum') return (value as string[]).join(', ')
+	if (field.kind === 'enum') return listOf(value).join(', ')
 	if (field.kind === 'range') {
-		if ('level' in (value as object)) return (value as { level: Level }).level.replace('_', ' ')
-		const { min, max } = value as { min?: number; max?: number }
+		const range = rangeOf(value)
+		if ('level' in range) return range.level.replace('_', ' ')
+		const { min, max } = range
 		if (min != null && max != null) return `${min}–${max}`
 		return min != null ? `≥ ${min}` : `≤ ${max}`
 	}
@@ -912,7 +937,10 @@ const COLUMNS: ColumnDef<typeof features, Mon>[] = FIELDS.map((field) => ({
 	accessorFn: (mon: Mon) => (field.kind === 'enum' ? field.get(mon).join(',') : field.get(mon)),
 	enableSorting: field.kind !== 'enum',
 	cell: cellFor(field),
-	filterFn: (row, id, value) => matchField(FIELD_BY_ID[id]!, row.original, value),
+	filterFn: (row, _id, value) => {
+		const clean = sanitizeValue(field, value)
+		return clean === undefined || matchField(field, row.original, clean)
+	},
 }))
 
 const HeaderFilter = ({
@@ -998,8 +1026,9 @@ const loadEngine = async ({ id, previous, onLoaded, onError }: LoadEngineHandler
 		// still looking fully interactive, which is precisely what reads as a crash.
 		await nextPaint()
 		await previous?.unload()
-		const webllm = await import(/* @vite-ignore */ `${CDN}@mlc-ai/web-llm`)
-		const engine: Engine = await webllm.CreateWebWorkerMLCEngine(createEngineWorker(), id, {
+		const webllm: unknown = await import(/* @vite-ignore */ `${CDN}@mlc-ai/web-llm`)
+		if (!isWebLlm(webllm)) throw new Error(`${CDN}@mlc-ai/web-llm has no CreateWebWorkerMLCEngine export`)
+		const engine = await webllm.CreateWebWorkerMLCEngine(createEngineWorker(), id, {
 			// WebLLM narrates every shard at INFO, and worker console output is proxied to the page's
 			// main thread. WARN rather than SILENT so genuine failures still surface in the console.
 			logLevel: 'WARN',
@@ -1072,8 +1101,10 @@ const usePokedexRows = () => {
 		const controller = new AbortController()
 		fetch(DATA_URL, { signal: controller.signal })
 			.then((response) => response.json())
-			.then((raw: RawMon[]) => {
-				const derived = raw.map(deriveMon)
+			.then((json) => {
+				const parsed = z.array(rawMonSchema).safeParse(json)
+				if (!parsed.success) throw new Error(`${DATA_URL}: ${z.prettifyError(parsed.error)}`)
+				const derived = parsed.data.map(deriveMon)
 				computeRangeStats(derived)
 				setRows(derived)
 			})
@@ -1091,7 +1122,7 @@ const useEngine = () => {
 	const engineRef = useRef<Engine | null>(null)
 	// Bumped the moment a load starts, so anything still streaming off the outgoing engine is stale.
 	const runIdRef = useRef(0)
-	const [modelId, setModelId] = useState<string>(MODELS[1]!.id)
+	const [modelId, setModelId] = useState<string>(MODELS[1].id)
 	const [modelState, setModelState] = useState<ModelState>('idle')
 	const [modelError, setModelError] = useState('')
 	const [timing, setTiming] = useState<Timing>({})
@@ -1143,7 +1174,7 @@ const ModelNotice = ({ modelState, modelError, size }: ModelNoticeProps) => {
 		<p className='px-3 pb-2 text-[11px] text-error'>
 			Couldn't load the model: {modelError}.{' '}
 			{/* ~700 MB of weights: a dropped connection is likelier than absent WebGPU. Only blame WebGPU when it is. */}
-			{navigator.gpu
+			{'gpu' in navigator
 				? 'Try again — the weights download can drop partway.'
 				: 'This pen needs WebGPU, which this browser does not support.'}
 		</p>
@@ -1177,7 +1208,7 @@ const PromptHeader = ({
 	rejection,
 	onDismissRejection,
 }: PromptHeaderProps) => {
-	const selectedModel = MODELS.find((model) => model.id === modelId)!
+	const selectedModel = MODELS.find((model) => model.id === modelId) ?? MODELS[1]
 
 	return (
 		<header className='shrink-0 border-b border-base-content/10 bg-base-200/60'>
@@ -1256,8 +1287,11 @@ type TableGridProps = {
 const TableGrid = ({ table, filters, setFilter }: TableGridProps) => {
 	const scrollRef = useRef<HTMLDivElement>(null)
 	const headers = table.getHeaderGroups()[0]?.headers ?? []
-	const fields = headers.map((header) => FIELD_BY_ID[header.column.id]!) // column ids are generated from FIELDS
-	const gridTemplate = fields.map((field) => `${field.width}px`).join(' ')
+	const columns = headers.flatMap((header) => {
+		const field = FIELD_BY_ID[header.column.id]
+		return field ? [{ header, field }] : []
+	})
+	const gridTemplate = columns.map(({ field }) => `${field.width}px`).join(' ')
 
 	return (
 		<div ref={scrollRef} className='flex-1 overflow-auto'>
@@ -1266,7 +1300,7 @@ const TableGrid = ({ table, filters, setFilter }: TableGridProps) => {
 					className='sticky top-0 z-20 grid bg-base-200 border-b border-base-content/15 text-xs font-semibold'
 					style={{ gridTemplateColumns: gridTemplate }}
 				>
-					{headers.map((header, i) => {
+					{columns.map(({ header, field }) => {
 						const sorted = header.column.getIsSorted()
 						return (
 							<div key={header.id} className='flex items-center gap-1 px-2 py-1.5 min-w-0'>
@@ -1280,7 +1314,7 @@ const TableGrid = ({ table, filters, setFilter }: TableGridProps) => {
 								{sorted === 'asc' && <LuChevronUp size={11} className='text-primary shrink-0' />}
 								{sorted === 'desc' && <LuChevronDown size={11} className='text-primary shrink-0' />}
 								<span className='flex-1' />
-								<HeaderFilter field={fields[i]!} value={filters[header.column.id]} setFilter={setFilter} />
+								<HeaderFilter field={field} value={filters[header.column.id]} setFilter={setFilter} />
 							</div>
 						)
 					})}
@@ -1374,14 +1408,19 @@ const StatusBar = ({
 		</span>
 		{!R.isEmpty(filters) && (
 			<span className='flex items-center gap-1 flex-wrap min-w-0'>
-				{R.entries(filters).map(([id, value]) => (
-					<span key={id} className='badge badge-xs badge-primary badge-soft gap-1'>
-						{FIELD_BY_ID[id]!.label}: {summarize(FIELD_BY_ID[id]!, value)}
-						<button type='button' onClick={() => setFilter(id, undefined)}>
-							<LuX size={9} />
-						</button>
-					</span>
-				))}
+				{R.entries(filters).map(([id, value]) => {
+					const field = FIELD_BY_ID[id]
+					return (
+						field && (
+							<span key={id} className='badge badge-xs badge-primary badge-soft gap-1'>
+								{field.label}: {summarize(field, value)}
+								<button type='button' onClick={() => setFilter(id, undefined)}>
+									<LuX size={9} />
+								</button>
+							</span>
+						)
+					)
+				})}
 			</span>
 		)}
 		<span className='flex-1' />
@@ -1538,4 +1577,6 @@ const Root = () => {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('#root is missing from index.html')
+createRoot(rootElement).render(<Root />)
