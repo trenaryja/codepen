@@ -12,6 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSyn
 import { join } from 'node:path'
 import { cancel, intro, isCancel, multiselect, note, outro, select, spinner, text } from '@clack/prompts'
 import { Command } from 'commander'
+import { z } from 'zod'
 import { version as VERSION } from './package.json'
 
 const ROOT = import.meta.dir
@@ -89,19 +90,35 @@ const esmShToNpm = (url: string) =>
 		.replace(/^((?:@[^/]+\/)?[^/@]+)@[^/]+/, '$1')
 
 const npmPkgRoot = (npmSpec: string) =>
-	npmSpec.startsWith('@') ? npmSpec.split('/').slice(0, 2).join('/') : npmSpec.split('/')[0]!
+	npmSpec
+		.split('/')
+		.slice(0, npmSpec.startsWith('@') ? 2 : 1)
+		.join('/')
+
+const packageJsonSchema = z.object({
+	dependencies: z.record(z.string(), z.string()).optional(),
+	devDependencies: z.record(z.string(), z.string()).optional(),
+	types: z.string().optional(),
+	typings: z.string().optional(),
+})
+
+function readPackageJson(path: string) {
+	const result = packageJsonSchema.safeParse(JSON.parse(readFileSync(path, 'utf-8')))
+	if (!result.success) throw new Error(`${path}: ${z.prettifyError(result.error)}`)
+	return result.data
+}
 
 // package.json is the source of truth for what a pen may import, never node_modules — an orphaned
 // install dir (dropped from package.json but never pruned) otherwise reads as a satisfied dependency,
 // so the package silently resolves locally while nothing keeps it installed or up to date
 function declaredPkgs(): Set<string> {
-	const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'))
+	const pkg = readPackageJson(join(ROOT, 'package.json'))
 	return new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})])
 }
 
 function hasOwnTypes(pkgName: string): boolean {
 	try {
-		const pkg = JSON.parse(readFileSync(join(ROOT, 'node_modules', pkgName, 'package.json'), 'utf-8'))
+		const pkg = readPackageJson(join(ROOT, 'node_modules', pkgName, 'package.json'))
 		return !!(pkg.types ?? pkg.typings)
 	} catch {
 		return false
@@ -129,7 +146,8 @@ function syncEsmDeclarations(importUrls: string[]): void {
 	for (const m of current.matchAll(
 		/declare module '(https:\/\/esm\.sh\/(?!\*)[^']+)'(?:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})?/g,
 	)) {
-		blocks.set(m[1]!, m[0])
+		const [block, url] = m
+		if (url) blocks.set(url, block)
 	}
 
 	const imported = new Set(importUrls)
@@ -221,7 +239,8 @@ async function cmdExport(slug?: string): Promise<void> {
 	const pens = getPens()
 	if (pens.length === 0) fail('No pens found.')
 
-	const resolvedSlug = slug ?? (pens.length === 1 ? pens[0]! : await selectPen(pens, 'Which pen to export?'))
+	const onlyPen = pens.length === 1 ? pens[0] : undefined
+	const resolvedSlug = slug ?? onlyPen ?? (await selectPen(pens, 'Which pen to export?'))
 	const penDir = join(PENS_DIR, resolvedSlug)
 	if (!existsSync(penDir)) fail(`Pen "${resolvedSlug}" not found.`)
 
@@ -298,6 +317,12 @@ async function importZip(slugFlag?: string, zipFlag?: string): Promise<void> {
 	note(`Preview: http://localhost:5173/p/${slug}/`, `Imported to p/${slug}/`)
 }
 
+const codePenPenSchema = z.object({
+	html: z.string().optional(),
+	css: z.string().optional(),
+	js: z.string().optional(),
+})
+
 async function importUrl(slugFlag?: string, urlFlag?: string): Promise<void> {
 	const url =
 		urlFlag ??
@@ -319,8 +344,10 @@ async function importUrl(slugFlag?: string, urlFlag?: string): Promise<void> {
 		fail('Could not fetch pen.')
 	}
 
-	const data: { html?: string; css?: string; js?: string } = await res.json()
+	const parsed = codePenPenSchema.safeParse(await res.json())
 	s.stop('Fetched pen data.')
+	if (!parsed.success) fail(`${apiUrl} returned an unexpected shape: ${z.prettifyError(parsed.error)}`)
+	const { data } = parsed
 
 	const slug =
 		slugFlag ??
@@ -373,8 +400,7 @@ function scanEsmImports(): { fullUrls: Set<string>; referencedPkgs: Set<string>;
 }
 
 function findStaleDeps(referencedPkgs: Set<string>): string[] {
-	const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'))
-	const deps = new Set<string>(Object.keys(pkg.dependencies ?? {}))
+	const deps = new Set(Object.keys(readPackageJson(join(ROOT, 'package.json')).dependencies ?? {}))
 
 	return deps.difference(referencedPkgs).values().toArray()
 }
@@ -512,7 +538,7 @@ async function main() {
 			}),
 		)
 
-		process.argv = [process.argv[0]!, process.argv[1]!, ...command.split(' ')]
+		process.argv = [...process.argv.slice(0, 2), ...command.split(' ')]
 	} else {
 		intro('penx')
 	}
