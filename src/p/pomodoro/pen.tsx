@@ -50,7 +50,7 @@ const DEFAULTS: Settings = {
 }
 
 const CDN = 'https://reactsounds.sfo3.cdn.digitaloceanspaces.com/v1'
-const SOUNDS: Record<string, { label: string; url: string }> = {
+const SOUNDS = {
 	completed: { label: 'Completed', url: `${CDN}/notification/completed.31e527e.mp3` },
 	reminder: { label: 'Reminder', url: `${CDN}/notification/reminder.6d68587.mp3` },
 	success: { label: 'Success', url: `${CDN}/notification/success.f38c2ed.mp3` },
@@ -60,7 +60,9 @@ const SOUNDS: Record<string, { label: string; url: string }> = {
 	powerUp: { label: 'Power Up', url: `${CDN}/arcade/power_up.bcafcc5.mp3` },
 	notification: { label: 'Notification', url: `${CDN}/notification/notification.595d086.mp3` },
 	warning: { label: 'Warning', url: `${CDN}/notification/warning.207aed9.mp3` },
-}
+} satisfies Record<string, { label: string; url: string }>
+
+const isSoundKey = (key: string): key is keyof typeof SOUNDS => key in SOUNDS
 
 const msFor = (mode: TimerMode, settings: Settings) => settings[`${mode}Duration`] * 60_000
 
@@ -76,7 +78,7 @@ const formatTime = (ms: number) => {
 }
 
 const playSound = (key: string, volume: number) => {
-	const audio = new Audio((SOUNDS[key] ?? SOUNDS.completed!).url)
+	const audio = new Audio(SOUNDS[isSoundKey(key) ? key : 'completed'].url)
 	audio.volume = volume / 100
 	// autoplay policy rejects until the page has been clicked; playAlarm repeats, so one id collapses the toasts
 	audio.play().catch(() => toast.error('Sound blocked — click the page to allow audio', { id: 'audio-blocked' }))
@@ -406,4 +408,6 @@ function Root() {
 	)
 }
 
-createRoot(document.getElementById('root')!).render(<Root />)
+const root = document.getElementById('root')
+if (!root) throw new Error('#root is missing from index.html')
+createRoot(root).render(<Root />)
