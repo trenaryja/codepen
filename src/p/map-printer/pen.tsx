@@ -374,11 +374,7 @@ const DownloadButton = ({ map, bounds, zoom, format, style }: DownloadButtonProp
 		setDraft(null)
 		setDownloading(true)
 
-		try {
-			await downloadMap({ bounds, zoom, format, style, filename })
-		} finally {
-			setDownloading(false)
-		}
+		await downloadMap({ bounds, zoom, format, style, filename }).finally(() => setDownloading(false))
 	}
 
 	return (

@@ -562,9 +562,8 @@ const ExportButton = ({ recipe, W, H }: { recipe: Recipe | null; W: number; H: n
 			URL.revokeObjectURL(url)
 		} catch (err) {
 			console.error('3MF export failed:', err)
-		} finally {
-			setBusy(false)
 		}
+		setBusy(false)
 	}
 
 	return (

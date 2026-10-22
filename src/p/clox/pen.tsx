@@ -209,6 +209,24 @@ const currentWeatherSchema = z.object({
 })
 
 // Live weather from open-meteo; no API key required.
+const fetchWeather = async (keys: string[], fahrenheit: boolean) => {
+	const coords = (index: number) => keys.map((key) => key.split(',')[index]).join(',')
+	const parsed = await fetchJson(
+		`https://api.open-meteo.com/v1/forecast?latitude=${coords(0)}&longitude=${coords(1)}&current=temperature_2m,weather_code,apparent_temperature${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
+		z.union([z.array(currentWeatherSchema), currentWeatherSchema]),
+	)
+	const list = Array.isArray(parsed) ? parsed : [parsed]
+	const next: Record<string, Weather> = {}
+	for (const [key, { current }] of R.zip(keys, list))
+		if (current)
+			next[key] = {
+				temperature: current.temperature_2m,
+				code: current.weather_code,
+				feelsLike: current.apparent_temperature,
+			}
+	return next
+}
+
 const useWeather = (cities: City[], fahrenheit: boolean) => {
 	const [weather, setWeather] = useState<Record<string, Weather>>({})
 	const [ready, setReady] = useState(false)
@@ -222,30 +240,16 @@ const useWeather = (cities: City[], fahrenheit: boolean) => {
 		let cancelled = false
 		const keys = signature.split(';')
 
-		const load = async () => {
-			try {
-				const coords = (index: number) => keys.map((key) => key.split(',')[index]).join(',')
-				const parsed = await fetchJson(
-					`https://api.open-meteo.com/v1/forecast?latitude=${coords(0)}&longitude=${coords(1)}&current=temperature_2m,weather_code,apparent_temperature${fahrenheit ? '&temperature_unit=fahrenheit' : ''}`,
-					z.union([z.array(currentWeatherSchema), currentWeatherSchema]),
-				)
-				const list = Array.isArray(parsed) ? parsed : [parsed]
-				if (cancelled) return
-				const next: Record<string, Weather> = {}
-				for (const [key, { current }] of R.zip(keys, list))
-					if (current)
-						next[key] = {
-							temperature: current.temperature_2m,
-							code: current.weather_code,
-							feelsLike: current.apparent_temperature,
-						}
-				setWeather(next)
-			} catch {
+		const load = () =>
+			fetchWeather(keys, fahrenheit)
+				.then((next) => {
+					if (!cancelled) setWeather(next)
+				})
 				// weather is decoration — fail silent, cards just omit it
-			} finally {
-				if (!cancelled) setReady(true)
-			}
-		}
+				.catch(() => undefined)
+				.finally(() => {
+					if (!cancelled) setReady(true)
+				})
 
 		void load()
 		const id = setInterval(() => void load(), 15 * 60_000)

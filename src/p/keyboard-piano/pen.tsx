@@ -393,6 +393,13 @@ function SongGuide({
 	)
 }
 
+// Browsers only let an AudioContext start from a user gesture, so create it lazily on first note
+const resumeAudioContext = (ref: React.RefObject<AudioContext | null>) => {
+	ref.current ??= new AudioContext()
+	void ref.current.resume()
+	return ref.current
+}
+
 function resetChord(ref: React.RefObject<Set<string>>, setter: (chord: Set<string>) => void) {
 	ref.current = new Set()
 	setter(new Set())
@@ -517,15 +524,8 @@ function Root() {
 	const song = parseSong(SONGS[songName])
 	const songKeyMap = getSongKeyMap(song, notes, noteToKey)
 
-	// Browsers only let an AudioContext start from a user gesture, so create it lazily on first note
-	const getAudioContext = () => {
-		audioContextRef.current ??= new AudioContext()
-		void audioContextRef.current.resume()
-		return audioContextRef.current
-	}
-
 	const triggerNote = (key: string, frequency: number) => {
-		playNote(getAudioContext(), frequency)
+		playNote(resumeAudioContext(audioContextRef), frequency)
 		setActiveKeys((prev) => new Set(prev).add(key))
 		setTimeout(
 			() =>
