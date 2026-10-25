@@ -62,7 +62,7 @@ const SOUNDS = {
 	warning: { label: 'Warning', url: `${CDN}/notification/warning.207aed9.mp3` },
 } satisfies Record<string, { label: string; url: string }>
 
-const isSoundKey = (key: string): key is keyof typeof SOUNDS => key in SOUNDS
+const isSoundKey = (key: string): key is keyof typeof SOUNDS => Object.hasOwn(SOUNDS, key)
 
 const msFor = (mode: TimerMode, settings: Settings) => settings[`${mode}Duration`] * 60_000
 
@@ -124,7 +124,7 @@ const useTimer = (settings: Settings, onComplete: (completedMode: TimerMode) => 
 	const [displayMs, setDisplayMs] = useState(() => {
 		if (state.isRunning && state.targetEndTime) {
 			const remaining = state.targetEndTime - Date.now()
-			return remaining > 0 ? remaining : 0
+			return Math.max(remaining, 0)
 		}
 
 		return state.remainingMs
@@ -152,7 +152,7 @@ const useTimer = (settings: Settings, onComplete: (completedMode: TimerMode) => 
 	const { start: startTick, stop: stopTick } = useInterval(() => {
 		if (!state.isRunning || !state.targetEndTime) return
 		const remaining = state.targetEndTime - Date.now()
-		setDisplayMs(remaining > 0 ? remaining : 0)
+		setDisplayMs(Math.max(remaining, 0))
 	}, 100)
 
 	useEffect(() => {
@@ -377,7 +377,7 @@ function Root() {
 					))}
 				</div>
 
-				<div className='text-[clamp(4rem,18vw,10rem)] font-mono'>
+				<div className='font-mono text-[clamp(4rem,18vw,10rem)]'>
 					{mm}:{ss}
 				</div>
 

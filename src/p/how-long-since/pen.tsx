@@ -48,25 +48,25 @@ function Root() {
 
 	return (
 		<ThemeProvider>
-			<main className='min-h-screen full-bleed-container grid place-items-center content-center gap-y-10'>
+			<main className='full-bleed-container grid min-h-screen place-items-center content-center gap-y-10'>
 				<Field label='Pick a date & time' error={Number.isNaN(target.getTime()) ? 'Invalid date' : undefined}>
 					<Input type='datetime-local' value={targetDate} onChange={(event) => setTargetDate(event.target.value)} />
 				</Field>
 
 				{Number.isNaN(target.getTime()) ? null : (
 					<>
-						<div className='flex gap-2 items-baseline'>
-							<h2 className='text-5xl font-bold font-mono'> {formatValue(primaryUnit.value)} </h2>
+						<div className='flex items-baseline gap-2'>
+							<h2 className='font-mono text-5xl font-bold'> {formatValue(primaryUnit.value)} </h2>
 							<p className='opacity-50'>
 								{primaryUnit.label} {directionLabel}
 							</p>
 						</div>
 
-						<div className='grid grid-cols-2 sm:grid-cols-3 gap-4 w-full'>
+						<div className='grid w-full grid-cols-2 gap-4 sm:grid-cols-3'>
 							{units.map((unit) => (
 								<div key={unit.label} className='surface p-4 text-center'>
-									<h3 className='text-2xl font-semibold font-mono'>{formatValue(unit.value)}</h3>
-									<p className='text-xs opacity-60 mt-1'>
+									<h3 className='font-mono text-2xl font-semibold'>{formatValue(unit.value)}</h3>
+									<p className='mt-1 text-xs opacity-60'>
 										{unit.label} {directionLabel}
 									</p>
 								</div>

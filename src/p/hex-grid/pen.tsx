@@ -30,7 +30,7 @@ const STRATEGIES = {
 			const horizontal = Math.sin(normalizedX * 4 * Math.PI)
 			const vertical = Math.sin(normalizedY * 4 * Math.PI)
 			const diagonal = Math.sin((normalizedX + normalizedY) * 3 * Math.PI)
-			const radial = Math.sin(Math.sqrt(normalizedX * normalizedX + normalizedY * normalizedY) * 6 * Math.PI)
+			const radial = Math.sin(Math.hypot(normalizedX, normalizedY) * 6 * Math.PI)
 			const t = (horizontal + vertical + diagonal + radial + 4) / 8
 			return { hueT: t, t: t + Math.random() * 0.1 }
 		},
@@ -57,10 +57,10 @@ const STRATEGIES = {
 
 			const centerX = macroSize * (3 / 2) * roundedQ
 			const centerY = macroSize * sqrt3 * (roundedR + roundedQ / 2)
-			const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2) / macroSize
+			const distance = Math.hypot(x - centerX, y - centerY) / macroSize
 			// Hash the macro-hex coords into a stable 0..1 value so each macro cell keeps its tint
 			const seed = roundedQ * 7919 + roundedR * 6271
-			const cellValue = (((Math.sin(seed) * 43758.5453) % 1) + 1) % 1
+			const cellValue = (((Math.sin(seed) * 43_758.5453) % 1) + 1) % 1
 			const edge = Math.min(1, distance / 0.9)
 			return { hueT: cellValue, t: cellValue * 0.6 + edge * 0.3 + Math.random() * 0.1 }
 		},
@@ -183,12 +183,11 @@ const drawGrid = (canvas: HTMLCanvasElement, params: Params) => {
 		context.fillStyle = buildOklch(fill.lightness, fill.chroma, fill.hue)
 		context.fill()
 
-		if (border > 0) {
-			const stroke = { ...fill, lightness: Math.max(0, fill.lightness * strokeMultiplier) }
-			context.lineWidth = border
-			context.strokeStyle = buildOklch(stroke.lightness, stroke.chroma, stroke.hue)
-			context.stroke()
-		}
+		if (border <= 0) return
+		const stroke = { ...fill, lightness: Math.max(0, fill.lightness * strokeMultiplier) }
+		context.lineWidth = border
+		context.strokeStyle = buildOklch(stroke.lightness, stroke.chroma, stroke.hue)
+		context.stroke()
 	})
 }
 
@@ -264,7 +263,7 @@ function Root() {
 
 	return (
 		<ThemeProvider>
-			<div className='fixed left-2 top-2 z-10 flex gap-2'>
+			<div className='fixed top-2 left-2 z-10 flex gap-2'>
 				<Button className='btn-ghost btn-square' onClick={() => setSettingsOpen(true)} title='Settings'>
 					<LuSettings />
 				</Button>

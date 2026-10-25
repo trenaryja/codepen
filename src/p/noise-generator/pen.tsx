@@ -258,8 +258,8 @@ function Root() {
 
 	return (
 		<ThemeProvider>
-			<main className='grid grid-rows-[auto_auto_1fr] h-screen gap-4 overflow-hidden p-4'>
-				<h1 className='text-2xl font-bold text-center'>Noise Generator</h1>
+			<main className='grid h-screen grid-rows-[auto_auto_1fr] gap-4 overflow-hidden p-4'>
+				<h1 className='text-center text-2xl font-bold'>Noise Generator</h1>
 
 				<div className='grid'>
 					<Range
@@ -277,7 +277,7 @@ function Root() {
 						))}
 					</div>
 
-					<p className='text-xs opacity-75 text-center'>{getSpectrumLabel(spectrum)}</p>
+					<p className='text-center text-xs opacity-75'>{getSpectrumLabel(spectrum)}</p>
 
 					<Field label={`Volume: ${Math.round(volume * 100)}%`} labelPlacement='top-center'>
 						<Range className='w-full' max={1} step={0.01} value={volume} onChange={(e) => setVolume(+e.target.value)} />
@@ -290,7 +290,7 @@ function Root() {
 					preserveAspectRatio='none'
 					viewBox={`0 0 100 ${SVG_HEIGHT}`}
 				>
-					{[...Array(BIN_COUNT).keys()].map((i) => (
+					{Array.from({ length: BIN_COUNT }, (_, index) => index).map((i) => (
 						<rect
 							key={i}
 							rx={BAR_WIDTH / 2}

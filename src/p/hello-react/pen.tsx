@@ -12,10 +12,10 @@ const Root = () => {
 
 	return (
 		<ThemeProvider>
-			<main className='prose p-10 full-bleed-container content-center text-center min-w-screen min-h-screen overflow-auto gap-y-10'>
+			<main className='prose full-bleed-container min-h-screen min-w-screen content-center gap-y-10 overflow-auto p-10 text-center'>
 				<h1>Hello, React</h1>
 				<p>{time.toLocaleTimeString()}</p>
-				<div className='flex gap-1 w-full'>
+				<div className='flex w-full gap-1'>
 					<ColorButton className='btn-block'>Hello</ColorButton>
 					<ThemePicker />
 				</div>

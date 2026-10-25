@@ -1,7 +1,7 @@
 // TODO: move to @trenaryja/ui/utils
 
 /** Full printable ASCII minus space — 94 chars, most compact for typeable strings. */
-export const BASE94 = Array.from({ length: 94 }, (_, i) => String.fromCharCode(i + 33)).join('')
+export const BASE94 = Array.from({ length: 94 }, (_, i) => String.fromCodePoint(i + 33)).join('')
 /** Alphanumeric — safe in filenames, HTML ids, and case-sensitive contexts. */
 export const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
 
@@ -13,7 +13,7 @@ export const bitsToString = (bits: boolean[], alphabet = BASE94) => {
 	let result = ''
 
 	while (accumulator > 0n) {
-		result = alphabet[Number(accumulator % base)] + result
+		result = alphabet.charAt(Number(accumulator % base)) + result
 		accumulator /= base
 	}
 
@@ -43,9 +43,9 @@ const eliasGammaEncode = (value: number, bits: boolean[]) => {
 /** Decode one Elias gamma value from bits at position; returns [value, nextPosition]. */
 const eliasGammaDecode = (bits: boolean[], position: number): [number, number] => {
 	let leadingZeros = 0
-	while (position + leadingZeros < bits.length && !bits[position + leadingZeros]) leadingZeros++
+	while (position + leadingZeros < bits.length && bits[position + leadingZeros] !== true) leadingZeros++
 	let value = 0
-	for (let i = 0; i <= leadingZeros; i++) value = (value << 1) | (bits[position + leadingZeros + i] ? 1 : 0)
+	for (let i = 0; i <= leadingZeros; i++) value = (value << 1) | (bits[position + leadingZeros + i] === true ? 1 : 0)
 	return [value, position + 2 * leadingZeros + 1]
 }
 

@@ -13,7 +13,7 @@ type Item = { slug: string; href: string; Icon?: IconType }
 
 const items: Item[] = Object.keys(penModules)
 	.map(slugFromPath)
-	.sort((a, b) => a.localeCompare(b))
+	.toSorted((a, b) => a.localeCompare(b))
 	.map((slug) => ({ slug, href: `/p/${slug}/`, Icon: penIcons[slug] }))
 
 const IFRAME_W = 1024
@@ -36,7 +36,7 @@ const PenCard = ({ slug, href, Icon }: Item) => {
 	return (
 		<a
 			href={href}
-			className='group rounded-box border border-current/25 overflow-hidden shadow-md transition-all hover:-translate-y-1 hover:shadow-xl'
+			className='group rounded-box overflow-hidden border border-current/25 shadow-md transition-all hover:-translate-y-1 hover:shadow-xl'
 		>
 			<div ref={containerRef} className='relative overflow-hidden' style={{ aspectRatio: `${IFRAME_W}/${IFRAME_H}` }}>
 				{scale > 0 && (
@@ -50,9 +50,9 @@ const PenCard = ({ slug, href, Icon }: Item) => {
 					/>
 				)}
 			</div>
-			<div className='flex items-center justify-between gap-2 p-4 bg-base-300'>
+			<div className='bg-base-300 flex items-center justify-between gap-2 p-4'>
 				<span className='flex min-w-0 items-center gap-2 text-sm font-semibold'>
-					{Icon && <Icon className='shrink-0 size-4' />}
+					{Icon && <Icon className='size-4 shrink-0' />}
 					<span className='truncate'>{slug}</span>
 				</span>
 				<FiChevronRight className='opacity-0 transition-opacity group-hover:opacity-100' />
@@ -67,8 +67,8 @@ const App = () => {
 
 	return (
 		<ThemeProvider>
-			<div className='min-h-screen full-bleed-container content-start gap-y-4 p-4'>
-				<div className='flex gap-4 items-center'>
+			<div className='full-bleed-container min-h-screen content-start gap-y-4 p-4'>
+				<div className='flex items-center gap-4'>
 					<ThemePicker variant='modal' />
 					<Input placeholder='Search…' value={query} onChange={(e) => setQuery(e.target.value)} />
 				</div>
@@ -76,7 +76,7 @@ const App = () => {
 				{filtered.length === 0 ? (
 					<p className='text-base-content/50'>No results.</p>
 				) : (
-					<div className='grid grid-cols-2 md:grid-cols-3 gap-4'>
+					<div className='grid grid-cols-2 gap-4 md:grid-cols-3'>
 						{filtered.map((item) => (
 							<PenCard key={item.href} {...item} />
 						))}

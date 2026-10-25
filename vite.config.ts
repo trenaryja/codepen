@@ -1,13 +1,13 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import babel from '@rolldown/plugin-babel'
 import tailwindcss from '@tailwindcss/vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { IconType } from 'react-icons'
 import type { Plugin } from 'vite'
 import { defineConfig, transformWithOxc } from 'vite'
-import type { IconType } from 'react-icons'
 import { z } from 'zod'
 import { penMetaSchema } from './src/pen-meta.ts'
 
@@ -24,7 +24,7 @@ const COLOR_SCHEME_STYLE =
 
 /** `'lu/LuClock'` → the pack subpath and the component that pack exports. */
 function parseIcon(icon: string) {
-	const [pack = '', name = ''] = icon.split('/')
+	const [pack = '', name = ''] = icon.split('/', 2)
 	return { pack, name }
 }
 
@@ -34,9 +34,9 @@ function parseIcon(icon: string) {
  */
 async function readPenMeta(base: string) {
 	const metaPath = `${base}/meta.ts`
-	if (!existsSync(metaPath)) return undefined
+	if (!existsSync(metaPath)) return
 
-	const { code } = await transformWithOxc(readFileSync(metaPath, 'utf-8'), 'meta.ts', { lang: 'ts' })
+	const { code } = await transformWithOxc(readFileSync(metaPath, 'utf8'), 'meta.ts', { lang: 'ts' })
 	const metaModule = z
 		.object({ default: penMetaSchema })
 		.safeParse(await import(`data:text/javascript,${encodeURIComponent(code)}`))
@@ -60,7 +60,7 @@ async function resolveIcon(base: string) {
 	// glyph follows the reader's light/dark preference. The `<style>` can't be passed as children —
 	// `GenIcon` overwrites them with the icon's own paths.
 	const svg = renderToStaticMarkup(createElement(Icon, { size: 32, color: meta.color }))
-	return `data:image/svg+xml,${encodeURIComponent(svg.replace('>', `>${COLOR_SCHEME_STYLE}`))}`
+	return `data:image/svg+xml,${encodeURIComponent(svg.replace('>', () => `>${COLOR_SCHEME_STYLE}`))}`
 }
 
 /** Slug → icon, as static named imports so the gallery bundles only the icons it uses. */
@@ -86,12 +86,11 @@ async function buildPenIconsModule() {
 	return `${imports.join('\n')}\n\nexport const penIcons = {\n${members.join('\n')}\n}\n`
 }
 
-function penPlugin(): Plugin {
-	async function buildWrapper(slug: string, dir: string) {
-		const base = resolve(import.meta.dirname, 'src', dir, slug)
-		const fragment = existsSync(`${base}/index.html`) ? readFileSync(`${base}/index.html`, 'utf-8') : ''
-		const icon = await resolveIcon(base)
-		return `<!DOCTYPE html>
+async function buildWrapper(slug: string, dir: string) {
+	const base = resolve(import.meta.dirname, 'src', dir, slug)
+	const fragment = existsSync(`${base}/index.html`) ? readFileSync(`${base}/index.html`, 'utf8') : ''
+	const icon = await resolveIcon(base)
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -106,8 +105,9 @@ ${fragment}
   <script type="module" src="/src/${dir}/${slug}/pen.tsx"></script>
 </body>
 </html>`
-	}
+}
 
+function penPlugin(): Plugin {
 	return {
 		name: 'pen',
 
@@ -127,8 +127,8 @@ ${fragment}
 			server.middlewares.use((req, res, next) => {
 				const url = req.url ?? ''
 				const [, dir, slug] = penUrlRe.exec(url) ?? []
-				if (!dir || !slug) return next()
-				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return next()
+				if (!dir || !slug) return void next()
+				if (!existsSync(resolve(import.meta.dirname, 'src', dir, slug))) return void next()
 
 				buildWrapper(slug, dir)
 					.then((html) => server.transformIndexHtml(url, html))
@@ -185,7 +185,7 @@ function esmShPlugin(): Plugin {
 		transform(code) {
 			if (!code.includes('https://esm.sh/')) return
 
-			return code.replace(/(["'])https:\/\/esm\.sh\/([^"']+)\1/g, (match, quote, spec) => {
+			return code.replaceAll(/(["'])https:\/\/esm\.sh\/([^"']+)\1/g, (match, quote, spec) => {
 				const local = esmShToLocal(`https://esm.sh/${spec}`)
 				return local ? `${quote}${local}${quote}` : match
 			})

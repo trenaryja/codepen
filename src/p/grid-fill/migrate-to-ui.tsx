@@ -1,9 +1,4 @@
-// Local implementations of components that belong in @trenaryja/ui. Deferred by choice, not blocked:
-// promoting either needs new ui code and a release. When migrating, delete the block and update the
-// import in pen.tsx to pull from the package. See .claude/plans/ui-util-extraction.md.
-//
-// The utils that used to live here — colorMix, interpolateColors — now come from ui directly.
-
+// Stand-ins for components that belong in @trenaryja/ui.
 import type { Placement } from 'https://esm.sh/@trenaryja/ui'
 import { cn } from 'https://esm.sh/@trenaryja/ui/utils'
 import type { ReactNode } from 'https://esm.sh/react'
@@ -26,7 +21,7 @@ const EDGE_PLACEMENT_CLASSES: Record<Placement, string> = {
 }
 
 export const EdgeBadges = ({ children, placement }: { children: ReactNode; placement: Placement }) => (
-	<div className={`absolute flex gap-1 z-10 ${EDGE_PLACEMENT_CLASSES[placement]}`}>{children}</div>
+	<div className={`absolute z-10 flex gap-1 ${EDGE_PLACEMENT_CLASSES[placement]}`}>{children}</div>
 )
 
 // TODO: import { Stepper } from '@trenaryja/ui' — but reconcile with ui's ROADMAP entry first:
