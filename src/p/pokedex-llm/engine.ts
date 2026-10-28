@@ -5,7 +5,7 @@ import { acceptSchema, buildMessages, rejectSchema, repairJson } from './prompt'
  * Every model here was checked against the real grammar — "small instruct model" is no guarantee it
  * can finish a constrained object. Gemma 3 1B is deliberately absent: JSON allows unlimited whitespace
  * between tokens, and after each string value Gemma rides that loop to max_tokens, never reaching the
- * next key. Penalties only change which whitespace it emits, and WebLLM 0.2.84 can't disable it.
+ * next key. Penalties only change which whitespace it emits, and WebLLM can't disable it.
  */
 export const MODELS = [
 	{ id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', label: 'SmolLM2 360M', size: '376 MB' },

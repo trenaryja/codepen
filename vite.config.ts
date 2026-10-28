@@ -9,6 +9,7 @@ import type { IconType } from 'react-icons'
 import type { Plugin } from 'vite'
 import { defineConfig, transformWithOxc } from 'vite'
 import { z } from 'zod'
+import { esmShToNpm, npmPkgRoot } from './penx/esm-sh.ts'
 import { penMetaSchema } from './src/pen-meta.ts'
 
 const penUrlRe = /^\/(p|t)\/([^#/?]+)\/?(\?.*)?$/
@@ -152,21 +153,9 @@ function penPlugin(): Plugin {
 	}
 }
 
-// Strips the version pin off the package name, leaving any subpath intact:
-// `@scope/name@1.2.3/sub` → `@scope/name/sub`, `name@1.2.3/sub` → `name/sub`.
-const esmShToNpm = (url: string) =>
-	url
-		.slice('https://esm.sh/'.length)
-		.replace(/\?.*$/, '')
-		.replace(/^((?:@[^/]+\/)?[^/@]+)@[^/]+/, '$1')
-
 function esmShToLocal(id: string) {
 	const npmSpec = esmShToNpm(id)
-	const pkgRoot = npmSpec
-		.split('/')
-		.slice(0, npmSpec.startsWith('@') ? 2 : 1)
-		.join('/')
-	return existsSync(resolve(import.meta.dirname, 'node_modules', pkgRoot)) ? npmSpec : undefined
+	return existsSync(resolve(import.meta.dirname, 'node_modules', npmPkgRoot(npmSpec))) ? npmSpec : undefined
 }
 
 function esmShPlugin(): Plugin {

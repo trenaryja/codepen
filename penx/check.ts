@@ -3,21 +3,8 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { esmShToNpm, npmPkgRoot } from './esm-sh.ts'
 import { cancelGuard, fail, ROOT, SRC } from './shared.ts'
-
-// Strips the version pin off the package name, leaving any subpath intact:
-// `@scope/name@1.2.3/sub` → `@scope/name/sub`, `name@1.2.3/sub` → `name/sub`.
-const esmShToNpm = (url: string) =>
-	url
-		.slice('https://esm.sh/'.length)
-		.replace(/\?.*$/, '')
-		.replace(/^((?:@[^/]+\/)?[^/@]+)@[^/]+/, '$1')
-
-const npmPkgRoot = (npmSpec: string) =>
-	npmSpec
-		.split('/')
-		.slice(0, npmSpec.startsWith('@') ? 2 : 1)
-		.join('/')
 
 const packageJsonSchema = z.object({
 	dependencies: z.record(z.string(), z.string()).optional(),
