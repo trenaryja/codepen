@@ -1,24 +1,46 @@
 import { useDebouncedValue } from 'https://esm.sh/@mantine/hooks'
 import { ThemeProvider } from 'https://esm.sh/@trenaryja/ui'
-import React, { useEffect, useRef, useState } from 'https://esm.sh/react'
+import React, { useState } from 'https://esm.sh/react'
 import { createRoot } from 'https://esm.sh/react-dom/client'
 import * as R from 'https://esm.sh/remeda'
-import { ECC_LEVELS, type EccLevel, getQRInfo, optimizeForQR } from './qr-info'
-import { ECC_LABELS, PARAM_SPECS, type ParamName, type Params, STYLES, type StyleName, renderQR } from './qr-render'
+import { getQRInfo, optimizeForQR } from './qr-info'
+import {
+	QR_CODE_ECC_RECOVERY,
+	QR_CODE_PARAMS,
+	QR_CODE_VARIANTS,
+	QRCode,
+	type QRCodeEccLevel,
+	type QRCodeParams,
+	type QRCodeVariant,
+} from './QRCode'
+
+type ParamName = keyof QRCodeParams
+
+const PARAM_SPECS = {
+	blur: { variant: 'blob', label: 'Blur', min: 0.05, max: 1.5, step: 0.05 },
+	threshold: { variant: 'blob', label: 'Threshold', min: 5, max: 50, step: 1 },
+	minDotRadius: { variant: 'halftone', label: 'Min size', min: 0, max: 1, step: 0.01 },
+	dotRadiusRange: { variant: 'halftone', label: 'Range', min: 0, max: 1, step: 0.01 },
+	depth: { variant: 'isometric', label: 'Depth', min: 0, max: 1, step: 0.05 },
+	hexRadius: { variant: 'hex', label: 'Hex radius', min: 0.2, max: 0.9, step: 0.01 },
+} as const satisfies Record<
+	ParamName,
+	{ label: string; max: number; min: number; step: number; variant: QRCodeVariant }
+>
 
 type SliderProps = {
-	params: Params
+	params: QRCodeParams
 	setParam: (name: ParamName, value: number) => void
-	style: StyleName
+	variant: QRCodeVariant
 }
 
-const Sliders = ({ params, style, setParam }: SliderProps) => {
-	const styleSpecs = R.entries(PARAM_SPECS).filter(([, spec]) => spec.style === style)
-	if (!styleSpecs.length) return null
+const Sliders = ({ params, variant, setParam }: SliderProps) => {
+	const variantSpecs = R.entries(PARAM_SPECS).filter(([, spec]) => spec.variant === variant)
+	if (!variantSpecs.length) return null
 
 	return (
 		<div className='flex w-full max-w-xs flex-col gap-2'>
-			{styleSpecs.map(([name, spec]) => (
+			{variantSpecs.map(([name, spec]) => (
 				<label key={name} className='flex items-center gap-3'>
 					<span className='w-28 shrink-0 text-sm opacity-60'>{spec.label}</span>
 					<input
@@ -66,11 +88,9 @@ const StatsPanel = ({ version, moduleCount, charCount, capacity }: StatsPanelPro
 const Root = () => {
 	const [text, setText] = useState('https://example.com')
 	const [undoText, setUndoText] = useState<string | null>(null)
-	const [style, setStyle] = useState<StyleName>('classic')
-	const [ecc, setEcc] = useState<EccLevel>('L')
-	const [params, setParams] = useState<Params>(R.mapValues(PARAM_SPECS, (spec) => spec.default))
-	const svgRef = useRef<SVGSVGElement>(null)
-	const svgOptRef = useRef<SVGSVGElement>(null)
+	const [variant, setVariant] = useState<QRCodeVariant>('classic')
+	const [ecc, setEcc] = useState<QRCodeEccLevel>('L')
+	const [params, setParams] = useState(QR_CODE_PARAMS)
 	const [debouncedText] = useDebouncedValue(text, 250)
 	const textInfo = getQRInfo(debouncedText, ecc)
 	const optText = optimizeForQR(debouncedText)
@@ -82,14 +102,6 @@ const Root = () => {
 		setUndoText(text)
 		setText(optText)
 	}
-
-	useEffect(() => {
-		if (svgRef.current && debouncedText) renderQR(svgRef.current, debouncedText, { ecc, style, params })
-	}, [debouncedText, ecc, style, params])
-
-	useEffect(() => {
-		if (svgOptRef.current && canOptimize) renderQR(svgOptRef.current, optText, { ecc, style, params })
-	}, [optText, canOptimize, ecc, style, params])
 
 	return (
 		<ThemeProvider>
@@ -117,44 +129,44 @@ const Root = () => {
 				</div>
 
 				<div className='join flex-wrap justify-center'>
-					{STYLES.map((s) => (
+					{QR_CODE_VARIANTS.map((option) => (
 						<button
-							key={s}
+							key={option}
 							type='button'
-							className={`btn join-item btn-sm capitalize ${style === s ? 'btn-active' : ''}`}
-							onClick={() => setStyle(s)}
+							className={`btn join-item btn-sm capitalize ${variant === option ? 'btn-active' : ''}`}
+							onClick={() => setVariant(option)}
 						>
-							{s}
+							{option}
 						</button>
 					))}
 				</div>
 
 				<div className='join'>
-					{ECC_LEVELS.map((lvl) => (
+					{R.entries(QR_CODE_ECC_RECOVERY).map(([level, recovery]) => (
 						<button
-							key={lvl}
+							key={level}
 							type='button'
-							title={`ECC ${lvl} — recovers up to ${ECC_LABELS[lvl]} damage`}
-							className={`btn join-item btn-sm ${ecc === lvl ? 'btn-active' : ''}`}
-							onClick={() => setEcc(lvl)}
+							title={`ECC ${level} — recovers up to ${recovery}% damage`}
+							className={`btn join-item btn-sm ${ecc === level ? 'btn-active' : ''}`}
+							onClick={() => setEcc(level)}
 						>
-							{lvl}
+							{level}
 						</button>
 					))}
 				</div>
 
-				<Sliders params={params} style={style} setParam={setParam} />
+				<Sliders params={params} variant={variant} setParam={setParam} />
 
 				{textInfo && (
 					<>
 						<div className={`flex items-start gap-8 ${canOptimize ? 'flex-row' : 'flex-col items-center'}`}>
 							<div className='flex flex-col items-center gap-2'>
-								<svg ref={svgRef} className='shadow' />
+								<QRCode className='shadow' value={debouncedText} ecc={ecc} variant={variant} params={params} />
 								{canOptimize && <span className='max-w-40 truncate font-mono text-xs opacity-40'>{debouncedText}</span>}
 							</div>
 							{canOptimize && (
 								<div className='flex flex-col items-center gap-2'>
-									<svg ref={svgOptRef} className='shadow' />
+									<QRCode className='shadow' value={optText} ecc={ecc} variant={variant} params={params} />
 									<span className='max-w-40 truncate font-mono text-xs opacity-40'>{optText}</span>
 									<button type='button' className='btn btn-success btn-xs' onClick={applyOptimize}>
 										Apply · {optInfo.mode} v{optInfo.version}

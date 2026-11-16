@@ -1,10 +1,5 @@
 import QRCode, { type ModeId } from 'https://esm.sh/qrcode'
-
-export const CELL = 10
-
-export const ECC_LEVELS = ['L', 'M', 'Q', 'H'] as const
-
-export type EccLevel = (typeof ECC_LEVELS)[number]
+import type { QRCodeEccLevel as EccLevel } from './QRCode'
 
 export const capacityCache = new Map<string, number>()
 

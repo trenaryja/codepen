@@ -47,10 +47,6 @@ declare module 'https://esm.sh/chroma-js' {
 	export { default } from 'chroma-js'
 }
 
-declare module 'https://esm.sh/d3-selection' {
-	export * from 'd3-selection'
-}
-
 declare module 'https://esm.sh/fflate' {
 	export * from 'fflate'
 }
