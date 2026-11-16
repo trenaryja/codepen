@@ -68,19 +68,19 @@ export const createProgressStore = () => {
 
 export const loadProgress = createProgressStore()
 
-export const createEngineWorker = () => {
+const createWorkerUrl = () => {
 	const source = `
 import { WebWorkerMLCEngineHandler } from "${CDN}@mlc-ai/web-llm";
 export const handler = new WebWorkerMLCEngineHandler();
 self.onmessage = (msg) => handler.onmessage(msg);
 `
-	const blob = new Blob([source], { type: 'text/javascript' })
-	return new Worker(URL.createObjectURL(blob), { type: 'module' })
+	return URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
 }
 
 export type Engine = {
 	chat: { completions: { create: (request: unknown) => Promise<AsyncIterable<StreamChunk>> } }
 	unload: () => Promise<void>
+	worker: Worker
 }
 
 export type WebLlm = {
@@ -109,34 +109,55 @@ export type Rejection = { reason: string; message: string }
 // which then lose their memoization. Keeping the async work at module scope keeps `Root` compilable.
 export const toErrorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
+/** WebLLM listens only for messages, so a worker whose script never loads would leave its load hanging. */
+const startFailure = (worker: Worker) =>
+	new Promise<never>((_, reject) => {
+		worker.addEventListener('error', () => reject(new Error(`Couldn't load ${CDN}@mlc-ai/web-llm in its worker`)), {
+			once: true,
+		})
+	})
+
 export type LoadEngineHandlers = {
 	id: string
-	previous: Engine | null
-	onLoaded: (engine: Engine, loadMs: number) => void
+	engineRef: { current: Engine | null }
+	onLoaded: (loadMs: number) => void
 	onError: (message: string) => void
 }
 
-export const loadEngine = async ({ id, previous, onLoaded, onError }: LoadEngineHandlers) => {
+export const loadEngine = async ({ id, engineRef, onLoaded, onError }: LoadEngineHandlers) => {
 	loadProgress.set('Starting…', 0)
 	const started = performance.now()
+	const previous = engineRef.current
+	// Left set after a failed load, the next load would `unload()` a terminated worker and wait forever.
+	engineRef.current = null
+	let worker: Worker | undefined
 
 	try {
 		// A React state change does not guarantee a paint, and the frames immediately after this are
 		// the contended ones. Without waiting, the overlay never reaches the screen: the page freezes
 		// still looking fully interactive, which is precisely what reads as a crash.
 		await nextPaint()
-		await previous?.unload()
+		// WebLLM's `unload()` frees the model but never terminates the worker hosting it.
+		await previous?.unload().finally(() => previous.worker.terminate())
 		const webllm: unknown = await import(/* @vite-ignore */ `${CDN}@mlc-ai/web-llm`)
 		if (!isWebLlm(webllm)) throw new Error(`${CDN}@mlc-ai/web-llm has no CreateWebWorkerMLCEngine export`)
-		const engine = await webllm.CreateWebWorkerMLCEngine(createEngineWorker(), id, {
-			// WebLLM narrates every shard at INFO, and worker console output is proxied to the page's
-			// main thread. WARN rather than SILENT so genuine failures still surface in the console.
-			logLevel: 'WARN',
-			initProgressCallback: (report: { text: string; progress: number }) =>
-				loadProgress.set(report.text, report.progress),
-		})
-		onLoaded(engine, performance.now() - started)
+		const url = createWorkerUrl()
+		worker = new Worker(url, { type: 'module' })
+		engineRef.current = await Promise.race([
+			webllm.CreateWebWorkerMLCEngine(worker, id, {
+				// WebLLM narrates every shard at INFO, and worker console output is proxied to the page's
+				// main thread. WARN rather than SILENT so genuine failures still surface in the console.
+				logLevel: 'WARN',
+				initProgressCallback: (report: { text: string; progress: number }) =>
+					loadProgress.set(report.text, report.progress),
+			}),
+			startFailure(worker),
+		])
+			// Revoking right after `new Worker` is spec-legal but unverified across browsers; by now it's fetched.
+			.finally(() => URL.revokeObjectURL(url))
+		onLoaded(performance.now() - started)
 	} catch (error) {
+		worker?.terminate()
 		onError(toErrorMessage(error))
 	}
 }

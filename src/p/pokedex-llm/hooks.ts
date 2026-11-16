@@ -48,9 +48,8 @@ export const useEngine = () => {
 		setModelState('loading')
 		void loadEngine({
 			id,
-			previous: engineRef.current,
-			onLoaded: (engine, loadMs) => {
-				engineRef.current = engine
+			engineRef,
+			onLoaded: (loadMs) => {
 				setTiming({ load: loadMs })
 				setModelState('ready')
 			},
