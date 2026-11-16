@@ -33,10 +33,6 @@ const Root = () => {
 	const [search, setSearch] = useState('')
 	const [proposed, setProposed] = useState(false)
 
-	// Stored users predating firstName/lastName are unusable — regenerate rather than migrate.
-	const [firstUser] = users
-	const safeUsers = firstUser && 'firstName' in firstUser ? users : generateUsers(newRoleNames)
-
 	const updateUser = (index: number, user: UserData) =>
 		setUsers((previous) => previous.map((existing, i) => (i === index ? user : existing)))
 
@@ -85,7 +81,7 @@ const Root = () => {
 
 					{tab === 'users' ? (
 						<UserList
-							users={safeUsers}
+							users={users}
 							search={search}
 							proposed={proposed}
 							oldRoles={oldRoles}
