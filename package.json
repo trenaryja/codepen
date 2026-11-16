@@ -9,8 +9,7 @@
 		"ci": "tren ci",
 		"dev": "vite",
 		"fix": "tren fix",
-		"penx": "./penx.ts",
-		"preview": "vite preview"
+		"penx": "./penx.ts"
 	},
 	"prettier": "@trenaryja/config/prettier",
 	"dependencies": {
@@ -55,9 +54,5 @@
 		"babel-plugin-react-compiler": "^1.0.0",
 		"commander": "^15.1.0",
 		"vite": "^8.3.8"
-	},
-	"trustedDependencies": [
-		"esbuild",
-		"unrs-resolver"
-	]
+	}
 }
