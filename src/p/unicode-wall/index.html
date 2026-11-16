@@ -1,0 +1,18 @@
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser"></script>
+<link href="https://cdn.jsdelivr.net/npm/@trenaryja/ui" rel="stylesheet" type="text/css" />
+<link href="https://cdn.jsdelivr.net/npm/@free-fonts/plangothic/plangothic.css" rel="stylesheet" />
+<link href="https://cdn.jsdelivr.net/npm/@free-fonts/babelstone-han/babelstone-han.css" rel="stylesheet" />
+<link
+	href="https://fonts.googleapis.com/css2?family=Noto+Sans+Anatolian+Hieroglyphs&family=Noto+Music&family=Noto+Sans+Medefaidrin&family=Noto+Sans+Soyombo&family=Noto+Sans+Symbols+2&family=Noto+Serif+Ottoman+Siyaq&family=Noto+Serif+Dogra"
+	rel="stylesheet"
+/>
+<header class="bg-base-100/90 sticky top-0 z-10 flex flex-wrap items-center gap-4 p-4 backdrop-blur">
+	<form class="join">
+		<input class="join-item btn btn-sm" type="radio" name="font" value="mono" aria-label="Monospace" checked />
+		<input class="join-item btn btn-sm" type="radio" name="font" value="sans" aria-label="Sans serif" />
+		<input class="join-item btn btn-sm" type="radio" name="font" value="serif" aria-label="Serif" />
+		<input class="join-item btn btn-sm" type="radio" name="font" value="last-resort" aria-label="Last Resort" />
+	</form>
+	<span id="count" class="text-sm opacity-60"></span>
+</header>
+<p id="wall" class="p-4 font-mono text-2xl"></p>

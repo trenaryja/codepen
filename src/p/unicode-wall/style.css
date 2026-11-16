@@ -1,0 +1,91 @@
+/** Unicode's own Last Resort font, via a third-party npm repackage: unicode-org ships it only as GitHub release assets, which send no CORS header. */
+@font-face {
+	font-family: 'Last Resort';
+	src: url('https://cdn.jsdelivr.net/npm/fontpkg-last-resort/LastResort-Regular.ttf');
+}
+
+/** Egyptian Hieroglyphs Extended-A only: no Noto release has it (v2.002, measured), and Noto keeps the basic block. */
+@font-face {
+	font-family: NewGardiner;
+	src: url('https://nederhof.github.io/newgardiner/NewGardiner.ttf');
+	unicode-range: U+13460-143FF;
+}
+
+/** Garay, Tulu-Tigalari and the 568 Extended-A signs NewGardiner lacks: GNU Unifont Upper has them, but unifoundry.com sends no CORS header. */
+@font-face {
+	font-family: 'Last Resort Gaps';
+	src: url('https://cdn.jsdelivr.net/npm/fontpkg-last-resort/LastResort-Regular.ttf');
+	unicode-range: U+10D40-10D8F, U+11380-113FF, U+13460-143FF;
+}
+
+/**
+ * Code points no macOS font or listed web font draws (macOS 27, Chrome 157, measured per code point; ones Menlo composes by decomposition excluded).
+ * - Range-limited: a full-BMP font listed in the stack would take every script over from system fallback.
+ */
+@font-face {
+	font-family: UnifontEX;
+	src: url('https://stgiga.github.io/UnifontEX/UnifontExMono.woff2');
+	unicode-range:
+		U+D81, U+DE6-DEF, U+10C7, U+10CD, U+1AB0-1AB5, U+1AB7-1ABE, U+1CD1, U+1CD4-1CD6, U+1CD8, U+1CDB, U+1CDE-1CDF,
+		U+1CE1-1CF1, U+1CF6-1CF7, U+1DD0-1DD2, U+1DDA, U+1DE7-1DF4, U+1DFC-1DFD, U+2187-2188, U+27CE-27CF, U+2D00-2D25,
+		U+2D27, U+2D2D, U+2E19, U+2E32-2E39, U+2E3C, U+2E3E-2E3F, U+3377-337A, U+33DE-33DF, U+A794-A79F, U+A7AB-A7AD,
+		U+A8E0-A8FA, U+A8FC-A8FD, U+AB30-AB52, U+AB54-AB5F, U+AB64-AB65, U+FD40-FD4F, U+FDCF, U+111E1-111F4, U+11A47;
+}
+
+#wall {
+	/**
+	 * Gap fillers for what macOS fonts lack, picked by measured coverage of the missing set.
+	 * - `EmojiPresentation` (pen.tsx) leads: `font-variant-emoji` only steers system fallback, never listed fonts (Chrome 156, measured).
+	 * - Noto families gaining <50 chars are left out: each would take over a whole script the system already draws.
+	 * - Tailwind's `--font-*` stacks, generic moved last: a generic family (`monospace`) mid-list stops Chrome loading unicode-range chunks listed after it (Chrome 157, measured: Tangut 256/6,144).
+	 */
+	--gap-fonts:
+		EmojiPresentation, Plangothic, 'BabelStone Han Basic', 'BabelStone Han Extra', NewGardiner,
+		'Noto Sans Anatolian Hieroglyphs', 'Noto Music', 'Noto Sans Medefaidrin', 'Noto Sans Soyombo',
+		'Noto Sans Symbols 2', 'Noto Serif Ottoman Siyaq', 'Noto Serif Dogra', UnifontEX, 'Last Resort Gaps',
+		'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+	font-family:
+		ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', var(--gap-fonts), monospace;
+	line-break: anywhere;
+	/** Code-point order: right-to-left blocks otherwise run backward on every line. */
+	unicode-bidi: bidi-override;
+	direction: ltr;
+	word-break: break-all;
+}
+
+body:has([value='sans']:checked) #wall {
+	font-family: ui-sans-serif, system-ui, var(--gap-fonts), sans-serif;
+}
+
+body:has([value='serif']:checked) #wall {
+	font-family: ui-serif, Georgia, Cambria, 'Times New Roman', Times, var(--gap-fonts), serif;
+}
+
+body:has([value='last-resort']:checked) #wall {
+	font-family: 'Last Resort';
+}
+
+#wall span {
+	display: inline-block;
+}
+
+/** `pre`: normal whitespace collapsing drops TAB, LF and CR from copies. */
+#wall [data-label] {
+	font-size: 0;
+	white-space: pre;
+}
+
+/** Unicode's code charts show a combining mark on U+25CC; `::before` text is left out of copies. */
+#wall [data-mark]::before {
+	content: '◌';
+}
+
+#wall [data-label]::before {
+	content: attr(data-label);
+	margin-inline: 0.125rem;
+	border: 1px dashed currentcolor;
+	border-radius: 0.25rem;
+	padding-inline: 0.125rem;
+	font: 0.625rem var(--font-mono);
+	opacity: 0.6;
+}
