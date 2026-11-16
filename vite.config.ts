@@ -189,9 +189,7 @@ function discoverPenEntries() {
 }
 
 export default defineConfig({
-	// `esmShPlugin` is `enforce: 'pre'`, so pen imports are rewritten from esm.sh URLs to bare
-	// specifiers before the compiler pass — it then emits `react/compiler-runtime`, which resolves
-	// to the same local React instance the pens render with.
+	// esmShPlugin runs pre, so the compiler's `react/compiler-runtime` import resolves to the pens' local React.
 	plugins: [
 		tailwindcss(),
 		react({ jsxRuntime: 'classic' }),

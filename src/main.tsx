@@ -1,8 +1,8 @@
 import { Input, ThemePicker, ThemeProvider } from '@trenaryja/ui'
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import type { IconType } from 'react-icons'
 import { FiChevronRight } from 'react-icons/fi'
-import type { IconType } from 'react-icons/lib'
 import { penIcons } from 'virtual:pen-icons'
 
 const penModules = import.meta.glob('./p/*/index.html', { query: '?raw', import: 'default' })
