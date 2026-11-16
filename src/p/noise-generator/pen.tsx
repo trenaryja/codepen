@@ -206,7 +206,7 @@ function Root() {
 	const [isPaused, setIsPaused] = useState(true)
 	const togglePause = () => setIsPaused((p) => !p)
 
-	useHotkeys([['space', togglePause]])
+	useHotkeys([['space', togglePause]], [])
 
 	const engineRef = useRef<ReturnType<typeof createNoiseEngine> | null>(null)
 	const barsRef = useRef<(SVGRectElement | null)[]>([])
