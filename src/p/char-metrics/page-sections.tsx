@@ -71,7 +71,7 @@ export function FontControls({
 						<button
 							key={key}
 							type='button'
-							className={`join-item btn btn-xs${family === key ? 'btn-active' : ''}`}
+							className={`join-item btn btn-xs ${family === key ? 'btn-active' : ''}`}
 							onClick={() => setFamily(key)}
 						>
 							{key.charAt(0).toUpperCase() + key.slice(1)}
