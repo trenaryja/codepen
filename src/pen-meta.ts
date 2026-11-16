@@ -39,6 +39,8 @@ export const penMetaSchema = z.object({
 	icon: z.string(),
 	/** Overrides the default, which follows the reader's `prefers-color-scheme`. */
 	color: z.string().optional(),
+	/** The pen's CodePen copy, set by `penx push` on first push; `penx push` and `penx pull` sync with it. */
+	codepen: z.url().optional(),
 })
 
 /** `meta.ts` is typechecked against the icon union; the schema checks the shape the build reads. */

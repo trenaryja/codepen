@@ -9,6 +9,7 @@ import type { IconType } from 'react-icons'
 import type { Plugin } from 'vite'
 import { defineConfig, transformWithOxc } from 'vite'
 import { z } from 'zod'
+import { penDocument } from './penx/document.ts'
 import { esmShToNpm, npmPkgRoot } from './penx/esm-sh.ts'
 import { penMetaSchema } from './src/pen-meta.ts'
 
@@ -91,21 +92,14 @@ async function buildWrapper(slug: string, dir: string) {
 	const base = resolve(import.meta.dirname, 'src', dir, slug)
 	const fragment = existsSync(`${base}/index.html`) ? readFileSync(`${base}/index.html`, 'utf8') : ''
 	const icon = await resolveIcon(base)
-	return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${slug}</title>
-  <link rel="icon" type="image/svg+xml" href="${icon}" />
+	return penDocument({
+		title: slug,
+		head: `  <link rel="icon" type="image/svg+xml" href="${icon}" />
   <link rel="stylesheet" href="/src/index.css" />
-  <link rel="stylesheet" href="/src/${dir}/${slug}/style.css" />
-</head>
-<body>
-${fragment}
-  <script type="module" src="/src/${dir}/${slug}/pen.tsx"></script>
-</body>
-</html>`
+  <link rel="stylesheet" href="/src/${dir}/${slug}/style.css" />`,
+		fragment,
+		script: `/src/${dir}/${slug}/pen.tsx`,
+	})
 }
 
 function penPlugin(): Plugin {
