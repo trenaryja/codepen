@@ -47,6 +47,10 @@ declare module 'https://esm.sh/chroma-js' {
 	export { default } from 'chroma-js'
 }
 
+declare module 'https://esm.sh/d3-geo' {
+	export * from 'd3-geo'
+}
+
 declare module 'https://esm.sh/fflate' {
 	export * from 'fflate'
 }
@@ -109,6 +113,10 @@ declare module 'https://esm.sh/react-icons/wi' {
 
 declare module 'https://esm.sh/remeda' {
 	export * from 'remeda'
+}
+
+declare module 'https://esm.sh/topojson-client' {
+	export * from 'topojson-client'
 }
 
 declare module 'https://esm.sh/virtua' {

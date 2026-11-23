@@ -1,0 +1,81 @@
+.route-map {
+	touch-action: pan-y;
+	cursor: grab;
+	user-select: none;
+
+	/* Strokes keep their on-screen width, so the 80px docked globe still shows its routes */
+	& * {
+		vector-effect: non-scaling-stroke;
+	}
+
+	&:active {
+		cursor: grabbing;
+	}
+
+	& .sphere {
+		fill: var(--color-base-200);
+		stroke: color-mix(in oklab, var(--color-base-content) 20%, transparent);
+	}
+
+	& .graticule {
+		fill: none;
+		stroke: color-mix(in oklab, var(--color-base-content) 7%, transparent);
+	}
+
+	& .land {
+		fill: color-mix(in oklab, var(--color-base-content) 16%, var(--color-base-200));
+	}
+
+	& .borders {
+		fill: none;
+		stroke: var(--color-base-200);
+		stroke-width: 0.5;
+	}
+
+	& .route path {
+		fill: none;
+		stroke-linecap: round;
+	}
+
+	/* A finger-wide invisible stroke, so a 2px route is tappable */
+	& .route-hit {
+		stroke: transparent;
+		stroke-width: 16;
+		pointer-events: stroke;
+		cursor: pointer;
+	}
+
+	& .route-upcoming .route-line {
+		stroke: var(--color-base-content);
+		stroke-opacity: 0.45;
+		stroke-width: 1.5;
+		stroke-dasharray: 4 5;
+	}
+
+	& .route-flown .route-line {
+		stroke: var(--color-primary);
+		stroke-width: 2;
+	}
+
+	& .route-selected .route-line {
+		stroke: var(--color-accent);
+		stroke-width: 3.5;
+	}
+
+	& .airport {
+		fill: var(--color-base-100);
+		stroke: var(--color-base-content);
+		stroke-width: 1.5;
+	}
+
+	& .here {
+		fill: var(--color-error);
+		stroke: var(--color-base-100);
+		stroke-width: 2;
+	}
+}
+
+/* Panels let the page show through, so a theme that draws btn and surface alike still tells them apart */
+.panel {
+	background-color: color-mix(in oklab, var(--surface-bg) 60%, transparent);
+}
